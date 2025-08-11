@@ -105,6 +105,19 @@ class StepSizeStoppingCriterion : public StoppingCriterion {
         };
 };
 
+class MinDtAccidents : public StoppingCriterion {
+    private:
+        int max_accidents;
+        mutable int accident_count;
+    public:
+        MinDtAccidents(int max_accidents) : max_accidents(max_accidents), accident_count(0) {};
+        bool operator()(int iter, double dt, double t, double s, double theta, double zeta, double vpar=0) override {
+            return accident_count >= max_accidents;
+        };
+        void increment_accidents() const { accident_count++; };
+        int get_accident_count() const { return accident_count; };
+};
+
 template<std::size_t m, std::size_t n>
 array<double, m+n> join(const array<double, m>& a, const array<double, n>& b)
 {
@@ -339,7 +352,7 @@ bool check_stopping_criteria(RHS rhs, int iter, vector<array<double, RHS::Size+2
     for (int i = 0; i < stopping_criteria.size(); ++i) {
         if(stopping_criteria[i] && (*stopping_criteria[i])(iter, dt, t_current, s_current, theta_current, zeta_current, vpar_current)){
             stop = true;
-            res_hits.push_back(join<2, RHS::Size>({t_current, -1-double(i)}, stzvt_current));
+            res_hits.push_back(join<2, RHS::Size>({t_current, -2-double(i)}, stzvt_current));
             break;
         }
     }

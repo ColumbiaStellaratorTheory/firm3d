@@ -436,7 +436,7 @@ template<class RHS>
 tuple<vector<array<double, RHS::Size+1>>, vector<array<double, RHS::Size+2>>>
 solve(RHS rhs, typename RHS::State stzvt, double tau_max, double dtau, double dtau_max, double abstol, double reltol, vector<double> thetas, vector<double> zetas, 
     vector<double> omega_thetas, vector<double> omega_zetas, vector<shared_ptr<StoppingCriterion>> stopping_criteria, double dtau_save, vector<double> vpars, 
-    bool thetas_stop=false, bool zetas_stop=false, bool vpars_stop=false, bool forget_exact_path=false) {
+    bool thetas_stop=false, bool zetas_stop=false, bool vpars_stop=false, bool forget_exact_path=false, double dtau_min=0.0) {
 
     if (zetas.size() > 0 && omega_zetas.size() == 0) {
         omega_zetas.insert(omega_zetas.end(), zetas.size(), 0.);
@@ -476,6 +476,22 @@ solve(RHS rhs, typename RHS::State stzvt, double tau_max, double dtau, double dt
         tau_last = std::get<0>(step);
         tau_current = std::get<1>(step);
         dtau = tau_current - tau_last; // Timestep taken
+
+        if (dtau < dtau_min) {
+            // Record dt_min violation with idx = -1
+            double t_current = tau_current * rhs.tnorm;
+            State stzvt_local;
+            y_to_stzvt<RHS>(y, stzvt_local, rhs);
+            res_hits.push_back(join<2, RHS::Size>({t_current, -1.0}, stzvt_local));
+            
+            // Increment MinDtAccidents stopping criteria
+            for (auto& criterion : stopping_criteria) {
+                auto min_dt_accidents = std::dynamic_pointer_cast<MinDtAccidents>(criterion);
+                if (min_dt_accidents) {
+                    min_dt_accidents->increment_accidents();
+                }
+            }
+        }
 
         // Check if we have hit a stopping criterion between tau_last and tau_current
         stop = check_stopping_criteria<RHS,dense_stepper_type>(rhs, iter, res_hits, dense, tau_last, 
@@ -536,7 +552,8 @@ particle_guiding_center_boozer_perturbed_tracing(
         bool vpars_stop,
         bool forget_exact_path,
         int axis,
-        vector<double> vpars)
+        vector<double> vpars,
+        double dt_min)
 {
     Array2 stzt({{stz_init[0], stz_init[1], stz_init[2], 0.0}});
     perturbed_field->set_points(stzt);
@@ -549,6 +566,7 @@ particle_guiding_center_boozer_perturbed_tracing(
     double tnorm = r0*2*M_PI/vtotal; // Normalizing time = time for one toroidal revolution
     double dtau_max = 0.25; // can at most do quarter of a revolution per step
     double dtau = 1e-3 * dtau_max; // initial guess for first timestep, will be adjusted by adaptive timestepper
+    double dtau_min = dt_min / tnorm; // Normalize dt_min to dimensionless time
 
     if (dtau<0) {
         throw std::invalid_argument("dtau needs to be positive.");
@@ -571,13 +589,13 @@ particle_guiding_center_boozer_perturbed_tracing(
           perturbed_field, m, q, mu, axis, vnorm, tnorm
       );
       return solve<GuidingCenterVacuumBoozerPerturbedRHS>(rhs_class, stzvt, tau_max, dtau, dtau_max, abstol, reltol, thetas, zetas, omega_thetas, omega_zetas, 
-            stopping_criteria, dtau_save, vpars, thetas_stop, zetas_stop, vpars_stop, forget_exact_path);
+            stopping_criteria, dtau_save, vpars, thetas_stop, zetas_stop, vpars_stop, forget_exact_path, dtau_min);
   } else {
       auto rhs_class = GuidingCenterNoKBoozerPerturbedRHS(
           perturbed_field, m, q, mu, axis, vnorm, tnorm
       );
       return solve<GuidingCenterNoKBoozerPerturbedRHS>(rhs_class, stzvt, tau_max, dtau, dtau_max, abstol, reltol, thetas, zetas, omega_thetas, omega_zetas, 
-            stopping_criteria, dtau_save, vpars, thetas_stop, zetas_stop, vpars_stop, forget_exact_path);
+            stopping_criteria, dtau_save, vpars, thetas_stop, zetas_stop, vpars_stop, forget_exact_path, dtau_min);
   }
 }
 

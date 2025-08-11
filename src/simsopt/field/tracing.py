@@ -18,6 +18,7 @@ __all__ = [
     "IterationStoppingCriterion",
     "ToroidalTransitStoppingCriterion",
     "StepSizeStoppingCriterion",
+    "MinDtAccidents",
     "compute_resonances",
     "compute_poloidal_transits",
     "compute_toroidal_transits",
@@ -52,6 +53,7 @@ def trace_particles_boozer_perturbed(
     zetas_stop=False,
     vpars_stop=False,
     axis=2,
+    dt_min=0.0,
 ):
     r"""
     Follow particles in a perturbed field of class :class:`ShearAlfvenWave`. This is modeled after
@@ -146,6 +148,9 @@ def trace_particles_boozer_perturbed(
         axis: Defines handling of coordinate singularity. If 0, tracing is
             performed in Boozer coordinates (s,theta,zeta). If 1, tracing is performed in coordinates (sqrt(s)*cos(theta), sqrt(s)*sin(theta), zeta). 
             If 2, tracing is performed in coordinates (s*cos(theta),s*sin(theta),zeta). Option 2 is recommended.
+        dt_min: minimum timestep allowed for the adaptive ODE solver. When the timestep 
+            falls below this threshold, the event is recorded in res_hits with idx=-1.
+            If None, defaults to 0.0 (no minimum timestep enforcement).
     Returns: 2 element tuple containing
         - ``res_tys``:
             A list of numpy arrays (one for each particle) describing the
@@ -158,7 +163,8 @@ def trace_particles_boozer_perturbed(
             one of the stopping criteria. Each row or the array contains `[time] + [idx] + state`, where `idx` tells us which of the hit planes or stopping criteria was hit.
             If `idx>=0` and `idx<len(zetas)`, then the `zetas[idx]` plane was hit. If `len(vpars)+len(zetas)>idx>=len(zetas)`, then the `vpars[idx-len(zetas)]` plane was hit.
             If `idx>=len(vpars)+len(zetas)`, then the `thetas[idx-len(vpars)-len(zetas)]` plane was hit.
-            If `idx<0`, then `stopping_criteria[int(-idx)-1]` was hit. The state vector is `[s, theta, zeta, v_par, t]`.
+            If `idx=-1`, the adaptive timestep fell below the specified `dt_min` threshold.
+            If `idx<=-2`, then `stopping_criteria[int(-idx)-2]` was hit. The state vector is `[s, theta, zeta, v_par, t]`.
     """
     if reltol is None:
         reltol = tol
@@ -216,6 +222,7 @@ def trace_particles_boozer_perturbed(
             vpars_stop=vpars_stop,
             forget_exact_path=forget_exact_path,
             axis=axis,
+            dt_min=dt_min,
         )
         if not forget_exact_path:
             res_tys.append(np.asarray(res_ty))
@@ -658,6 +665,25 @@ class IterationStoppingCriterion(sopp.IterationStoppingCriterion):
 class StepSizeStoppingCriterion(sopp.StepSizeStoppingCriterion):
     """
     Stop the iteration once the step size is too small.
+    """
+
+    pass
+
+
+class MinDtAccidents(sopp.MinDtAccidents):
+    """
+    Stop the iteration once the number of minimum timestep violations (dt_min accidents) 
+    reaches the specified maximum count. This stopping criterion helps prevent infinite 
+    loops when the adaptive timestep repeatedly becomes very small.
+
+    Usage:
+
+    .. code-block::
+
+        stopping_criteria=[MinDtAccidents(max_accidents)]
+
+    where ``max_accidents`` is the maximum number of dt_min violations allowed 
+    before stopping the particle tracing.
     """
 
     pass

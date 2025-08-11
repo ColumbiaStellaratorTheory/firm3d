@@ -22,6 +22,8 @@ void init_tracing(py::module_ &m){
         .def(py::init<int>());
     py::class_<StepSizeStoppingCriterion, shared_ptr<StepSizeStoppingCriterion>, StoppingCriterion>(m, "StepSizeStoppingCriterion")
         .def(py::init<double>());
+    py::class_<MinDtAccidents, shared_ptr<MinDtAccidents>, StoppingCriterion>(m, "MinDtAccidents")
+        .def(py::init<int>());
 
     m.def("particle_guiding_center_boozer_tracing", &particle_guiding_center_boozer_tracing,
         py::arg("field"),
@@ -77,6 +79,7 @@ void init_tracing(py::module_ &m){
         py::arg("vpars_stop")=false,
         py::arg("forget_exact_path")=false,
         py::arg("axis")=0,
-        py::arg("vpars")=vector<double>{}
+        py::arg("vpars")=vector<double>{},
+        py::arg("dt_min")=0.0
     );
 }

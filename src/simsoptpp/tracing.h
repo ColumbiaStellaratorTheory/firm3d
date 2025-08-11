@@ -36,7 +36,8 @@ particle_guiding_center_boozer_perturbed_tracing(
         bool vpars_stop=false,
         bool forget_exact_path=false,
         int axis=0,
-        vector<double> vpars={});
+        vector<double> vpars={},
+        double dt_min=0.0);
 
 
 tuple<vector<std::array<double, 5>>, vector<std::array<double, 6>>>
