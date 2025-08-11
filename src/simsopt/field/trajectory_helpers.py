@@ -1038,6 +1038,8 @@ class PassingPerturbedPoincare:
         self.nprime = (self.Phim * self.helicity_N - self.Phin * self.helicity_M) / (
             self.helicity_Np * self.helicity_M - self.helicity_N * self.helicity_Mp
         )
+        if self.nprime == 0:
+            raise ValueError("nprime cannot be zero. Change the helicity coordinate eta and try again.")
 
         self.omegan = self.omega / self.nprime  # Frequency for Poincare slice
 
