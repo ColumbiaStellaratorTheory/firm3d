@@ -877,10 +877,10 @@ class BoozerRadialInterpolant(BoozerMagneticField):
         ntor: (int) number of toroidal mode numbers for BOOZXFORM (defaults to
             32). Only used if a wout_*.nc file is passed.
         helicity_M : Poloidal helicity coefficient for enforcing field
-            quasi-symmetry If specified, then the non-symmetric Fourier harmonics of :math:`B` and :math:`K` are filtered out, so the field is a function of `chi = helicity_M*theta - helicity_N*zeta`. If helicity is unspecified, all harmonics are kept.
+            quasi-symmetry. If specified, then the non-symmetric Fourier harmonics of :math:`B` and :math:`K` are filtered out, so the field is a function of `chi = helicity_M*theta - helicity_N*zeta`. If helicity is unspecified, all harmonics are kept.
             (defaults to ``None``)
         helicity_N : Toroidal helicity coefficient for enforcing field
-            quasi-symmetry If specified, then the non-symmetric Fourier harmonics of :math:`B` and :math:`K` are filtered out, so the field is a function of `chi = helicity_M*theta - helicity_N*zeta`. If helicity is unspecified, all harmonics are kept.
+            quasi-symmetry. If specified, then the non-symmetric Fourier harmonics of :math:`B` and :math:`K` are filtered out, so the field is a function of `chi = helicity_M*theta - helicity_N*zeta`. If helicity is unspecified, all harmonics are kept.
         enforce_vacuum: If True, a vacuum field is assumed, :math:`G` is
             set to its mean value, :math:`I = 0`, and :math:`K = 0`.
         rescale: If True, use the interpolation method in the DELTA5D code.
