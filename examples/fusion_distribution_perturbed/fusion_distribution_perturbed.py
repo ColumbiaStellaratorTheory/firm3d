@@ -46,7 +46,6 @@ ntheta_interp = resolution
 nzeta_interp = resolution
 
 # SAW parameters
-nParticles = 5000
 Phihat = -1.50119e3
 Phim = 1
 Phin = 1
