@@ -14,6 +14,8 @@ __all__ = [
     "BoozerCoordinateTransformer",
     "VMECCoordinateTransformer",
 ]
+
+
 class BoozerCoordinateTransformer:
     """
     A class for efficient coordinate transformations between Boozer and cylindrical
@@ -57,18 +59,18 @@ class BoozerCoordinateTransformer:
                 coordinates
         """
         # Get nfp from field if available
-        nfp = getattr(self.field, 'nfp', 1)
+        nfp = getattr(self.field, "nfp", 1)
 
         # Create coordinate grids
         s_grid = np.linspace(0, 1, n_s)
-        theta_grid = np.linspace(0, 2*np.pi, n_theta, endpoint=False)
+        theta_grid = np.linspace(0, 2 * np.pi, n_theta, endpoint=False)
 
         # Take advantage of nfp symmetry - only need one field period
-        zeta_grid = np.linspace(0, 2*np.pi/nfp, n_zeta, endpoint=False)
+        zeta_grid = np.linspace(0, 2 * np.pi / nfp, n_zeta, endpoint=False)
 
         # Create meshgrid
         s_mesh, theta_mesh, zeta_mesh = np.meshgrid(
-            s_grid, theta_grid, zeta_grid, indexing='ij'
+            s_grid, theta_grid, zeta_grid, indexing="ij"
         )
 
         s_mesh = s_mesh.flatten()
@@ -76,7 +78,7 @@ class BoozerCoordinateTransformer:
         zeta_mesh = zeta_mesh.flatten()
 
         # Remove duplicative points on the magnetic axis
-        bool_mask = (s_mesh == 0)*(theta_mesh > 0)
+        bool_mask = (s_mesh == 0) * (theta_mesh > 0)
         s_mesh = np.delete(s_mesh, bool_mask)
         theta_mesh = np.delete(theta_mesh, bool_mask)
         zeta_mesh = np.delete(zeta_mesh, bool_mask)
@@ -172,8 +174,7 @@ class BoozerCoordinateTransformer:
             return [
                 R_computed - R_target,
                 np.arctan2(
-                    np.sin(phi_computed - phi_target),
-                    np.cos(phi_computed - phi_target)
+                    np.sin(phi_computed - phi_target), np.cos(phi_computed - phi_target)
                 ),
                 Z_computed - Z_target,
             ]
@@ -184,9 +185,9 @@ class BoozerCoordinateTransformer:
             tree = KDTree(self._grid_cylindrical)
 
             # Map target phi to fundamental domain [0, 2*pi/nfp)
-            nfp = getattr(self.field, 'nfp', 1)
+            nfp = getattr(self.field, "nfp", 1)
             target_mapped = target_point.copy()
-            phi_period = 2*np.pi / nfp
+            phi_period = 2 * np.pi / nfp
             target_mapped[1] = target_point[1] % phi_period
 
             # Find k nearest neighbors (more than n_guesses to have options)
@@ -247,6 +248,7 @@ class BoozerCoordinateTransformer:
         """
         return boozer_to_cylindrical(self.field, s, theta, zeta)
 
+
 class VMECCoordinateTransformer:
     """
     A class for efficient coordinate transformations between VMEC and cylindrical
@@ -296,14 +298,14 @@ class VMECCoordinateTransformer:
 
         # Create coordinate grids
         s_grid = np.linspace(0, 1, n_s)
-        theta_grid = np.linspace(0, 2*np.pi, n_theta, endpoint=False)
+        theta_grid = np.linspace(0, 2 * np.pi, n_theta, endpoint=False)
 
         # Take advantage of nfp symmetry - only need one field period
-        phi_grid = np.linspace(0, 2*np.pi/self._nfp, n_phi, endpoint=False)
+        phi_grid = np.linspace(0, 2 * np.pi / self._nfp, n_phi, endpoint=False)
 
         # Create meshgrid
         s_mesh, theta_mesh, phi_mesh = np.meshgrid(
-            s_grid, theta_grid, phi_grid, indexing='ij'
+            s_grid, theta_grid, phi_grid, indexing="ij"
         )
         # Flatten to create coordinate arrays
         s_mesh = s_mesh.flatten()
@@ -311,7 +313,7 @@ class VMECCoordinateTransformer:
         phi_mesh = phi_mesh.flatten()
 
         # Remove duplicative points on the magnetic axis
-        bool_mask = (s_mesh == 0)*(theta_mesh > 0)
+        bool_mask = (s_mesh == 0) * (theta_mesh > 0)
         s_mesh = np.delete(s_mesh, bool_mask)
         theta_mesh = np.delete(theta_mesh, bool_mask)
         phi_mesh = np.delete(phi_mesh, bool_mask)
@@ -324,10 +326,7 @@ class VMECCoordinateTransformer:
 
         # Convert to cylindrical coordinates using vmec_to_cylindrical
         R, phi_cyl, Z = vmec_to_cylindrical(
-            self.wout_filename,
-            vmec_coords[:, 0],
-            vmec_coords[:, 1],
-            vmec_coords[:, 2]
+            self.wout_filename, vmec_coords[:, 0], vmec_coords[:, 1], vmec_coords[:, 2]
         )
 
         cylindrical_coords = np.zeros((n_points, 3))
@@ -450,7 +449,7 @@ class VMECCoordinateTransformer:
 
             # Map target phi to fundamental domain [0, 2*pi/nfp)
             target_mapped = target_point.copy()
-            phi_period = 2*np.pi / self._nfp
+            phi_period = 2 * np.pi / self._nfp
             target_mapped[1] = target_point[1] % phi_period
 
             # Find k nearest neighbors (more than n_guesses to have options)
@@ -639,9 +638,7 @@ def cylindrical_to_boozer(
         raise ValueError("Input arrays cannot be empty")
 
     transformer = BoozerCoordinateTransformer(field, grid_resolution)
-    return transformer.cylindrical_to_boozer(
-        R, phi, Z, n_guesses=n_guesses, ftol=ftol
-    )
+    return transformer.cylindrical_to_boozer(R, phi, Z, n_guesses=n_guesses, ftol=ftol)
 
 
 def vmec_to_boozer(wout_filename, field, s_vmec, theta_vmec, phi_vmec, ftol=1e-6):
@@ -1006,6 +1003,4 @@ def cylindrical_to_vmec(
         raise ValueError("R, phi, and Z must have the same shape")
 
     transformer = VMECCoordinateTransformer(wout_filename, grid_resolution)
-    return transformer.cylindrical_to_vmec(
-        R, phi, Z, n_guesses=n_guesses, ftol=ftol
-    )
+    return transformer.cylindrical_to_vmec(R, phi, Z, n_guesses=n_guesses, ftol=ftol)
