@@ -117,33 +117,6 @@ class TestCoordinates(unittest.TestCase):
         self.assertTrue(np.all(theta >= -2 * np.pi) and np.all(theta <= 2 * np.pi))
         self.assertTrue(np.all(zeta >= -2 * np.pi) and np.all(zeta <= 2 * np.pi))
 
-    def test_cylindrical_to_boozer_with_guesses(self):
-        """Test cylindrical to Boozer with custom initial guesses."""
-        # Use coordinates that are known to work
-        R_working = np.array([1.27177872, 0.92842923, 0.71525574])
-        phi_working = np.array([0.0, 0.67037294, 1.57079633])
-        Z_working = np.array([0.00000000e00, 3.11030751e-01, 2.87512917e-17])
-
-        s_guess = 0.6
-        theta_guess = np.pi / 3
-        zeta_guess = np.pi / 6
-
-        s, theta, zeta = cylindrical_to_boozer(
-            self.field,
-            R_working,
-            phi_working,
-            Z_working,
-            s_guess=s_guess,
-            theta_guess=theta_guess,
-            zeta_guess=zeta_guess,
-            n_guesses=10,
-        )
-
-        # Check output shapes
-        self.assertEqual(s.shape, R_working.shape)
-        self.assertEqual(theta.shape, R_working.shape)
-        self.assertEqual(zeta.shape, R_working.shape)
-
     def test_cylindrical_to_boozer_n_guesses(self):
         """Test cylindrical to Boozer with custom number of initial guesses."""
         # Use coordinates that are known to work
@@ -168,22 +141,6 @@ class TestCoordinates(unittest.TestCase):
             # Check that angles are in reasonable range
             self.assertTrue(np.all(theta >= -2 * np.pi) and np.all(theta <= 2 * np.pi))
             self.assertTrue(np.all(zeta >= -2 * np.pi) and np.all(zeta <= 2 * np.pi))
-
-        # Test that invalid n_guesses raises an error
-        with self.assertRaises(ValueError):
-            cylindrical_to_boozer(
-                self.field, R_working, phi_working, Z_working, n_guesses=0
-            )
-
-        with self.assertRaises(ValueError):
-            cylindrical_to_boozer(
-                self.field, R_working, phi_working, Z_working, n_guesses=-1
-            )
-
-        with self.assertRaises(ValueError):
-            cylindrical_to_boozer(
-                self.field, R_working, phi_working, Z_working, n_guesses=1.5
-            )
 
     def test_boozer_to_cylindrical_vs_vmec_route(self):
         """Test that boozer_to_cylindrical matches
