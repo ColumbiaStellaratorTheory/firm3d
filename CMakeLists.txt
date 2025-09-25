@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.15)
 set(CMAKE_CXX_COMPILER_WORKS 1)
-project(simsoptpp)
+project(firm3dpp)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -135,7 +135,7 @@ if(GSL_FOUND)
     add_definitions(-DUSE_GSL)
     message(STATUS "GSL version is ${GSL_VERSION}")
     message(STATUS "GSL include dirs are ${GSL_INCLUDE_DIR}")
-    set(GSL_TARGETS src/simsoptpp/symplectic.cpp)
+    set(GSL_TARGETS src/firm3dpp/symplectic.cpp)
     message(STATUS "GSL targets are ${GSL_TARGETS}")
     message(STATUS "GSL libraries are ${GSL_LIBRARIES}")
 else()
@@ -146,13 +146,13 @@ set(XTENSOR_USE_OPENMP 0)
 set(XTENSOR_USE_TBB 0)
 
 pybind11_add_module(${PROJECT_NAME}
-    src/simsoptpp/python.cpp
-    src/simsoptpp/python_tracing.cpp
-    src/simsoptpp/python_interpolant.cpp
-    src/simsoptpp/regular_grid_interpolant_3d_py.cpp
-    src/simsoptpp/tracing.cpp
-    src/simsoptpp/python_boozermagneticfield.cpp
-    src/simsoptpp/boozerradialinterpolant.cpp
+    src/firm3dpp/python.cpp
+    src/firm3dpp/python_tracing.cpp
+    src/firm3dpp/python_interpolant.cpp
+    src/firm3dpp/regular_grid_interpolant_3d_py.cpp
+    src/firm3dpp/tracing.cpp
+    src/firm3dpp/python_boozermagneticfield.cpp
+    src/firm3dpp/boozerradialinterpolant.cpp
     ${GSL_TARGETS}
 )
 
@@ -161,7 +161,7 @@ set_target_properties(${PROJECT_NAME}
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED ON)
 
-target_include_directories(${PROJECT_NAME} PRIVATE "thirdparty/xtensor/include" "thirdparty/xtensor-python/include" "thirdparty/xsimd/include" "thirdparty/xtl/include" ${Python_NumPy_INCLUDE_DIRS} "src/simsoptpp/")
+target_include_directories(${PROJECT_NAME} PRIVATE "thirdparty/xtensor/include" "thirdparty/xtensor-python/include" "thirdparty/xsimd/include" "thirdparty/xtl/include" ${Python_NumPy_INCLUDE_DIRS} "src/firm3dpp/")
 
 if(NOT Boost_FOUND)
     add_dependencies(${PROJECT_NAME} ${boost_target})

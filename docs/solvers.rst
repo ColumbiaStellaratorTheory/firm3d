@@ -10,7 +10,7 @@ The default solver uses the Runge-Kutta Dormand-Prince 5(4) method with adaptive
 
 .. code-block:: python
 
-   from simsopt.field.tracing import trace_particles_boozer
+   from firm3d.field.tracing import trace_particles_boozer
 
    # Use default solver with custom tolerances
    res_tys, res_hits = trace_particles_boozer(

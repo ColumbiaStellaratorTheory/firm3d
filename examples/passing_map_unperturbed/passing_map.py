@@ -1,17 +1,17 @@
 import time
 
-from simsopt.field.boozermagneticfield import (
+from firm3d.field.boozermagneticfield import (
     BoozerRadialInterpolant,
     InterpolatedBoozerField,
 )
-from simsopt.field.trajectory_helpers import PassingPoincare
-from simsopt.util.constants import (
+from firm3d.field.trajectory_helpers import PassingPoincare
+from firm3d.util.constants import (
     ALPHA_PARTICLE_CHARGE,
     ALPHA_PARTICLE_MASS,
     FUSION_ALPHA_PARTICLE_ENERGY,
 )
-from simsopt.util.functions import proc0_print, setup_logging
-from simsopt.util.mpi import comm_size, comm_world, verbose
+from firm3d.util.functions import proc0_print, setup_logging
+from firm3d.util.mpi import comm_size, comm_world, verbose
 
 boozmn_filename = "../inputs/boozmn_aten_rescaled.nc"
 

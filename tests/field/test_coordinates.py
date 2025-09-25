@@ -3,8 +3,8 @@ from pathlib import Path
 
 import numpy as np
 
-from simsopt.field.boozermagneticfield import BoozerRadialInterpolant
-from simsopt.field.coordinates import (
+from firm3d.field.boozermagneticfield import BoozerRadialInterpolant
+from firm3d.field.coordinates import (
     boozer_to_cylindrical,
     boozer_to_vmec,
     cylindrical_to_boozer,

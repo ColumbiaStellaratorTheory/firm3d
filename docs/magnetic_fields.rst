@@ -48,7 +48,7 @@ Usage Example
 
 .. code-block:: python
 
-   from simsopt.field import BoozerAnalytic
+   from firm3d.field import BoozerAnalytic
 
    # Create an analytic Boozer field
    field = BoozerAnalytic(
@@ -80,7 +80,7 @@ Usage Example
 
 .. code-block:: python
 
-   from simsopt.field import BoozerRadialInterpolant
+   from firm3d.field import BoozerRadialInterpolant
 
    # Create field from booz_xform output
    field = BoozerRadialInterpolant("boozmn_file.nc")
@@ -113,7 +113,7 @@ Usage Example
 
 .. code-block:: python
 
-   from simsopt.field import BoozerRadialInterpolant, InterpolatedBoozerField
+   from firm3d.field import BoozerRadialInterpolant, InterpolatedBoozerField
 
    # Create the base field
    base_field = BoozerRadialInterpolant("boozmn_file.nc")

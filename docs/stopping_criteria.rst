@@ -13,7 +13,7 @@ Stop when trajectory reaches a maximum value of normalized toroidal flux (e.g., 
 
 .. code-block:: python
 
-   from simsopt.field.trajectory_helpers import MaxToroidalFluxStoppingCriterion
+   from firm3d.field.trajectory_helpers import MaxToroidalFluxStoppingCriterion
 
    # Stop when s >= 1.0 (plasma boundary)
    stopping_criteria = [MaxToroidalFluxStoppingCriterion(1.0)]
@@ -25,7 +25,7 @@ Stop when trajectory reaches a minimum value of normalized toroidal flux. When `
 
 .. code-block:: python
 
-   from simsopt.field.trajectory_helpers import MinToroidalFluxStoppingCriterion
+   from firm3d.field.trajectory_helpers import MinToroidalFluxStoppingCriterion
 
    # Stop when s <= 0.001 (close to magnetic axis)
    stopping_criteria = [MinToroidalFluxStoppingCriterion(0.001)]
@@ -37,7 +37,7 @@ Stop when the toroidal angle reaches a given value (modulus :math:`2\pi`).
 
 .. code-block:: python
 
-   from simsopt.field.trajectory_helpers import ZetaStoppingCriterion
+   from firm3d.field.trajectory_helpers import ZetaStoppingCriterion
 
    # Stop when zeta reaches pi/2 (mod 2*pi)
    stopping_criteria = [ZetaStoppingCriterion(np.pi/2)]
@@ -49,7 +49,7 @@ Stop when the parallel velocity reaches a given value. For example, can be used 
 
 .. code-block:: python
 
-   from simsopt.field.trajectory_helpers import VparStoppingCriterion
+   from firm3d.field.trajectory_helpers import VparStoppingCriterion
 
    # Stop when v_parallel changes sign (mirroring)
    stopping_criteria = [VparStoppingCriterion(0.0)]
@@ -61,7 +61,7 @@ Stop when the toroidal angle increases by an integer multiple of :math:`2\pi`. U
 
 .. code-block:: python
 
-   from simsopt.field.trajectory_helpers import ToroidalTransitStoppingCriterion
+   from firm3d.field.trajectory_helpers import ToroidalTransitStoppingCriterion
 
    # Stop after 5 toroidal transits
    stopping_criteria = [ToroidalTransitStoppingCriterion(5)]
@@ -73,7 +73,7 @@ Stop when a number of iterations is reached. This is useful for terminating long
 
 .. code-block:: python
 
-   from simsopt.field.trajectory_helpers import IterationStoppingCriterion
+   from firm3d.field.trajectory_helpers import IterationStoppingCriterion
 
    # Stop after 10000 integration steps
    stopping_criteria = [IterationStoppingCriterion(10000)]
@@ -85,7 +85,7 @@ Stop when the step size gets too small. When using adaptive timestepping, can av
 
 .. code-block:: python
 
-   from simsopt.field.trajectory_helpers import StepSizeStoppingCriterion
+   from firm3d.field.trajectory_helpers import StepSizeStoppingCriterion
 
    # Stop when step size < 1e-10
    stopping_criteria = [StepSizeStoppingCriterion(1e-10)]
@@ -100,7 +100,7 @@ You can combine multiple stopping criteria to create robust integration conditio
 
 .. code-block:: python
 
-   from simsopt.field.tracing import (
+   from firm3d.field.tracing import (
        MaxToroidalFluxStoppingCriterion,
        MinToroidalFluxStoppingCriterion,
        VparStoppingCriterion,

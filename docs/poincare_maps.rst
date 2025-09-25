@@ -27,8 +27,8 @@ The ``TrappedPoincare`` class computes Poincaré maps for trapped particles that
 
 .. code-block:: python
 
-    from simsopt.field.trajectory_helpers import TrappedPoincare
-    from simsopt.util.constants import (
+    from firm3d.field.trajectory_helpers import TrappedPoincare
+    from firm3d.util.constants import (
         ALPHA_PARTICLE_MASS,
         ALPHA_PARTICLE_CHARGE,
         FUSION_ALPHA_PARTICLE_ENERGY,
@@ -87,8 +87,8 @@ The ``PassingPoincare`` class computes Poincaré maps for passing particles in u
 
 .. code-block:: python
 
-    from simsopt.field.trajectory_helpers import PassingPoincare
-    from simsopt.util.constants import (
+    from firm3d.field.trajectory_helpers import PassingPoincare
+    from firm3d.util.constants import (
         ALPHA_PARTICLE_MASS,
         ALPHA_PARTICLE_CHARGE,
         FUSION_ALPHA_PARTICLE_ENERGY,
@@ -134,8 +134,8 @@ The ``PassingPerturbedPoincare`` class computes Poincaré maps for passing parti
 
 .. code-block:: python
 
-    from simsopt.field.trajectory_helpers import PassingPerturbedPoincare
-    from simsopt.util.constants import (
+    from firm3d.field.trajectory_helpers import PassingPerturbedPoincare
+    from firm3d.util.constants import (
         ALPHA_PARTICLE_MASS,
         ALPHA_PARTICLE_CHARGE,
         FUSION_ALPHA_PARTICLE_ENERGY,

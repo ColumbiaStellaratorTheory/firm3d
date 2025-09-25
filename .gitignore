@@ -4,7 +4,7 @@
 *.o
 *.mod
 *fort.9
-simsopt_20*.dat
+firm3d_20*.dat
 objective*.dat
 residuals_20*.dat
 _skbuild/
@@ -13,7 +13,7 @@ build-cmake/
 dist/
 .eggs/
 pip-wheel-metadata/
-*simsopt.egg-info/
+*firm3d.egg-info/
 .DS_Store
 .coverage
 .tox
@@ -54,4 +54,4 @@ tests/*.dat
 tests/boundary*
 
 # Version file
-src/simsopt/_version.py
+src/firm3d/_version.py
