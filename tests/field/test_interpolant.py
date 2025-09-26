@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 from numpy.testing import assert_raises
 
-import simsoptpp as sopp
+import firm3dpp as sopp
 
 
 def get_random_polynomial(dim, degree):

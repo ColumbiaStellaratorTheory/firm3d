@@ -2,25 +2,25 @@ import time
 
 import numpy as np
 
-from simsopt.field.boozermagneticfield import (
+from firm3d.field.boozermagneticfield import (
     BoozerRadialInterpolant,
     InterpolatedBoozerField,
 )
-from simsopt.field.tracing import (
+from firm3d.field.tracing import (
     MaxToroidalFluxStoppingCriterion,
     trace_particles_boozer,
 )
-from simsopt.plotting.plotting_helpers import (
+from firm3d.plotting.plotting_helpers import (
     plot_trajectory_overhead_cyl,
     plot_trajectory_poloidal,
 )
-from simsopt.util.constants import (
+from firm3d.util.constants import (
     ALPHA_PARTICLE_CHARGE,
     ALPHA_PARTICLE_MASS,
     FUSION_ALPHA_PARTICLE_ENERGY,
 )
-from simsopt.util.functions import proc0_print, setup_logging
-from simsopt.util.mpi import comm_size, comm_world, verbose
+from firm3d.util.functions import proc0_print, setup_logging
+from firm3d.util.mpi import comm_size, comm_world, verbose
 
 time1 = time.time()
 
@@ -98,7 +98,7 @@ if verbose:
     fig = ax.figure
     fig.savefig("trajectory_poloidal.png", dpi=300, bbox_inches="tight")
 
-    from simsopt.field.trajectory_helpers import trajectory_to_vtk
+    from firm3d.field.trajectory_helpers import trajectory_to_vtk
 
     trajectory_to_vtk(traj_booz[0], field, filename="trajectory")
 

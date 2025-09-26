@@ -33,7 +33,7 @@ Usage Example
 
 .. code-block:: python
 
-   from simsopt.field import BoozerAnalytic, ShearAlfvenHarmonic
+   from firm3d.field import BoozerAnalytic, ShearAlfvenHarmonic
    import numpy as np
 
    # Create equilibrium field
@@ -68,7 +68,7 @@ Usage Example
 
 .. code-block:: python
 
-   from simsopt.field import ShearAlfvenWavesSuperposition
+   from firm3d.field import ShearAlfvenWavesSuperposition
    import numpy as np
 
    # Create base wave

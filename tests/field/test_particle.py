@@ -5,12 +5,12 @@ from pathlib import Path
 import numpy as np
 from booz_xform import Booz_xform
 
-from simsopt.field.boozermagneticfield import (
+from firm3d.field.boozermagneticfield import (
     BoozerAnalytic,
     BoozerRadialInterpolant,
     InterpolatedBoozerField,
 )
-from simsopt.field.tracing import (
+from firm3d.field.tracing import (
     MaxToroidalFluxStoppingCriterion,
     MinToroidalFluxStoppingCriterion,
     ToroidalTransitStoppingCriterion,
@@ -19,7 +19,7 @@ from simsopt.field.tracing import (
     compute_toroidal_transits,
     trace_particles_boozer,
 )
-from simsopt.util.constants import ELEMENTARY_CHARGE, ONE_EV, PROTON_MASS
+from firm3d.util.constants import ELEMENTARY_CHARGE, ONE_EV, PROTON_MASS
 
 logging.basicConfig()
 

@@ -7,13 +7,13 @@ from scipy.interpolate import InterpolatedUnivariateSpline
 from scipy.io import netcdf_file
 from scipy.optimize import minimize
 
-from simsopt._core.util import align_and_pad, allocate_aligned_and_padded_array
-from simsopt.field.boozermagneticfield import (
+from firm3d._core.util import align_and_pad, allocate_aligned_and_padded_array
+from firm3d.field.boozermagneticfield import (
     BoozerAnalytic,
     BoozerRadialInterpolant,
     InterpolatedBoozerField,
 )
-from simsoptpp import inverse_fourier_transform_even, inverse_fourier_transform_odd
+from firm3dpp import inverse_fourier_transform_even, inverse_fourier_transform_odd
 
 TEST_DIR = (Path(__file__).parent / ".." / "test_files").resolve()
 filename_vac = str((TEST_DIR / "boozmn_LandremanPaul2021_QA_lowres.nc").resolve())

@@ -6,7 +6,7 @@ FIRM3D can be installed on different platforms. The installation process involve
 macOS
 -----
 
-All dependencies can be installed inside a conda environment using the provided install bash script located at ``install/macOS/install_simsopt_osx.sh``.
+All dependencies can be installed inside a conda environment using the provided install bash script located at ``install/macOS/install_firm3d_osx.sh``.
 
 .. code-block:: bash
 
@@ -15,12 +15,12 @@ All dependencies can be installed inside a conda environment using the provided 
    cd firm3d
 
    # Run the installation script
-   bash install/macOS/install_simsopt_osx.sh
+   bash install/macOS/install_firm3d_osx.sh
 
 Perlmutter (NERSC)
 ------------------
 
-All dependencies can be installed inside a conda environment using the provided install bash script located at ``install/perlmutter/install_simsopt_perlmutter.sh``.
+All dependencies can be installed inside a conda environment using the provided install bash script located at ``install/perlmutter/install_firm3d_perlmutter.sh``.
 
 .. code-block:: bash
 
@@ -29,7 +29,7 @@ All dependencies can be installed inside a conda environment using the provided 
    cd firm3d
 
    # Run the installation script
-   bash install/perlmutter/install_simsopt_perlmutter.sh
+   bash install/perlmutter/install_firm3d_perlmutter.sh
 
 Manual Installation
 -------------------
@@ -61,5 +61,5 @@ If you prefer to install manually or need to customize the installation:
 
    .. code-block:: python
 
-      import simsopt
+      import firm3d
       print("FIRM3D installed successfully!")

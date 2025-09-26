@@ -10,7 +10,7 @@ If ``axis=0``, the trajectory will be integrated in standard Boozer coordinates 
 
 .. code-block:: python
 
-   from simsopt.field.trajectory_helpers import MinToroidalFluxStoppingCriterion
+   from firm3d.field.trajectory_helpers import MinToroidalFluxStoppingCriterion
 
    # Use standard Boozer coordinates
    res_tys, res_hits = trace_particles_boozer(

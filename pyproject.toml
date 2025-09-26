@@ -3,7 +3,7 @@ requires = ["setuptools","cmake","wheel","ninja","pybind11<=2.13.6","numpy","plo
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "simsopt"
+name = "firm3d"
 version = "0.0.0"
 readme = "README.md"
 requires-python = ">=3.9"

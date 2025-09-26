@@ -132,13 +132,13 @@ Unperturbed Tracing
 
 .. code-block:: python
 
-   from simsopt.field.boozermagneticfield import (
+   from firm3d.field.boozermagneticfield import (
        BoozerRadialInterpolant,
        InterpolatedBoozerField,
    )
-   from simsopt.field.tracing import trace_particles_boozer, MaxToroidalFluxStoppingCriterion
-   from simsopt.field.tracing_helpers import initialize_position_profile, initialize_velocity_uniform
-   from simsopt.util.constants import (
+   from firm3d.field.tracing import trace_particles_boozer, MaxToroidalFluxStoppingCriterion
+   from firm3d.field.tracing_helpers import initialize_position_profile, initialize_velocity_uniform
+   from firm3d.util.constants import (
        ALPHA_PARTICLE_MASS,
        ALPHA_PARTICLE_CHARGE,
        FUSION_ALPHA_PARTICLE_ENERGY,
@@ -186,14 +186,14 @@ Perturbed Tracing
 
 .. code-block:: python
 
-   from simsopt.field.boozermagneticfield import (
+   from firm3d.field.boozermagneticfield import (
        BoozerRadialInterpolant,
        InterpolatedBoozerField,
        ShearAlfvenHarmonic,
    )
-   from simsopt.field.tracing import trace_particles_boozer_perturbed, MaxToroidalFluxStoppingCriterion
-   from simsopt.field.tracing_helpers import initialize_position_profile, initialize_velocity_uniform
-   from simsopt.util.constants import (
+   from firm3d.field.tracing import trace_particles_boozer_perturbed, MaxToroidalFluxStoppingCriterion
+   from firm3d.field.tracing_helpers import initialize_position_profile, initialize_velocity_uniform
+   from firm3d.util.constants import (
        ALPHA_PARTICLE_MASS,
        ALPHA_PARTICLE_CHARGE,
        FUSION_ALPHA_PARTICLE_ENERGY,
