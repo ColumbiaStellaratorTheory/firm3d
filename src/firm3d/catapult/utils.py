@@ -259,7 +259,6 @@ def cartesian_interpolant(field, surface_classifier, dtype=np.float64):
     for cell_r in range(r_ncells):
         for cell_phi in range(phi_ncells):
             for cell_z in range(z_ncells):
-
                 window_id = (
                     cell_r * phi_ncells * z_ncells + cell_phi * z_ncells + cell_z
                 )
