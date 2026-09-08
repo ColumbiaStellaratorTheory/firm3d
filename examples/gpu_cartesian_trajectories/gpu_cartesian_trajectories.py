@@ -104,7 +104,6 @@ def save_trajectories_cartesian_gpu(
         local_tmax = np.ascontiguousarray(local_tmax)
         mu = np.ascontiguousarray(mu)
 
-        print("launching tracing step")
         step_data = firm3dpp.cartesian_gpu_tracing(
             quad_pts=quad_info,
             rrange=r_range,
@@ -121,7 +120,6 @@ def save_trajectories_cartesian_gpu(
             mu_in=mu,
             nparticles=n_particles,
         )
-        print("finished tracing")
         step_data = np.reshape(step_data, (n_particles, 7))
 
         dt = step_data[:, 5].copy()
@@ -149,9 +147,7 @@ def save_trajectories_cartesian_gpu(
 
         n_particles = xyz_inits.shape[0]
 
-        if n_particles > 0:
-            print(f"Saved trajectories up to time {current_time.min():.3e}")
-        else:
+        if n_particles == 0:
             print("All particles finished")
             break
 

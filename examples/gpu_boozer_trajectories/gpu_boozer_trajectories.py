@@ -241,13 +241,6 @@ full_time_data = firm3dpp.boozer_gpu_tracing(
 full_time_data = np.reshape(full_time_data, (stz_inits.shape[0], 7))
 
 final_pos_traj = np.array([trajectory[-1] for trajectory in trajectories])
-print(full_time_data.dtype)
-print(final_pos_traj.dtype)
-
-print(np.isnan(full_time_data).sum())
-print(np.isnan(final_pos_traj).sum())
-
-print(final_pos_traj[np.isnan(final_pos_traj).any(axis=1)])
 
 rel_diff = np.abs(full_time_data - final_pos_traj) / np.abs(full_time_data)
 print("relative difference: ", rel_diff)
