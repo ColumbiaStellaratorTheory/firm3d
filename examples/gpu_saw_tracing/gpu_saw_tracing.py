@@ -70,7 +70,7 @@ last_time = trace_particles_boozer_gpu(
     saw,
     stz,
     vpar_init,
-    tmax,
+    [tmax for _ in range(nparticles)],
     MASS,
     CHARGE,
     np.sqrt(2 * ENERGY / MASS),

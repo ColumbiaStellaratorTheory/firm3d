@@ -3,6 +3,7 @@
 
 import numpy as np
 import pandas as pd
+import time
 
 from firm3d.catapult.tracing import trace_particles_boozer_gpu
 from firm3d.field.boozermagneticfield import (
@@ -19,15 +20,16 @@ from firm3d.util.constants import (
     FUSION_ALPHA_PARTICLE_ENERGY,
 )
 from firm3d.util.functions import in_github_actions
-from firm3d.util.mpi import comm_world
 
 resolution = 5 if in_github_actions else 15  # Resolution for field interpolation
-nparticles = 100 if in_github_actions else 1000  # Number of particles to trace
-tol = 1e-4 if in_github_actions else 1e-8  # Tolerance for ODE solver
+nparticles = 100 if in_github_actions else 30000  # Number of particles to trace
+tol = 1e-4 if in_github_actions else 1e-6  # Tolerance for ODE solver
+
 
 ### CREATE A FIELD FOR TRACING
-boozmn_filename = "../inputs/boozmn_aten_rescaled.nc"
-bri = BoozerRadialInterpolant(boozmn_filename, 3, comm=comm_world, enforce_vacuum=True)
+# boozmn_filename = "../inputs/boozmn_aten_rescaled.nc"
+boozmn_filename = "../inputs/boozmn_ariescs_low_res.nc"
+bri = BoozerRadialInterpolant(boozmn_filename, 3, enforce_vacuum=True)
 
 field = InterpolatedBoozerField(
     bri,
@@ -55,50 +57,80 @@ def sigmav(T):
         return 0
 
 
+np.random.seed(0)
 # Reactivity profile
 reactivity = lambda s: nD(s) * nT(s) * sigmav(T(s))
-stz_inits = initialize_position_profile(field, nparticles, reactivity, comm=comm_world)
+stz_inits = initialize_position_profile(field, nparticles, reactivity, seed=1)
 
 Ekin = FUSION_ALPHA_PARTICLE_ENERGY
 mass = ALPHA_PARTICLE_MASS
 charge = ALPHA_PARTICLE_CHARGE
 # Initialize uniformly distributed parallel velocities
 vpar0 = np.sqrt(2 * Ekin / mass)
-vpar_inits = initialize_velocity_uniform(vpar0, nparticles)
+vpar_inits = initialize_velocity_uniform(vpar0, nparticles, seed=1)
 
 
-tmax = 1e-5
-last_time = trace_particles_boozer_gpu(
-    bri,
-    stz_inits,
-    vpar_inits,
-    tmax=tmax,
-    mass=mass,
-    charge=charge,
-    vtotal=vpar0,
-    tol=tol,
-    ns=resolution,
-    ntheta=resolution,
-    nzeta=resolution,
-)
-particle_data = pd.DataFrame(
-    {
-        "s_start": stz_inits[:, 0],
-        "t_start": stz_inits[:, 1],
-        "z_start": stz_inits[:, 2],
-        "vpar_start": vpar_inits,
-        "s_end": last_time[:, 1],
-        "t_end": last_time[:, 2],
-        "z_end": last_time[:, 3],
-        "vpar_end": last_time[:, 4],
-        "last_time": last_time[:, 0],
-        "dt_end": last_time[:, 5],
-    }
-)
-particle_data.to_csv("./particle_data.csv")
+tmax = 1e-4
+print(stz_inits)
 
+for tmax in [1e-4, 1e-3, 1e-2, 5e-2]:
+    start = time.time()
+    last_time_dbl = trace_particles_boozer_gpu(
+        bri,
+        stz_inits,
+        vpar_inits,
+        tmax=tmax,
+        mass=mass,
+        charge=charge,
+        vtotal=vpar0,
+        tol=tol,
+        ns=resolution,
+        ntheta=resolution,
+        nzeta=resolution,
+    )
+    dbl_time = time.time() - start
 
-did_leave = [t < tmax for t in particle_data["last_time"]]
-loss_frac = sum(did_leave) / len(did_leave)
-print(f"Number of particles= {nparticles}")
-print(f"Loss fraction: {loss_frac:.3f}")
+    start = time.time()
+    last_time_flt = trace_particles_boozer_gpu(
+        bri,
+        stz_inits.astype(np.float32),
+        vpar_inits.astype(np.float32),
+        tmax=tmax,
+        mass=mass,
+        charge=charge,
+        vtotal=vpar0,
+        tol=tol,
+        ns=resolution,
+        ntheta=resolution,
+        nzeta=resolution,
+    )
+    flt_time = time.time() - start
+    particle_data = pd.DataFrame(
+        {
+            "s_start": stz_inits[:, 0],
+            "t_start": stz_inits[:, 1],
+            "z_start": stz_inits[:, 2],
+            "vpar_start": vpar_inits,
+            "s_end_dbl": last_time_dbl[:, 1],
+            "t_end_dbl": last_time_dbl[:, 2],
+            "z_end_dbl": last_time_dbl[:, 3],
+            "vpar_end_dbl": last_time_dbl[:, 4],
+            "last_time_dbl": last_time_dbl[:, 0],
+            "dt_end_dbl": last_time_dbl[:, 5],
+            "s_end_flt": last_time_flt[:, 1],
+            "t_end_flt": last_time_flt[:, 2],
+            "z_end_flt": last_time_flt[:, 3],
+            "vpar_end_flt": last_time_flt[:, 4],
+            "last_time_flt": last_time_flt[:, 0],
+            "dt_end_flt": last_time_flt[:, 5],
+        }
+    )
+    # particle_data.to_csv("./particle_data.csv")
+    print(f"tmax= {tmax}")
+    print(f"Number of particles= {nparticles}")
+    did_leave = [t < tmax for t in particle_data["last_time_flt"]]
+    loss_frac = sum(did_leave) / len(did_leave)
+    print(f"Flt. Loss fraction: {loss_frac:.3f} (time: {flt_time:.3f} )")
+    did_leave = [t < tmax for t in particle_data["last_time_dbl"]]
+    loss_frac = sum(did_leave) / len(did_leave)
+    print(f"Dbl. Loss fraction: {loss_frac:.3f} (time: {dbl_time:.3f} )")

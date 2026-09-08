@@ -55,3 +55,6 @@ tests/boundary*
 
 # Version file
 src/firm3d/_version.py
+
+# Nsight Reports
+*.ncu-rep

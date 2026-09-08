@@ -39,7 +39,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install netCDF4 cmake ninja "pybind11<=2.13.6" setuptools wheel pandas
+          pip install netCDF4 cmake ninja "pybind11<=2.13.6" setuptools wheel pandas h5py
           NVCC_PATH=$(command -v nvcc 2>/dev/null \
             || find /usr/local/cuda* -maxdepth 3 -name nvcc -type f 2>/dev/null | head -1 \
             || true)
@@ -75,5 +75,9 @@ jobs:
       - name: Run GPU examples
         run: |
           (cd examples/gpu_boozer_tracing && python gpu_boozer_tracing.py)
+          (cd examples/gpu_boozer_trajectories && python gpu_boozer_trajectories.py)
+
           (cd examples/gpu_saw_tracing && python gpu_saw_tracing.py)
+
           (cd examples/gpu_cartesian_tracing && python gpu_cartesian_tracing.py)
+          (cd examples/gpu_cartesian_trajectories && python gpu_cartesian_trajectories.py)

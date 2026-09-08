@@ -23,6 +23,8 @@ def trace_particles_boozer_gpu(
     ntheta,
     nzeta,
     dt=None,
+    mu=None,
+    in_boozer=True,  # if in Boozer coordinates, else in pseudo-Cartesian coordinates
 ):
     """
     Trace particles in Boozer coordinates using CATAPULT
@@ -38,10 +40,24 @@ def trace_particles_boozer_gpu(
     """
     nparticles = stz_inits.shape[0]
 
+    if in_boozer:
+        stz_inits = stz_inits.copy()
+
+        s = stz_inits[:, 0]
+        theta = stz_inits[:, 1]
+        x1 = s * np.cos(theta)
+        x2 = s * np.sin(theta)
+        stz_inits[:, 0] = x1
+        stz_inits[:, 1] = x2
+
+    # if only one tmax value is provided, use it for all particles
+    if np.ndim(tmax) == 0:
+        tmax = np.full(nparticles, tmax, dtype=np.float64)
+
     if isinstance(field, ShearAlfvenWavesSuperposition):
         B0 = field.B0
         srange, trange, zrange, quad_info, maxJ = boozer_saw_interpolant(
-            B0, B0.nfp, ns, ntheta, nzeta
+            B0, B0.nfp, ns, ntheta, nzeta, dtype=stz_inits.dtype
         )
         saw_nharmonics = len(field)
         saw_omega = field.get_wave(0).omega
@@ -77,7 +93,12 @@ def trace_particles_boozer_gpu(
                 vtang=parallel_speeds,
                 tmax=tmax,
                 tol=tol,
-                dt_in=dt if dt is not None else -np.ones(nparticles),
+                dt_in=dt
+                if dt is not None
+                else -np.ones(nparticles).astype(stz_inits.dtype),
+                mu_in=mu
+                if mu is not None
+                else -np.ones(nparticles).astype(stz_inits.dtype),
                 psi0=B0.psi0,
                 nparticles=nparticles,
             )
@@ -100,7 +121,12 @@ def trace_particles_boozer_gpu(
                 vtang=parallel_speeds,
                 tmax=tmax,
                 tol=tol,
-                dt_in=dt if dt is not None else -np.ones(nparticles),
+                dt_in=dt
+                if dt is not None
+                else -np.ones(nparticles).astype(stz_inits.dtype),
+                mu_in=mu
+                if mu is not None
+                else -np.ones(nparticles).astype(stz_inits.dtype),
                 psi0=B0.psi0,
                 nparticles=nparticles,
             )
@@ -118,24 +144,36 @@ def trace_particles_boozer_gpu(
         )
         psi0 = field.psi0
         last_time = firm3dpp.boozer_gpu_tracing(
-            quad_pts=quad_info,
+            quad_pts=quad_info.astype(stz_inits.dtype),
             srange=srange,
             trange=trange,
             zrange=zrange,
-            stz_init=stz_inits,
+            stz_init=stz_inits.copy(),
             m=mass,
             q=charge,
             vtotal=vtotal,
-            vtang=parallel_speeds,
+            vtang=parallel_speeds.copy(),
             tmax=tmax,
             tol=tol,
-            dt_in=-np.ones(nparticles),
+            dt_in=-np.ones(nparticles).astype(stz_inits.dtype),
+            mu_in=mu
+            if mu is not None
+            else -np.ones(nparticles).astype(stz_inits.dtype),
             psi0=psi0,
             nparticles=nparticles,
             vacuum=vacuum,
         )
 
-    last_time = np.reshape(last_time, (nparticles, 6))
+    last_time = np.reshape(last_time, (nparticles, 7))
+
+    if in_boozer:
+        x1 = last_time[:, 1]
+        x2 = last_time[:, 2]
+        s = np.sqrt(x1**2 + x2**2)
+        theta = np.arctan2(x2, x1)
+        last_time[:, 1] = s
+        last_time[:, 2] = theta
+
     return last_time
 
 
@@ -150,6 +188,7 @@ def trace_particles_cartesian_gpu(
     vtotal,
     tol,
     dt=None,
+    mu=None,
 ):
     """
     Trace particles in Cartesian coordinates using CATAPULT
@@ -164,9 +203,15 @@ def trace_particles_cartesian_gpu(
     tol: tolerance for the ODE solver
     dt: the initial time step size for the solver (optional)
     """
+
     nparticles = xyz_inits.shape[0]
+
+    # if only one tmax value is provided, use it for all particles
+    if np.ndim(tmax) == 0:
+        tmax = np.full(nparticles, tmax, dtype=np.float64)
+
     r_range, phi_range, z_range, quad_info = cartesian_interpolant(
-        field, surface_classifier
+        field, surface_classifier, dtype=xyz_inits.dtype
     )
     last_time = firm3dpp.cartesian_gpu_tracing(
         quad_pts=quad_info,
@@ -180,8 +225,9 @@ def trace_particles_cartesian_gpu(
         vtang=parallel_speeds,
         tmax=tmax,
         tol=tol,
-        dt_in=dt if dt is not None else -np.ones(nparticles),
+        dt_in=dt if dt is not None else -np.ones(nparticles).astype(xyz_inits.dtype),
+        mu_in=mu if mu is not None else -np.ones(nparticles).astype(xyz_inits.dtype),
         nparticles=nparticles,
     )
-    last_time = np.reshape(last_time, (nparticles, 6))
+    last_time = np.reshape(last_time, (nparticles, 7))
     return last_time
