@@ -6,12 +6,6 @@ import pandas as pd
 import time
 
 from firm3d.catapult.tracing import trace_particles_boozer_gpu
-from firm3d.catapult.utils import (
-    boozer_interpolant,
-    boozer_saw_interpolant,
-    cartesian_interpolant,
-)
-import firm3dpp
 from firm3d.field.boozermagneticfield import (
     BoozerRadialInterpolant,
     InterpolatedBoozerField,

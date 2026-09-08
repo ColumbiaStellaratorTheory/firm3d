@@ -1,7 +1,5 @@
 #!/usr/bin/env python
 import numpy as np
-import pandas as pd
-from firm3d.catapult.tracing import trace_particles_boozer_gpu
 import firm3dpp
 
 from firm3d.catapult.utils import (
@@ -184,7 +182,7 @@ def save_trajectories_boozer_gpu(
         n_particles = stz_inits.shape[0]
 
         if n_particles == 0:
-            print(f"All particles finished")
+            print("All particles finished")
             break
 
     return trajectories
@@ -206,8 +204,6 @@ trajectories = save_trajectories_boozer_gpu(
     dt_save=1e-6,
 )
 
-
-# trajectory_data = pd.concat([df_from_trajectory(trajectory, i) for i, trajectory in enumerate(trajectories)], ignore_index=True)
 
 ### compare final positions to unsaved trajectories
 srange, trange, zrange, quad_info, maxJ = boozer_interpolant(

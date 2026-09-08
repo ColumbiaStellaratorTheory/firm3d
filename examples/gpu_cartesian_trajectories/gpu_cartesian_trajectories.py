@@ -19,6 +19,8 @@ from firm3d.field.tracing_helpers import (
 )
 from firm3d.catapult.utils import cartesian_interpolant
 import firm3dpp
+import h5py
+
 
 degree = 3  # degree of interpolant
 n = 30  # resolution of interpolant
@@ -170,8 +172,6 @@ trajectories = save_trajectories_cartesian_gpu(
 
 
 ### save trajectories
-import h5py
-
 with h5py.File("trajectories.h5", "w") as f:
     f.attrs["dt_save"] = 1e-6
     f.attrs["tmax"] = tmax
@@ -180,7 +180,6 @@ with h5py.File("trajectories.h5", "w") as f:
     for i, traj in enumerate(trajectories):
         f.create_dataset(f"particle_{i:06d}", data=np.asarray(traj, dtype=np.float32))
 
-# trajectory_data = pd.concat([df_from_trajectory(trajectory, i) for i, trajectory in enumerate(trajectories)], ignore_index=True)
 
 ### compare final positions to unsaved trajectories
 r_range, phi_range, z_range, quad_info = cartesian_interpolant(
