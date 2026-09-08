@@ -123,7 +123,6 @@ def cartesian_rhs(position, vpar, field, mass, charge, velocity):
     return out
 
 
-
 def test_interpolant(
     field, nfp, stz, saw_present=False, surf_classifier=None, tol=1e-8
 ):
@@ -163,8 +162,6 @@ def test_interpolant(
         )
         gpu_interpolation_flt = np.reshape(gpu_interpolation_flt, (stz.shape[0], -1))
         gpu_interpolation_flt = gpu_interpolation_flt[:, 0:6]
-
-
 
     else:  # Boozer coordinates
         srange, trange, zrange, quad_info, maxJ = construct_interpolant(
@@ -239,7 +236,7 @@ def test_interpolant(
                     "boozer_vacuum",
                     stz.shape[0],
                 )
-      
+
             elif field.field_type == "":  # implies finite beta
                 # evaluate CPU interpolant
                 field.set_points(stz)
@@ -297,9 +294,11 @@ def test_interpolant(
         print("gpu:", gpu_interpolation_dbl[row_idx, :])
         print("error:", error[row_idx, :])
 
-
     # compute error between single and double precision on gpu
-    error = np.abs((gpu_interpolation_dbl-gpu_interpolation_flt) / (np.max(gpu_interpolation_dbl, axis=0) + 1e-16))
+    error = np.abs(
+        (gpu_interpolation_dbl - gpu_interpolation_flt)
+        / (np.max(gpu_interpolation_dbl, axis=0) + 1e-16)
+    )
     print("max error in interpolant precision comparison on gpu: ", error.max())
 
     # precision_error_is_small = error.max() <= 1e-4
@@ -314,8 +313,7 @@ def test_interpolant(
     #     print("prec. error:", error[row_idx, :])
     #     print("rel. error: ", np.abs((gpu_interpolation_dbl[row_idx, :] - gpu_interpolation_flt[row_idx, :]) / gpu_interpolation_dbl[row_idx, :]))
 
-
-    return device_error_is_small #and precision_error_is_small
+    return device_error_is_small  # and precision_error_is_small
 
 
 def test_derivatives(
@@ -348,7 +346,7 @@ def test_derivatives(
             stz.shape[0],
         )
         gpu_derivs_dbl = np.reshape(gpu_derivs_dbl, (stz.shape[0], 4))
-        
+
         gpu_derivs_flt = firm3dpp.test_derivatives_cartesian(
             quad_info.astype(np.float32),
             rrange,
@@ -602,7 +600,9 @@ def test_derivatives(
         gpu_derivs_dbl = np.reshape(gpu_derivs_dbl, (stz.shape[0], 4))
         gpu_derivs_flt = np.reshape(gpu_derivs_flt, (stz.shape[0], 4))
 
-    device_error_is_small = np.isclose(gpu_derivs_dbl, cpu_derivs, rtol=tol, atol=tol).all()
+    device_error_is_small = np.isclose(
+        gpu_derivs_dbl, cpu_derivs, rtol=tol, atol=tol
+    ).all()
     error = np.abs(cpu_derivs - gpu_derivs_dbl) / (np.abs(cpu_derivs) + 1)
 
     if not device_error_is_small:
@@ -615,11 +615,9 @@ def test_derivatives(
     # compute error between single and double precision on gpu
     input_diff = (vpar - vpar.astype(np.float32)) / (vpar + 1e-16)
     precision_error_is_small = np.isclose(
-        gpu_derivs_dbl, gpu_derivs_flt, rtol=tol, atol=1e3*np.max(input_diff)
+        gpu_derivs_dbl, gpu_derivs_flt, rtol=tol, atol=1e3 * np.max(input_diff)
     ).all()
-    error = np.abs(gpu_derivs_dbl - gpu_derivs_flt) / (
-        np.abs(gpu_derivs_dbl) + 1
-    )
+    error = np.abs(gpu_derivs_dbl - gpu_derivs_flt) / (np.abs(gpu_derivs_dbl) + 1)
     print("max error in derivative precision comparison: ", error.max())
     # if error.max() > 1e3*np.max(input_diff):
     #     print("precision tolerance not satisfied in derivatives")
@@ -632,7 +630,7 @@ def test_derivatives(
     #     print("error:", error[row_idx, :])
     #     print("max input diff:", np.max(input_diff))
 
-    return device_error_is_small #and precision_error_is_small
+    return device_error_is_small  # and precision_error_is_small
 
 
 def test_timestep(
@@ -847,7 +845,13 @@ def test_timestep(
         cpu_positions = np.array([x[-1] for x in gc_tys])
         cpu_positions = np.array(
             [
-                [x[0], x[1] * np.cos(x[2]), x[1] * np.sin(x[2]), np.fmod(x[3], zrange[1]), x[4]]
+                [
+                    x[0],
+                    x[1] * np.cos(x[2]),
+                    x[1] * np.sin(x[2]),
+                    np.fmod(x[3], zrange[1]),
+                    x[4],
+                ]
                 for x in cpu_positions
             ]
         )
