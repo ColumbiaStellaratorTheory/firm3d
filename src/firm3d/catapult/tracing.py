@@ -24,7 +24,7 @@ def trace_particles_boozer_gpu(
     nzeta,
     dt=None,
     mu=None,
-    in_boozer=True, # if in Boozer coordinates, otherwise in pseudo-Cartesian coordinates
+    in_boozer=True,  # if in Boozer coordinates, otherwise in pseudo-Cartesian coordinates
 ):
     """
     Trace particles in Boozer coordinates using CATAPULT
@@ -93,8 +93,12 @@ def trace_particles_boozer_gpu(
                 vtang=parallel_speeds,
                 tmax=tmax,
                 tol=tol,
-                dt_in=dt if dt is not None else -np.ones(nparticles).astype(stz_inits.dtype),
-                mu_in = mu if mu is not None else -np.ones(nparticles).astype(stz_inits.dtype),
+                dt_in=dt
+                if dt is not None
+                else -np.ones(nparticles).astype(stz_inits.dtype),
+                mu_in=mu
+                if mu is not None
+                else -np.ones(nparticles).astype(stz_inits.dtype),
                 psi0=B0.psi0,
                 nparticles=nparticles,
             )
@@ -117,8 +121,12 @@ def trace_particles_boozer_gpu(
                 vtang=parallel_speeds,
                 tmax=tmax,
                 tol=tol,
-                dt_in=dt if dt is not None else -np.ones(nparticles).astype(stz_inits.dtype),
-                mu_in = mu if mu is not None else -np.ones(nparticles).astype(stz_inits.dtype),
+                dt_in=dt
+                if dt is not None
+                else -np.ones(nparticles).astype(stz_inits.dtype),
+                mu_in=mu
+                if mu is not None
+                else -np.ones(nparticles).astype(stz_inits.dtype),
                 psi0=B0.psi0,
                 nparticles=nparticles,
             )
@@ -148,7 +156,9 @@ def trace_particles_boozer_gpu(
             tmax=tmax,
             tol=tol,
             dt_in=-np.ones(nparticles).astype(stz_inits.dtype),
-            mu_in = mu if mu is not None else -np.ones(nparticles).astype(stz_inits.dtype),
+            mu_in=mu
+            if mu is not None
+            else -np.ones(nparticles).astype(stz_inits.dtype),
             psi0=psi0,
             nparticles=nparticles,
             vacuum=vacuum,
@@ -178,7 +188,7 @@ def trace_particles_cartesian_gpu(
     vtotal,
     tol,
     dt=None,
-    mu=None
+    mu=None,
 ):
     """
     Trace particles in Cartesian coordinates using CATAPULT
@@ -216,7 +226,7 @@ def trace_particles_cartesian_gpu(
         tmax=tmax,
         tol=tol,
         dt_in=dt if dt is not None else -np.ones(nparticles).astype(xyz_inits.dtype),
-        mu_in = mu if mu is not None else -np.ones(nparticles).astype(xyz_inits.dtype),
+        mu_in=mu if mu is not None else -np.ones(nparticles).astype(xyz_inits.dtype),
         nparticles=nparticles,
     )
     last_time = np.reshape(last_time, (nparticles, 7))

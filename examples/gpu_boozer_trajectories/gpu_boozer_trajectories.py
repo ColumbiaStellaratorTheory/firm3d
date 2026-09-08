@@ -71,6 +71,7 @@ vpar_inits = initialize_velocity_uniform(vpar0, nparticles)
 stz_inits = np.ascontiguousarray(stz_inits)
 vpar_inits = np.ascontiguousarray(vpar_inits)
 
+
 def pseudocart_to_boozer(pt):
     x1 = pt[1]
     x2 = pt[2]
@@ -79,6 +80,7 @@ def pseudocart_to_boozer(pt):
     pt[1] = s
     pt[2] = theta
     return pt
+
 
 ### This example shows how to save trajectories with CATAPULT
 ### Ideally this would be implemented across field types
@@ -113,8 +115,8 @@ def save_trajectories_boozer_gpu(
     # convert Boozer to pseudo-Cartesian coordinates
     s = stz_inits[:, 0]
     theta = stz_inits[:, 1]
-    x1 = s*np.cos(theta)
-    x2 = s*np.sin(theta)
+    x1 = s * np.cos(theta)
+    x2 = s * np.sin(theta)
 
     stz_inits[:, 0] = x1
     stz_inits[:, 1] = x2
@@ -151,7 +153,7 @@ def save_trajectories_boozer_gpu(
             mu_in=mu,
             psi0=psi0,
             nparticles=n_particles,
-            vacuum=True
+            vacuum=True,
         )
         step_data = np.reshape(step_data, (n_particles, 7))
 
@@ -168,7 +170,7 @@ def save_trajectories_boozer_gpu(
                 trajectories[idx].append(step_data[i, :])
 
         # find lost particles
-        s_end = np.sqrt(step_data[:, 1]**2 + step_data[:, 2]**2)
+        s_end = np.sqrt(step_data[:, 1] ** 2 + step_data[:, 2] ** 2)
         idx_keep = (current_time < tmax) & (s_end < 1.0)
 
         # remove lost particles
@@ -185,7 +187,6 @@ def save_trajectories_boozer_gpu(
             print(f"All particles finished")
             break
 
-    
     return trajectories
 
 
@@ -206,8 +207,7 @@ trajectories = save_trajectories_boozer_gpu(
 )
 
 
-
-# trajectory_data = pd.concat([df_from_trajectory(trajectory, i) for i, trajectory in enumerate(trajectories)], ignore_index=True) 
+# trajectory_data = pd.concat([df_from_trajectory(trajectory, i) for i, trajectory in enumerate(trajectories)], ignore_index=True)
 
 ### compare final positions to unsaved trajectories
 srange, trange, zrange, quad_info, maxJ = boozer_interpolant(
@@ -216,8 +216,8 @@ srange, trange, zrange, quad_info, maxJ = boozer_interpolant(
 
 s = stz_inits[:, 0]
 theta = stz_inits[:, 1]
-x1 = s*np.cos(theta)
-x2 = s*np.sin(theta)
+x1 = s * np.cos(theta)
+x2 = s * np.sin(theta)
 stz_inits[:, 0] = x1
 stz_inits[:, 1] = x2
 full_time_data = firm3dpp.boozer_gpu_tracing(

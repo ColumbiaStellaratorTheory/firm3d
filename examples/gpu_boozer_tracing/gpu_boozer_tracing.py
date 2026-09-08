@@ -80,7 +80,6 @@ tmax = 1e-4
 print(stz_inits)
 
 for tmax in [1e-4, 1e-3, 1e-2, 5e-2]:
-
     start = time.time()
     last_time_dbl = trace_particles_boozer_gpu(
         bri,
@@ -129,11 +128,10 @@ for tmax in [1e-4, 1e-3, 1e-2, 5e-2]:
             "z_end_flt": last_time_flt[:, 3],
             "vpar_end_flt": last_time_flt[:, 4],
             "last_time_flt": last_time_flt[:, 0],
-            "dt_end_flt": last_time_flt[:, 5]
+            "dt_end_flt": last_time_flt[:, 5],
         }
     )
     # particle_data.to_csv("./particle_data.csv")
-
     print(f"tmax= {tmax}")
     print(f"Number of particles= {nparticles}")
     did_leave = [t < tmax for t in particle_data["last_time_flt"]]
