@@ -24,7 +24,7 @@ def trace_particles_boozer_gpu(
     nzeta,
     dt=None,
     mu=None,
-    in_boozer=True,  # if in Boozer coordinates, otherwise in pseudo-Cartesian coordinates
+    in_boozer=True,  # if in Boozer coordinates, else in pseudo-Cartesian coordinates
 ):
     """
     Trace particles in Boozer coordinates using CATAPULT

@@ -301,18 +301,6 @@ def test_interpolant(
     )
     print("max error in interpolant precision comparison on gpu: ", error.max())
 
-    # precision_error_is_small = error.max() <= 1e-4
-    # if not precision_error_is_small:
-    #     print("tolerance not satisfied in interpolant")
-    #     print(error.max())
-    #     row_idx = np.unravel_index(np.argmax(error), error.shape)[0]
-    #     print("stz:", stz[row_idx, :])
-    #     print("flt:", gpu_interpolation_flt[row_idx, :])
-    #     print("dbl:", gpu_interpolation_dbl[row_idx, :])
-    #     print("diff: ", gpu_interpolation_dbl[row_idx, :] - gpu_interpolation_flt[row_idx, :])
-    #     print("prec. error:", error[row_idx, :])
-    #     print("rel. error: ", np.abs((gpu_interpolation_dbl[row_idx, :] - gpu_interpolation_flt[row_idx, :]) / gpu_interpolation_dbl[row_idx, :]))
-
     return device_error_is_small  # and precision_error_is_small
 
 
@@ -613,24 +601,10 @@ def test_derivatives(
         print("rel error:", error[row_idx, :])
 
     # compute error between single and double precision on gpu
-    input_diff = (vpar - vpar.astype(np.float32)) / (vpar + 1e-16)
-    precision_error_is_small = np.isclose(
-        gpu_derivs_dbl, gpu_derivs_flt, rtol=tol, atol=1e3 * np.max(input_diff)
-    ).all()
     error = np.abs(gpu_derivs_dbl - gpu_derivs_flt) / (np.abs(gpu_derivs_dbl) + 1)
     print("max error in derivative precision comparison: ", error.max())
-    # if error.max() > 1e3*np.max(input_diff):
-    #     print("precision tolerance not satisfied in derivatives")
-    #     row_idx = np.unravel_index(np.argmax(error), error.shape)[0]
-    #     print(row_idx)
-    #     print("stz:", stz[row_idx, :])
-    #     print("cpu: ", cpu_derivs[row_idx, :])
-    #     print("flt:", gpu_derivs_flt[row_idx, :])
-    #     print("dbl:", gpu_derivs_dbl[row_idx, :])
-    #     print("error:", error[row_idx, :])
-    #     print("max input diff:", np.max(input_diff))
 
-    return device_error_is_small  # and precision_error_is_small
+    return device_error_is_small
 
 
 def test_timestep(
