@@ -378,7 +378,7 @@ class PassingPoincare:
 
         omega_theta = np.array(omega_theta)
         omega_zeta = np.array(omega_zeta)
-        init_s = np.array(init_s)
+        init_s = np.round(np.array(init_s), 9) # remove floating-point error in init_s
 
         s_prof = np.unique(init_s)
         omega_theta_prof = np.zeros((len(s_prof),))
@@ -938,7 +938,7 @@ class TrappedPoincare:
 
         omega_eta = np.array(omega_eta)
         omega_b = np.array(omega_b)
-        init_s = np.array(init_s)
+        init_s = np.round(np.array(init_s), 9) # remove floating-point error in init_s
 
         s_prof = np.unique(init_s)
         omega_eta_prof = np.zeros((len(s_prof),))
