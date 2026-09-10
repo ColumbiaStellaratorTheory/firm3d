@@ -337,6 +337,9 @@ def test_derivatives(
 
             saw_m = [field.get_wave(i).Phim for i in range(saw_nharmonics)]
             saw_n = [field.get_wave(i).Phin for i in range(saw_nharmonics)]
+            saw_phases = np.ascontiguousarray(
+                [field.get_wave(i).phase for i in range(saw_nharmonics)], dtype=np.float64
+            )
             saw_phihats = np.ascontiguousarray(
                 np.column_stack(
                     [
@@ -360,6 +363,7 @@ def test_derivatives(
                     saw_m,
                     saw_n,
                     saw_phihats,
+                    saw_phases,
                     saw_nharmonics,
                     stz,
                     vpar,
@@ -381,6 +385,7 @@ def test_derivatives(
                     saw_m,
                     saw_n,
                     saw_phihats,
+                    saw_phases,
                     saw_nharmonics,
                     stz,
                     vpar,
@@ -546,6 +551,9 @@ def test_timestep(
 
             saw_m = [field.get_wave(i).Phim for i in range(saw_nharmonics)]
             saw_n = [field.get_wave(i).Phin for i in range(saw_nharmonics)]
+            saw_phases = np.ascontiguousarray(
+                [field.get_wave(i).phase for i in range(saw_nharmonics)], dtype=np.float64
+            )
             saw_phihats = np.ascontiguousarray(
                 np.column_stack(
                     [
@@ -568,6 +576,7 @@ def test_timestep(
                     saw_m=saw_m,
                     saw_n=saw_n,
                     saw_phihats=saw_phihats,
+                    saw_phases=saw_phases,
                     saw_nharmonics=saw_nharmonics,
                     stz_init=stz,
                     m=MASS,
@@ -590,6 +599,7 @@ def test_timestep(
                     saw_m=saw_m,
                     saw_n=saw_n,
                     saw_phihats=saw_phihats,
+                    saw_phases=saw_phases,
                     saw_nharmonics=saw_nharmonics,
                     stz_init=stz,
                     m=MASS,
@@ -776,6 +786,9 @@ class TestGPUTracing(unittest.TestCase):
             minor_radius_meters=1.7,
         )
 
+        for i in range(len(saw)):
+            saw.get_wave(i).phase = i * np.pi / 4
+
         n_test_pts = 10000
         stz = sample_test_points(n_test_pts)
         tol = 1e-8
@@ -834,6 +847,9 @@ class TestGPUTracing(unittest.TestCase):
             max_dB_normal_by_B0=5e-3,
             minor_radius_meters=1.7,
         )
+
+        for i in range(len(saw)):
+            saw.get_wave(i).phase = i * np.pi / 4
 
         n_test_pts = 10000
         stz = sample_test_points(n_test_pts)

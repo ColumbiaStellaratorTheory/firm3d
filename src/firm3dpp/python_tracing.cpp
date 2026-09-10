@@ -20,21 +20,21 @@ extern "C" vector<double> boozer_gpu_tracing(py::array_t<double> quad_pts, py::a
     double tmax, double tol, py::array_t<double> dt_in, double psi0, int nparticles, bool vacuum=false);
 
 extern "C" vector<double> boozer_saw_gpu_tracing(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, 
-        double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<double> saw_phihats, int saw_nharmonics,
+        double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<double> saw_phihats, py::array_t<double> saw_phases, int saw_nharmonics,
         py::array_t<double> stz_init, double m, double q, double vtotal, py::array_t<double> vtang, py::array_t<double> mus, double tmax, double tol, py::array_t<double> dt_in, double psi0, int nparticles);
 
 extern "C" vector<double> boozer_saw_nok_gpu_tracing(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, 
-        double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<double> saw_phihats, int saw_nharmonics,
+        double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<double> saw_phihats, py::array_t<double> saw_phases, int saw_nharmonics,
         py::array_t<double> stz_init, double m, double q, double vtotal, py::array_t<double> vtang, py::array_t<double> mus, double tmax, double tol, py::array_t<double> dt_in, double psi0, int nparticles);
 
 extern "C" py::array_t<double> test_gpu_interpolation(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> loc, std::string coordinates, int n_points);
 extern "C" py::array_t<double> test_derivatives_cartesian(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> loc, py::array_t<double> vpar, double v_total, double m, double q,  int n_points);
 extern "C" py::array_t<double> test_derivatives_boozer(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> loc, py::array_t<double> vpar, double v_total, double m, double q,  double psi0, int n_points, bool vacuum = false);
 extern "C" py::array_t<double> test_derivatives_saw(py::array_t<double> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, 
-        double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<double> saw_phihats, int saw_nharmonics,
+        double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<double> saw_phihats, py::array_t<double> saw_phases, int saw_nharmonics,
         py::array_t<double> loc, py::array_t<double> vpar, py::array_t<double> time, double v_total, double m, double q,  double psi0, int n_points);
 extern "C" py::array_t<double> test_derivatives_saw_nok(py::array_t<double> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, 
-        double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<double> saw_phihats, int saw_nharmonics,
+        double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<double> saw_phihats, py::array_t<double> saw_phases, int saw_nharmonics,
         py::array_t<double> loc, py::array_t<double> vpar, py::array_t<double> time, double v_total, double m, double q,  double psi0, int n_points);
 
 extern "C" vector<double> test_timestep_cartesian(py::array_t<double> quad_pts, py::array_t<double> rrange,
@@ -46,13 +46,13 @@ extern "C" vector<double> test_timestep_boozer(py::array_t<double> quad_pts, py:
         double tol, double psi0, int nparticles, bool vacuum);
         
 extern "C" vector<double> test_timestep_saw(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, 
-        double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<double> saw_phihats, int saw_nharmonics,
+        double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<double> saw_phihats, py::array_t<double> saw_phases, int saw_nharmonics,
         py::array_t<double> stz_init, double m, double q, double vtotal, py::array_t<double> vtang, py::array_t<double> time,
         double tol, double psi0, int nparticles);
 
 
 extern "C" vector<double> test_timestep_saw_nok(py::array_t<double> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, 
-        double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<double> saw_phihats, int saw_nharmonics,
+        double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<double> saw_phihats, py::array_t<double> saw_phases, int saw_nharmonics,
         py::array_t<double> loc_init, double m, double q, double v_total, py::array_t<double> vtang, py::array_t<double> time,
         double tol, double psi0, int nparticles);
 #endif
@@ -175,6 +175,7 @@ void init_tracing(py::module_ &m){
         py::arg("saw_m"),
         py::arg("saw_n"),
         py::arg("saw_phihats"),
+        py::arg("saw_phases"),
         py::arg("saw_nharmonics"),
         py::arg("stz_init"),
         py::arg("m"),
@@ -199,6 +200,7 @@ void init_tracing(py::module_ &m){
         py::arg("saw_m"),
         py::arg("saw_n"),
         py::arg("saw_phihats"),
+        py::arg("saw_phases"),
         py::arg("saw_nharmonics"),
         py::arg("stz_init"),
         py::arg("m"),
@@ -262,6 +264,7 @@ void init_tracing(py::module_ &m){
         py::arg("saw_m"),
         py::arg("saw_n"),
         py::arg("saw_phihats"),
+        py::arg("saw_phases"),
         py::arg("saw_nharmonics"),
         py::arg("loc"),
         py::arg("vpar"),
@@ -283,6 +286,7 @@ void init_tracing(py::module_ &m){
         py::arg("saw_m"),
         py::arg("saw_n"),
         py::arg("saw_phihats"),
+        py::arg("saw_phases"),
         py::arg("saw_nharmonics"),
         py::arg("loc"),
         py::arg("vpar"),
@@ -356,6 +360,7 @@ void init_tracing(py::module_ &m){
         py::arg("saw_m"),
         py::arg("saw_n"),
         py::arg("saw_phihats"),
+        py::arg("saw_phases"),
         py::arg("saw_nharmonics"),
         py::arg("stz_init"),
         py::arg("m"),
@@ -378,6 +383,7 @@ void init_tracing(py::module_ &m){
         py::arg("saw_m"),
         py::arg("saw_n"),
         py::arg("saw_phihats"),
+        py::arg("saw_phases"),
         py::arg("saw_nharmonics"),
         py::arg("stz_init"),
         py::arg("m"),

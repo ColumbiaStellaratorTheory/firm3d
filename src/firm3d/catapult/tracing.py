@@ -182,6 +182,9 @@ def trace_particles_boozer_perturbed_gpu(
     saw_srange = (saw_s[0], saw_s[-1], len(saw_s))
     saw_m = [field.get_wave(i).Phim for i in range(saw_nharmonics)]
     saw_n = [field.get_wave(i).Phin for i in range(saw_nharmonics)]
+    saw_phases = np.ascontiguousarray(
+        [field.get_wave(i).phase for i in range(saw_nharmonics)], dtype=np.float64
+    )
     saw_phihats = np.ascontiguousarray(
         np.column_stack(
             [
@@ -204,6 +207,7 @@ def trace_particles_boozer_perturbed_gpu(
         saw_m=saw_m,
         saw_n=saw_n,
         saw_phihats=saw_phihats,
+        saw_phases=saw_phases,
         saw_nharmonics=saw_nharmonics,
         stz_init=points,
         m=mass,
