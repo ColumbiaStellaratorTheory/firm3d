@@ -916,7 +916,7 @@ __global__ void particle_trace_kernel(double* out, double* init_pos, double* qua
         for(int i=0; i<4; ++i){
             state[i*PARTICLES_PER_BLOCK + threadIdx.x] = init_pos[4*idx + i];
         }
-        dt[threadIdx.x] = dt_in[threadIdx.x]; // copy input dt
+        dt[threadIdx.x] = dt_in[idx]; // copy input dt
         if(mus_init != nullptr){
             mu[threadIdx.x] = mus_init[idx];
         }
@@ -1056,6 +1056,7 @@ vector<double> gpu_tracing(py::array_t<double> quad_pts, py::array_t<double> x1_
 
     gpuErrchk( cudaFree(quadpts_d) );
     gpuErrchk( cudaFree(init_pos_d) );
+    gpuErrchk( cudaFree(dt_in_d) );
     gpuErrchk( cudaFree(out_d) );
     vector<double> particle_output(6*nparticles);
     for(int i=0; i<6*nparticles; ++i){
