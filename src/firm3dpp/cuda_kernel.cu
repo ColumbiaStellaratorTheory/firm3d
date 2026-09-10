@@ -749,13 +749,13 @@ __device__ void calc_max_timestep_size<CoordSys::Boozer>(double* dtmax, double* 
 }
 
 // set up particles for tracing
-// use the derivatives function to calculate mu, max step size
+// use derivatives to calculate max step size; calculate mu if not supplied
 // store these values for the remainder of tracing
 
 template<RHS id, typename... Args>
 __device__ void setup_particle(double* mu, double* t, double* dt, double* dtmax, double* x_temp, bool* symmetry_exploited, int* index_i, int* index_j, int* index_k,
                             double* quad_pts, double* x1_shape, double* x2_shape, double* x3_shape, double* state, double* derivs,
-                            int nparticles_blk, Args... args){
+                            int nparticles_blk, bool use_input_mu, Args... args){
 
     
     if(threadIdx.x < nparticles_blk){
@@ -763,8 +763,10 @@ __device__ void setup_particle(double* mu, double* t, double* dt, double* dtmax,
         symmetry_exploited[threadIdx.x] = false;
         build_state<id>(x_temp, 0, symmetry_exploited, index_i, index_j, index_k,
                                 x1_shape, x2_shape, x3_shape, state, derivs, t, dt);
-        // dummy call to get norm B
-        mu[threadIdx.x] = -1.0; // initialize mu
+        if(!use_input_mu){
+            // dummy call to get norm B
+            mu[threadIdx.x] = -1.0; // initialize mu
+        }
     }
     __syncthreads();
     calc_derivs<id>(derivs, 0, quad_pts, x_temp, symmetry_exploited, index_i, index_j, index_k,
@@ -772,11 +774,13 @@ __device__ void setup_particle(double* mu, double* t, double* dt, double* dtmax,
     __syncthreads();
 
     if(threadIdx.x < nparticles_blk){
-        double v_par = state[3*PARTICLES_PER_BLOCK + threadIdx.x];
-        double v_perp2 = v_total_d*v_total_d - v_par*v_par;
-        
-        double modB = derivs[4*PARTICLES_PER_BLOCK + threadIdx.x];
-        mu[threadIdx.x] = v_perp2 / (2*modB);
+        if(!use_input_mu){
+            double v_par = state[3*PARTICLES_PER_BLOCK + threadIdx.x];
+            double v_perp2 = v_total_d*v_total_d - v_par*v_par;
+
+            double modB = derivs[4*PARTICLES_PER_BLOCK + threadIdx.x];
+            mu[threadIdx.x] = v_perp2 / (2*modB);
+        }
 
         constexpr CoordSys coord = map_rhs_to_coord<id>();
         calc_max_timestep_size<coord>(dtmax, x_temp, derivs);
@@ -921,7 +925,7 @@ __global__ void particle_trace_kernel(double* out, double* init_pos, double* qua
 
     // calculate the particle's magnetic moment mu, dt, dtmax
     setup_particle<id>(mu, t, dt, dtmax, x_temp, symmetry_exploited, index_i, index_j, index_k,
-                        quadpts_arr, x1_shape, x2_shape, x3_shape, state, derivs, nparticles_blk, args...);
+                        quadpts_arr, x1_shape, x2_shape, x3_shape, state, derivs, nparticles_blk, mus_init != nullptr, args...);
     __syncthreads();
 
     // if there exists a particle which is real and hasn't not reached tmax or left, keep tracing
@@ -1483,7 +1487,7 @@ __global__ void test_gpu_derivs_kernel(double* quad_pts, double* loc, double* vp
     __syncthreads();
 
     setup_particle<id>(mu, t, dt, dtmax, x_temp, symmetry_exploited, index_i, index_j, index_k,
-                        quad_pts, r_shape, phi_shape, z_shape, state, derivs, nparticles_blk, args...);
+                        quad_pts, r_shape, phi_shape, z_shape, state, derivs, nparticles_blk, false, args...);
 
     __syncthreads();
 
@@ -1735,7 +1739,7 @@ __global__ void test_gpu_timestep_kernel(double* out, double* init_pos, double* 
 
     // calculate the particle's magnetic moment mu, dt, dtmax
     setup_particle<id>(mu, t, dt, dtmax, x_temp, symmetry_exploited, index_i, index_j, index_k,
-                        quadpts_arr, r_shape, phi_shape, z_shape, state, derivs, nparticles_blk, args...);
+                        quadpts_arr, r_shape, phi_shape, z_shape, state, derivs, nparticles_blk, false, args...);
     __syncthreads();
 
     // if there exists a particle at t=0, which is a real particle, then keep tracing
