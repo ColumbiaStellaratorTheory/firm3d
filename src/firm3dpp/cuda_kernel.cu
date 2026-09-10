@@ -881,7 +881,7 @@ __device__ void adjust_time(double* t, double* dt, double* state, double* derivs
  * Everything lives in shared memory except the data for the interpolant
  */
 template<RHS id, typename... Args>
-__global__ void particle_trace_kernel(double* out, double* init_pos, double* quadpts_arr, double* dt_in, Args... args){
+__global__ void particle_trace_kernel(double* out, double* init_pos, double* quadpts_arr, double* dt_in, double* mus_init, Args... args){
     int idx = threadIdx.x + blockIdx.x*PARTICLES_PER_BLOCK;
 
     __shared__ double x_temp[5 * PARTICLES_PER_BLOCK];
@@ -958,7 +958,7 @@ __global__ void particle_trace_kernel(double* out, double* init_pos, double* qua
 
 template<RHS id, typename... Args>
 vector<double> gpu_tracing(py::array_t<double> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, 
-    py::array_t<double> loc_init, double m, double q, double vtotal, py::array_t<double> vtang, double tmax, double tol, py::array_t<double> dt_in, int nparticles, Args... args){
+    py::array_t<double> loc_init, double m, double q, double vtotal, py::array_t<double> vtang, double tmax, double tol, py::array_t<double> dt_in, int nparticles, double* mus_d = nullptr, Args... args){
 
     //  read data in from python
     double* loc_init_arr = create_array(loc_init);
@@ -1042,7 +1042,7 @@ vector<double> gpu_tracing(py::array_t<double> quad_pts, py::array_t<double> x1_
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start);
-    particle_trace_kernel<id><<<nblks, nthreads>>>(out_d, init_pos_d, quadpts_d, dt_in_d, args...);
+    particle_trace_kernel<id><<<nblks, nthreads>>>(out_d, init_pos_d, quadpts_d, dt_in_d, mus_d, args...);
 
     double out[6*nparticles];
     gpuErrchk(cudaMemcpy(out, out_d, 6 * nparticles * sizeof(double), cudaMemcpyDeviceToHost) );
@@ -1106,10 +1106,15 @@ extern "C" vector<double> boozer_saw_gpu_tracing(py::array_t<double> quad_pts, p
 
     //  read data in from python
     double* stz_init_arr = create_array(stz_init);
+    double* mus_arr = create_array(mus);
     double* saw_srange_arr = create_array(saw_srange);
     int* saw_m_arr = create_array(saw_m);
     int* saw_n_arr = create_array(saw_n);
     double* saw_phihats_arr = create_array(saw_phihats);
+
+    double* mus_d;
+    gpuErrchk( cudaMalloc((void**)&mus_d, mus.size() * sizeof(double)) );
+    gpuErrchk( cudaMemcpy(mus_d, mus_arr, mus.size() * sizeof(double), cudaMemcpyHostToDevice) );
 
     int* saw_m_d;
     gpuErrchk( cudaMalloc((void**)&saw_m_d, saw_m.size() * sizeof(int)) );
@@ -1139,9 +1144,10 @@ extern "C" vector<double> boozer_saw_gpu_tracing(py::array_t<double> quad_pts, p
     gpuErrchk(cudaMemcpyToSymbol(saw_srange_d, saw_srange_ext, 4*sizeof(double)) );
     gpuErrchk(cudaMemcpyToSymbol(psi0_d, &psi0, sizeof(double)));
 
-    std::vector<double> results =  gpu_tracing<RHS::GC_BoozerVacuumSAW>(quad_pts, srange, trange, zrange, stz_init, m, q, vtotal, vtang, tmax, tol, dt_in, nparticles,
+    std::vector<double> results =  gpu_tracing<RHS::GC_BoozerVacuumSAW>(quad_pts, srange, trange, zrange, stz_init, m, q, vtotal, vtang, tmax, tol, dt_in, nparticles, mus_d,
                                                                         saw_omega, saw_m_d, saw_n_d, saw_phihats_d, saw_nharmonics);
 
+    gpuErrchk( cudaFree(mus_d) );
     gpuErrchk( cudaFree(saw_m_d) );
     gpuErrchk( cudaFree(saw_n_d) );
     gpuErrchk( cudaFree(saw_phihats_d) );
@@ -1163,10 +1169,15 @@ extern "C" vector<double> boozer_saw_nok_gpu_tracing(py::array_t<double> quad_pt
 
     //  read data in from python
     double* stz_init_arr = create_array(stz_init);
+    double* mus_arr = create_array(mus);
     double* saw_srange_arr = create_array(saw_srange);
     int* saw_m_arr = create_array(saw_m);
     int* saw_n_arr = create_array(saw_n);
     double* saw_phihats_arr = create_array(saw_phihats);
+
+    double* mus_d;
+    gpuErrchk( cudaMalloc((void**)&mus_d, mus.size() * sizeof(double)) );
+    gpuErrchk( cudaMemcpy(mus_d, mus_arr, mus.size() * sizeof(double), cudaMemcpyHostToDevice) );
 
     int* saw_m_d;
     cudaMalloc((void**)&saw_m_d, saw_m.size() * sizeof(int));
@@ -1196,9 +1207,10 @@ extern "C" vector<double> boozer_saw_nok_gpu_tracing(py::array_t<double> quad_pt
     gpuErrchk(cudaMemcpyToSymbol(saw_srange_d, saw_srange_ext, 4*sizeof(double)) );
     gpuErrchk(cudaMemcpyToSymbol(psi0_d, &psi0, sizeof(double)));
 
-    std::vector<double> results =  gpu_tracing<RHS::GC_BoozerNoKSAW>(quad_pts, srange, trange, zrange, stz_init, m, q, vtotal, vtang, tmax, tol, dt_in, nparticles,
+    std::vector<double> results =  gpu_tracing<RHS::GC_BoozerNoKSAW>(quad_pts, srange, trange, zrange, stz_init, m, q, vtotal, vtang, tmax, tol, dt_in, nparticles, mus_d,
                                                                         saw_omega, saw_m_d, saw_n_d, saw_phihats_d, saw_nharmonics);
 
+    gpuErrchk( cudaFree(mus_d) );
     gpuErrchk( cudaFree(saw_m_d) );
     gpuErrchk( cudaFree(saw_n_d) );
     gpuErrchk( cudaFree(saw_phihats_d) );
