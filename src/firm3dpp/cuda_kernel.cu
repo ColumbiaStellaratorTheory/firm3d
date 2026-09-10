@@ -913,6 +913,9 @@ __global__ void particle_trace_kernel(double* out, double* init_pos, double* qua
             state[i*PARTICLES_PER_BLOCK + threadIdx.x] = init_pos[4*idx + i];
         }
         dt[threadIdx.x] = dt_in[threadIdx.x]; // copy input dt
+        if(mus_init != nullptr){
+            mu[threadIdx.x] = mus_init[idx];
+        }
     }
     __syncthreads();
 
