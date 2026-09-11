@@ -1034,66 +1034,63 @@ solve_sde(
     double tau = 0.0;
     int iter = 0;
     bool stop = false;
-    // Capture the state at tau_max before any re-initialization destroys the
-    // dense-output interval.  Set when the step crosses tau_max.
-    vector<double> y_at_tmax(state_size);
-    double mu_at_tmax = mu;
-    bool y_at_tmax_saved = false;
+    vector<double> y_now(state_size);
 
     do {
         auto step = solver->do_step(rhs);
         iter++;
         double tau_last    = std::get<0>(step);
         double tau_current = std::get<1>(step);
-        double h_taken     = tau_current - tau_last;  // normalized step
-        tau = tau_current;
 
-        // When this step crosses tau_max, capture the interpolated endpoint
-        // before the kick moves t_old_ past tau_max.
-        if (tau_current >= tau_max && !y_at_tmax_saved) {
-            solver->calc_state(tau_max, y_at_tmax);
-            mu_at_tmax = mu;
-            y_at_tmax_saved = true;
+        // On the step that crosses tau_max the orbit is interpolated back to
+        // tau_max and the kick window shortened to match, so the endpoint is
+        // the post-kick state at exactly tau_max, as on the GPU.
+        const bool crossed = tau_current >= tau_max;
+        if (crossed) {
+            solver->calc_state(tau_max, y_now);
+            tau_current = tau_max;
+        } else {
+            y_now = solver->current_state();
         }
+        double h_taken = tau_current - tau_last;  // normalized step
+        tau = tau_current;
+        y_to_stzvt(y_now, stzv, axis, vnorm, tnorm);
 
         // ---- Collision kick applied to (v, xi) at tau_current ----
-        {
-            vector<double> y_now = solver->current_state();
-            y_to_stzvt(y_now, stzv, axis, vnorm, tnorm);
+        if (!backgrounds.empty()) {
+            double B = modB_at(stzv[0], stzv[1], stzv[2]);
+            double v_now = std::sqrt(stzv[3] * stzv[3] + 2.0 * mu * B);
 
-            if (!backgrounds.empty()) {
-                double B = modB_at(stzv[0], stzv[1], stzv[2]);
-                double v_now = std::sqrt(stzv[3] * stzv[3] + 2.0 * mu * B);
+            if (v_now > 0.0 && B > 0.0) {
+                double xi_now = stzv[3] / v_now;
 
-                if (v_now > 0.0 && B > 0.0) {
-                    double xi_now = stzv[3] / v_now;
+                auto coef = compute_collision_coefficients(
+                    v_now, stzv[0], m_a, q_a, backgrounds);
+                double h_phys = h_taken * tnorm;
 
-                    auto coef = compute_collision_coefficients(
-                        v_now, stzv[0], m_a, q_a, backgrounds);
-                    double h_phys = h_taken * tnorm;
+                // Sub-cycle the kick over the accepted step: size one
+                // sub-step from the current coefficients, apply it,
+                // refresh the coefficients at the new speed, repeat on
+                // the remaining time.
+                double t_left = h_phys;
+                auto c = coef;
+                while (t_left > 0.0) {
+                    double h_sub  = t_left / collision_substeps(v_now, c, t_left);
+                    double sqrt_h = std::sqrt(h_sub);
+                    double dW_v  = normal_dist(rng) * sqrt_h;
+                    double dW_xi = normal_dist(rng) * sqrt_h;
+                    milstein_collision_step(v_now, xi_now, c, h_sub, dW_v, dW_xi);
+                    t_left -= h_sub;
+                    if (t_left <= 0.0) break;
+                    c = compute_collision_coefficients(
+                            v_now, stzv[0], m_a, q_a, backgrounds);
+                }
 
-                    // Sub-cycle the kick over the accepted step: size one
-                    // sub-step from the current coefficients, apply it,
-                    // refresh the coefficients at the new speed, repeat on
-                    // the remaining time.
-                    double t_left = h_phys;
-                    auto c = coef;
-                    while (t_left > 0.0) {
-                        double h_sub  = t_left / collision_substeps(v_now, c, t_left);
-                        double sqrt_h = std::sqrt(h_sub);
-                        double dW_v  = normal_dist(rng) * sqrt_h;
-                        double dW_xi = normal_dist(rng) * sqrt_h;
-                        milstein_collision_step(v_now, xi_now, c, h_sub, dW_v, dW_xi);
-                        t_left -= h_sub;
-                        if (t_left <= 0.0) break;
-                        c = compute_collision_coefficients(
-                                v_now, stzv[0], m_a, q_a, backgrounds);
-                    }
+                stzv[3] = v_now * xi_now;
+                mu = v_now * v_now * (1.0 - xi_now * xi_now) / (2.0 * B);
+                rhs.set_mu(mu);
 
-                    stzv[3] = v_now * xi_now;
-                    mu = v_now * v_now * (1.0 - xi_now * xi_now) / (2.0 * B);
-                    rhs.set_mu(mu);
-
+                if (!crossed) {
                     stzvt_to_y(stzv, y_now, axis, vnorm, tnorm);
                     // The kick invalidated the derivative the solver caches
                     // between steps; re-initialize recomputes it, and
@@ -1105,8 +1102,6 @@ solve_sde(
 
         // ---- Check stopping criteria (post-kick state) ----
         {
-            vector<double> y_check = solver->current_state();
-            y_to_stzvt(y_check, stzv, axis, vnorm, tnorm);
             double t_current    = tau_current * tnorm;
             double s_current    = stzv[0];
             double th_current   = stzv[1];
@@ -1130,22 +1125,8 @@ solve_sde(
 
     } while (tau < tau_max && !stop);
 
-    // Save final state
-    if (stop) tau_max = tau;
-    double t_end = tau_max * tnorm;
-    if (t_end - res.back()[0] > 1e-15) {
-        vector<double> sv_fin(state_size);
-        if (y_at_tmax_saved) {
-            // Use the state captured before the kick (accurate interpolation).
-            y_to_stzvt(y_at_tmax, sv_fin, axis, vnorm, tnorm);
-            res.push_back(make_record(t_end, sv_fin, mu_at_tmax));
-        } else {
-            // tau_max == tau_current (stop case): current_state() is exact.
-            vector<double> y_fin = solver->current_state();
-            y_to_stzvt(y_fin, sv_fin, axis, vnorm, tnorm);
-            res.push_back(make_record(t_end, sv_fin, mu));
-        }
-    }
+    // Final state: post-kick, at tau_max or at the stop.
+    res.push_back(make_record(tau * tnorm, stzv, mu));
 
     return std::make_tuple(res, res_hits);
 }
