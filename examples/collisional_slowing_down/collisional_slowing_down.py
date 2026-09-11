@@ -124,7 +124,6 @@ res_tys, res_zeta_hits = trace_particles_boozer_with_collisions(
     comm=comm_world,
     Ekin=Ekin,
     stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
-    forget_exact_path=True,
     abstol=abstol,
     reltol=reltol,
     DP_hmin=1e-10,

@@ -242,8 +242,6 @@ def trace_particles_boozer_with_collisions(
     reltol=None,
     comm=None,
     stopping_criteria=None,
-    dt_save=1e-6,
-    forget_exact_path=False,
     axis=2,
     ode_solver="dormand_prince",
     DP_hmin=0.0,
@@ -290,9 +288,6 @@ def trace_particles_boozer_with_collisions(
         comm: MPI communicator; particles are distributed across ranks.
         stopping_criteria: List of stopping criteria (same as
             :func:`~firm3d.field.tracing.trace_particles_boozer`).
-        dt_save: Time interval at which trajectory snapshots are saved (s).
-        forget_exact_path: If ``True``, return only the first and last state
-            of each particle.
         axis: Coordinate singularity handling (0, 1, or 2; default 2).
         ode_solver: ``"dormand_prince"`` (recommended) or ``"boost"``.
         DP_hmin: Minimum step size for the Dormand-Prince solver, in
@@ -310,11 +305,11 @@ def trace_particles_boozer_with_collisions(
 
     Returns:
         Tuple ``(res_tys, res_hits)`` where each element of ``res_tys`` is a
-        numpy array of shape ``(ntimesteps, 6)`` with columns
-        ``[t, s, θ, ζ, v_par, v]``.  The extra column ``v`` (total speed)
-        allows the kinetic energy :math:`E = \tfrac{1}{2} m v^2` and
-        magnetic moment :math:`\mu = (v^2 - v_\parallel^2) / (2B)` to be
-        reconstructed at each saved point.
+        numpy array of shape ``(2, 6)`` holding the initial and final state
+        of the particle, with columns ``[t, s, θ, ζ, v_par, v]``.  The extra
+        column ``v`` (total speed) allows the kinetic energy
+        :math:`E = \tfrac{1}{2} m v^2` and magnetic moment
+        :math:`\mu = (v^2 - v_\parallel^2) / (2B)` to be reconstructed.
     """
     if stopping_criteria is None:
         stopping_criteria = []
@@ -322,9 +317,6 @@ def trace_particles_boozer_with_collisions(
         abstol = tol
     if reltol is None:
         reltol = tol
-    if dt_save <= 0:
-        raise ValueError("dt_save must be positive.")
-
     if ode_solver not in ("boost", "dormand_prince"):
         raise ValueError(
             f"collision tracing supports ode_solver 'boost' or "
@@ -382,8 +374,6 @@ def trace_particles_boozer_with_collisions(
                 vacuum=(mode == "gc_vac"),
                 noK=(mode == "gc_nok"),
                 stopping_criteria=stopping_criteria,
-                dt_save=float(dt_save),
-                forget_exact_path=bool(forget_exact_path),
                 axis=int(axis),
                 abstol=float(abstol),
                 reltol=float(reltol),
@@ -397,10 +387,7 @@ def trace_particles_boozer_with_collisions(
             failure = f"particle {i}: {type(exc).__name__}: {exc}"
             failure_exc = exc
             break
-        if not forget_exact_path:
-            res_tys.append(np.asarray(res_ty))
-        else:
-            res_tys.append(np.asarray([res_ty[0], res_ty[-1]]))
+        res_tys.append(np.asarray(res_ty))
         res_hits.append(np.asarray(res_hit))
 
     if comm is not None:
@@ -434,8 +421,6 @@ def trace_particles_boozer_perturbed_with_collisions(
     reltol=None,
     comm=None,
     stopping_criteria=None,
-    dt_save=1e-6,
-    forget_exact_path=False,
     axis=2,
     ode_solver="dormand_prince",
     DP_hmin=0.0,
@@ -483,9 +468,6 @@ def trace_particles_boozer_perturbed_with_collisions(
         abstol = tol
     if reltol is None:
         reltol = tol
-    if dt_save <= 0:
-        raise ValueError("dt_save must be positive.")
-
     if ode_solver not in ("boost", "dormand_prince"):
         raise ValueError(
             f"collision tracing supports ode_solver 'boost' or "
@@ -543,8 +525,6 @@ def trace_particles_boozer_perturbed_with_collisions(
                     vacuum=(mode == "gc_vac"),
                     noK=(mode == "gc_nok"),
                     stopping_criteria=stopping_criteria,
-                    dt_save=float(dt_save),
-                    forget_exact_path=bool(forget_exact_path),
                     axis=int(axis),
                     abstol=float(abstol),
                     reltol=float(reltol),
@@ -557,10 +537,7 @@ def trace_particles_boozer_perturbed_with_collisions(
             failure = f"particle {i}: {type(exc).__name__}: {exc}"
             failure_exc = exc
             break
-        if not forget_exact_path:
-            res_tys.append(np.asarray(res_ty))
-        else:
-            res_tys.append(np.asarray([res_ty[0], res_ty[-1]]))
+        res_tys.append(np.asarray(res_ty))
         res_hits.append(np.asarray(res_hit))
 
     if comm is not None:

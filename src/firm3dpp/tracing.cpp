@@ -966,8 +966,6 @@ solve_sde(
     double abstol,
     double reltol,
     vector<shared_ptr<StoppingCriterion>> stopping_criteria,
-    double dtau_save,
-    bool forget_exact_path,
     int axis,
     double vnorm,
     double tnorm,
@@ -1050,28 +1048,12 @@ solve_sde(
         double h_taken     = tau_current - tau_last;  // normalized step
         tau = tau_current;
 
-        // ---- Save path (BEFORE the kick, while dense output is valid) ----
-        {
-            double tau_save_last = (std::floor(tau_last / dtau_save) + 1) * dtau_save;
-            vector<double> y_save(state_size), sv_save(state_size);
-            for (double tau_save = tau_save_last;
-                 tau_save <= std::min(tau_current, tau_max);
-                 tau_save += dtau_save) {
-                if (tau_save != 0.0) {
-                    solver->calc_state(tau_save, y_save);
-                    if (!forget_exact_path) {
-                        y_to_stzvt(y_save, sv_save, axis, vnorm, tnorm);
-                        res.push_back(make_record(tau_save * tnorm, sv_save, mu));
-                    }
-                }
-            }
-            // When this step crosses tau_max, capture the interpolated endpoint
-            // before the kick moves t_old_ past tau_max.
-            if (tau_current >= tau_max && !y_at_tmax_saved) {
-                solver->calc_state(tau_max, y_at_tmax);
-                mu_at_tmax = mu;
-                y_at_tmax_saved = true;
-            }
+        // When this step crosses tau_max, capture the interpolated endpoint
+        // before the kick moves t_old_ past tau_max.
+        if (tau_current >= tau_max && !y_at_tmax_saved) {
+            solver->calc_state(tau_max, y_at_tmax);
+            mu_at_tmax = mu;
+            y_at_tmax_saved = true;
         }
 
         // ---- Collision kick applied to (v, xi) at tau_current ----
@@ -1184,8 +1166,6 @@ particle_guiding_center_boozer_perturbed_collision_tracing(
     bool vacuum,
     bool noK,
     vector<shared_ptr<StoppingCriterion>> stopping_criteria,
-    double dt_save,
-    bool forget_exact_path,
     int axis,
     double abstol,
     double reltol,
@@ -1208,8 +1188,7 @@ particle_guiding_center_boozer_perturbed_collision_tracing(
     double dtau_max = 0.25;
     double dtau     = 1e-3 * dtau_max;
 
-    double tau_max   = tmax / tnorm;
-    double dtau_save = dt_save / tnorm;
+    double tau_max = tmax / tnorm;
 
     // [s, theta, zeta, v_par, t]
     vector<double> stzvt_init = {
@@ -1243,8 +1222,6 @@ particle_guiding_center_boozer_perturbed_collision_tracing(
         abstol,
         reltol,
         stopping_criteria,
-        dtau_save,
-        forget_exact_path,
         axis,
         vnorm,
         tnorm,
@@ -1270,8 +1247,6 @@ particle_guiding_center_boozer_collision_tracing(
     bool vacuum,
     bool noK,
     vector<shared_ptr<StoppingCriterion>> stopping_criteria,
-    double dt_save,
-    bool forget_exact_path,
     int axis,
     double abstol,
     double reltol,
@@ -1291,8 +1266,7 @@ particle_guiding_center_boozer_collision_tracing(
     double dtau_max = 0.25;
     double dtau     = 1e-3 * dtau_max;
 
-    double tau_max  = tmax / tnorm;
-    double dtau_save = dt_save / tnorm;
+    double tau_max = tmax / tnorm;
 
     double vperp2  = vtotal * vtotal - vtang * vtang;
     double mu_init = vperp2 / (2.0 * modB);
@@ -1326,8 +1300,6 @@ particle_guiding_center_boozer_collision_tracing(
         abstol,
         reltol,
         stopping_criteria,
-        dtau_save,
-        forget_exact_path,
         axis,
         vnorm,
         tnorm,

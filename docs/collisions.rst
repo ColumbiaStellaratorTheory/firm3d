@@ -160,9 +160,6 @@ the orbit equations rather than a state variable, so any static-field guiding
 center right-hand side can be used unchanged -- which is why ``gc_vac``,
 ``gc_noK`` and full ``gc`` are all supported for unperturbed tracing.
 
-Trajectory snapshots are saved *before* the collision kick at each ``dt_save``
-checkpoint, so saved states are the deterministic prediction.
-
 Sub-Cycling
 ~~~~~~~~~~~
 
@@ -251,19 +248,14 @@ statistically rather than element by element.
 Output Format
 -------------
 
-Each entry of ``res_tys`` is an array of shape ``(ntimesteps, 6)`` with columns
+Each entry of ``res_tys`` is an array of shape ``(2, 6)`` holding the initial
+and final state, with columns
 
 .. code-block:: text
 
    [t, s, theta, zeta, v_par, v]
 
-The final column ``v`` is the extra one relative to the collisionless tracers,
-whose ``(ntimesteps, 5)`` output does not need it: without collisions the
-speed (unperturbed) or the magnetic moment (perturbed) is a known invariant,
-so ``v`` is always recoverable. With collisions neither is. From ``v`` the kinetic
-energy :math:`E = \tfrac{1}{2} m v^2` and the magnetic moment
-:math:`\mu = (v^2 - v_\parallel^2)/(2B)` can be reconstructed at each saved
-point. With ``forget_exact_path=True`` only the first and last rows are kept.
+The final column ``v`` is the extra one relative to the collisionless tracers.
 
 The GPU entry point returns a single ``(nparticles, 7)`` array of final states,
 ``[t, s, theta, zeta, v_par, v, dt]``, with the final step size in the last
@@ -354,7 +346,6 @@ Unperturbed Collisional Tracing
        Ekin=Ekin,
        comm=None,
        stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
-       dt_save=1e-4,
        DP_hmin=1e-10,
        rng_seed=42,
    )
@@ -393,7 +384,6 @@ is given as :math:`(v_\parallel, \mu)` rather than an energy, exactly as for
        charge=ALPHA_PARTICLE_CHARGE,
        comm=None,
        stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
-       dt_save=1e-6,
        rng_seed=42,
    )
 

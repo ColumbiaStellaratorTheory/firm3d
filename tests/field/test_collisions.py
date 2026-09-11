@@ -95,10 +95,9 @@ def _coll_trace(
     tmax=1e-6,
     vpar_fraction=0.5,
     tol=1e-9,
-    dt_save_factor=20,
     **kwargs,
 ):
-    """Single-particle collision trace; returns (ntimesteps, 6) array."""
+    """Single-particle collision trace; returns (2, 6) array."""
     Ekin = FUSION_ALPHA_PARTICLE_ENERGY
     v0 = np.sqrt(2 * Ekin / ALPHA_PARTICLE_MASS)
     stz = np.array([[0.3, 0.0, 0.0]])
@@ -113,7 +112,6 @@ def _coll_trace(
         charge=ALPHA_PARTICLE_CHARGE,
         Ekin=Ekin,
         tol=tol,
-        dt_save=tmax / dt_save_factor,
         **kwargs,
     )
     return res_tys[0]
@@ -228,30 +226,12 @@ class TestThermalBackground(unittest.TestCase):
 
 class TestTrajectoryShape(unittest.TestCase):
     def test_output_columns(self):
-        """(ntimesteps, 6) = [t, s, θ, ζ, v∥, v], with t increasing and |v∥| ≤ v."""
+        """(2, 6) = [t, s, θ, ζ, v∥, v] at start and end, |v∥| ≤ v at both."""
         traj = _coll_trace(_field(), _hot_background(), tmax=1e-6)
-        self.assertEqual(traj.ndim, 2)
-        self.assertEqual(traj.shape[1], 6)
+        self.assertEqual(traj.shape, (2, 6))
         self.assertTrue(np.all(np.diff(traj[:, 0]) > 0), "time is not increasing")
         vpar, v = traj[:, 4], traj[:, 5]
         self.assertTrue(np.all(np.abs(vpar) <= v * (1 + 1e-10)), "|v_par| > v")
-
-    def test_forget_exact_path_returns_two_rows(self):
-        Ekin = FUSION_ALPHA_PARTICLE_ENERGY
-        v0 = np.sqrt(2 * Ekin / ALPHA_PARTICLE_MASS)
-        res_tys, _ = trace_particles_boozer_with_collisions(
-            _field(),
-            np.array([[0.3, 0.0, 0.0]]),
-            np.array([0.5 * v0]),
-            backgrounds=_hot_background(),
-            tmax=1e-6,
-            mass=ALPHA_PARTICLE_MASS,
-            charge=ALPHA_PARTICLE_CHARGE,
-            Ekin=Ekin,
-            dt_save=1e-7,
-            forget_exact_path=True,
-        )
-        self.assertEqual(res_tys[0].shape[0], 2)
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +260,6 @@ class TestIterationStoppingCriterion(unittest.TestCase):
             mass=ALPHA_PARTICLE_MASS,
             charge=ALPHA_PARTICLE_CHARGE,
             Ekin=Ekin,
-            dt_save=self._TMAX / 20,
             tol=tol,
             stopping_criteria=[IterationStoppingCriterion(max_iter)],
         )
@@ -340,7 +319,6 @@ class TestCollisionlessLimit(unittest.TestCase):
             "Ekin": Ekin,
             "abstol": self._tol,
             "reltol": self._tol,
-            "dt_save": self._tmax / 20,
         }
 
         res_c, _ = trace_particles_boozer_with_collisions(
@@ -359,6 +337,7 @@ class TestCollisionlessLimit(unittest.TestCase):
             vpar,
             ODE_solver="dormand_prince",
             axis=2,
+            forget_exact_path=True,
             **kwargs,
         )
         return res_c[0], res_nc[0]
@@ -449,7 +428,6 @@ class TestNonVacuumOrbitEquations(unittest.TestCase):
             "Ekin": Ekin,
             "abstol": self._tol,
             "reltol": self._tol,
-            "dt_save": self._tmax,
         }
         # Pin both to the same stepper.  The two functions default
         # differently (dormand_prince vs boost), and leaving that alone
@@ -556,7 +534,6 @@ class TestPerturbedCollisions(unittest.TestCase):
             "charge": ALPHA_PARTICLE_CHARGE,
             "abstol": self._tol,
             "reltol": self._tol,
-            "dt_save": self._tmax,
         }
 
     def test_collisionless_limit_matches_perturbed_tracer(self):
@@ -599,7 +576,6 @@ class TestPerturbedCollisions(unittest.TestCase):
         """
         saw, v0, vpar, mus = self._setup(1e-3)
         kw = dict(self._kw())
-        kw["dt_save"] = self._tmax / 20
         out = {}
         for label, bg in [
             ("collisionless", _zero_background()),
@@ -654,7 +630,6 @@ class TestPerturbedCollisions(unittest.TestCase):
             "charge": ALPHA_PARTICLE_CHARGE,
             "abstol": 1e-11,
             "reltol": 1e-11,
-            "dt_save": 3e-7,
             "rng_seed": 7,
             "backgrounds": bg,
         }
@@ -683,7 +658,6 @@ class TestPerturbedCollisions(unittest.TestCase):
         saw, _, vpar, mus = self._setup(1e-3)
         s_stop = 0.32
         kw = self._kw()
-        kw["dt_save"] = 2e-8
         res, hits = trace_particles_boozer_perturbed_with_collisions(
             saw,
             self._stz,
@@ -1174,8 +1148,6 @@ class TestMaxwellianEquilibration(unittest.TestCase):
             charge=ELEMENTARY_CHARGE,
             Ekin=E0,
             tol=1e-8,
-            dt_save=tmax,
-            forget_exact_path=True,
             rng_seed=seed,
             stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
         )
@@ -1295,8 +1267,6 @@ class TestCollisionPhysics(unittest.TestCase):
             charge=q,
             Ekin=Ekin,
             tol=1e-9,
-            dt_save=tmax,
-            forget_exact_path=True,
             rng_seed=0,
             DP_hmin=1e-10,
             stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
@@ -1440,28 +1410,28 @@ class TestPitchIsotropization(unittest.TestCase):
         stz = np.tile([s0, 0.0, 0.0], (nP, 1))
         vpar = np.full(nP, xi0 * v0)
 
-        res_tys, _ = trace_particles_boozer_with_collisions(
-            self._uniform_field(),
-            stz,
-            vpar,
-            backgrounds=bg,
-            tmax=tmax,
-            mass=m,
-            charge=q,
-            Ekin=Ekin,
-            tol=1e-8,
-            dt_save=tmax / 8,
-            forget_exact_path=False,
-            rng_seed=0,
-            stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
-        )
-        self._assert_confined(res_tys, tmax)
+        def ensemble_at(t_end):
+            res_tys, _ = trace_particles_boozer_with_collisions(
+                self._uniform_field(),
+                stz,
+                vpar,
+                backgrounds=bg,
+                tmax=t_end,
+                mass=m,
+                charge=q,
+                Ekin=Ekin,
+                tol=1e-8,
+                rng_seed=0,
+                stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
+            )
+            self._assert_confined(res_tys, t_end)
+            xi = np.array([t[-1, 4] / t[-1, 5] for t in res_tys])
+            v = np.array([t[-1, 5] for t in res_tys])
+            return xi, v
 
-        # First saved snapshot (t = tmax/8) as reference, last as end
-        xi_1 = np.array([t[1, 4] / t[1, 5] for t in res_tys])
-        v_1 = np.array([t[1, 5] for t in res_tys])
-        xi_2 = np.array([t[-1, 4] / t[-1, 5] for t in res_tys])
-        v_2 = np.array([t[-1, 5] for t in res_tys])
+        # Early ensemble (t = tmax/8) as reference, late (t = tmax) as end
+        xi_1, v_1 = ensemble_at(tmax / 8)
+        xi_2, v_2 = ensemble_at(tmax)
 
         measured = np.mean(xi_2) / np.mean(xi_1)
         predicted = (np.mean(v_2) / np.mean(v_1)) ** (
