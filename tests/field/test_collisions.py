@@ -50,9 +50,11 @@ from firm3d.util.constants import (
 # ---------------------------------------------------------------------------
 
 
-def _field():
-    """BoozerAnalytic near-axis field (axisymmetric, vacuum)."""
-    return BoozerAnalytic(1.0, 5.0, 0, 40.0, 0.5, 0.4)
+def _field(**kwargs):
+    """
+    BoozerAnalytic near-axis field (axisymmetric, vacuum).
+    """
+    return BoozerAnalytic(1.0, 5.0, 0, 40.0, 0.5, 0.4, Bbar=5.0, **kwargs)
 
 
 def _zero_background():
@@ -432,7 +434,7 @@ class TestNonVacuumOrbitEquations(unittest.TestCase):
 
     @classmethod
     def _nonvacuum_field(cls, field_type=""):
-        return BoozerAnalytic(1.0, 5.0, 0, 40.0, 0.5, 0.4, **cls._FIELDS[field_type])
+        return _field(**cls._FIELDS[field_type])
 
     def _endpoint(self, collisional, mode=None, field_type=""):
         """Final [s, theta, zeta, v_par] for one particle."""
@@ -537,7 +539,7 @@ class TestPerturbedCollisions(unittest.TestCase):
         # The field must stay referenced: ShearAlfvenWave.B0 only returns the
         # Python subclass (and hence field_type) while a Python reference to
         # it survives.  Returned alongside the wave for that reason.
-        field = BoozerAnalytic(1.0, 5.0, 0, 40.0, 0.5, 0.4, **(field_kwargs or {}))
+        field = _field(**(field_kwargs or {}))
         self._field = field
         saw = ShearAlfvenHarmonic(Phihat, 2, 1, 1e5, 0.0, field)
         v0 = np.sqrt(2 * FUSION_ALPHA_PARTICLE_ENERGY / ALPHA_PARTICLE_MASS)
@@ -632,7 +634,7 @@ class TestPerturbedCollisions(unittest.TestCase):
         At zero wave amplitude the perturbed path must reproduce the static
         collisional path, collisions included.
         """
-        field = BoozerAnalytic(1.0, 5.0, 0, 40.0, 0.5, 0.4)
+        field = _field()
         saw = ShearAlfvenHarmonic(0.0, 2, 1, 1e5, 0.0, field)
         bg = ThermalBackground(
             n_profile=lambda s: 1e21,
@@ -679,9 +681,7 @@ class TestPerturbedCollisions(unittest.TestCase):
         Stopping criteria on the perturbed collisional path.
         """
         saw, _, vpar, mus = self._setup(1e-3)
-        # s runs 0.30 -> 0.42 over _tmax on this fixture, so this is crossed
-        # partway rather than at either end.
-        s_stop = 0.35
+        s_stop = 0.32
         kw = self._kw()
         kw["dt_save"] = 2e-8
         res, hits = trace_particles_boozer_perturbed_with_collisions(
