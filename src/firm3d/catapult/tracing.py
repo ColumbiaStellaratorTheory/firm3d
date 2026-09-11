@@ -42,6 +42,10 @@ def trace_particles_boozer_gpu(
     tol: tolerance for the ODE solver
     dt: the initial time step size for the solver (optional)
     """
+    stz_inits = np.ascontiguousarray(stz_inits, dtype=float).copy()
+    parallel_speeds = np.ascontiguousarray(parallel_speeds, dtype=float)
+    if dt is not None:
+        dt = np.ascontiguousarray(dt, dtype=float)
     nparticles = stz_inits.shape[0]
     _validate_parallel_speeds(parallel_speeds, vtotal)
 
@@ -171,6 +175,10 @@ def trace_particles_cartesian_gpu(
     tol: tolerance for the ODE solver
     dt: the initial time step size for the solver (optional)
     """
+    xyz_inits = np.ascontiguousarray(xyz_inits, dtype=float)
+    parallel_speeds = np.ascontiguousarray(parallel_speeds, dtype=float)
+    if dt is not None:
+        dt = np.ascontiguousarray(dt, dtype=float)
     nparticles = xyz_inits.shape[0]
     _validate_parallel_speeds(parallel_speeds, vtotal)
     r_range, phi_range, z_range, quad_info = cartesian_interpolant(
@@ -267,6 +275,8 @@ def trace_particles_cartesian_with_collisions_gpu(
         _validate_species_count,
     )
 
+    xyz_inits = np.ascontiguousarray(xyz_inits, dtype=float)
+    parallel_speeds = np.ascontiguousarray(parallel_speeds, dtype=float)
     nparticles = xyz_inits.shape[0]
 
     if not callable(flux_label):
@@ -285,7 +295,6 @@ def trace_particles_cartesian_with_collisions_gpu(
         )
 
     _validate_parallel_speeds(parallel_speeds, vtotal)
-    parallel_speeds = np.asarray(parallel_speeds)
 
     if isinstance(backgrounds, ThermalBackground):
         backgrounds = [backgrounds]
@@ -406,6 +415,8 @@ def trace_particles_boozer_with_collisions_gpu(
         _validate_species_count,
     )
 
+    stz_inits = np.ascontiguousarray(stz_inits, dtype=float).copy()
+    parallel_speeds = np.ascontiguousarray(parallel_speeds, dtype=float)
     nparticles = stz_inits.shape[0]
     if field.field_type not in ["vac", ""]:
         raise ValueError(
@@ -422,9 +433,6 @@ def trace_particles_boozer_with_collisions_gpu(
         )
 
     _validate_parallel_speeds(parallel_speeds, vtotal)
-    parallel_speeds = np.asarray(parallel_speeds)
-
-    stz_inits = np.ascontiguousarray(stz_inits, dtype=float).copy()
 
     if isinstance(backgrounds, ThermalBackground):
         backgrounds = [backgrounds]
