@@ -19,6 +19,7 @@ The core routines are based on `SIMSOPT <https://simsopt.readthedocs.io>`_, but 
    magnetic_fields
    shear_alfven_waves
    guiding_center
+   collisions
    poincare_maps
    stopping_criteria
    trajectory_saving

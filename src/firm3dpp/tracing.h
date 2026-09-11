@@ -1,10 +1,13 @@
 #pragma once
 #include <memory>
 #include <vector>
+#include <cstdint>
+#include <stdexcept>
 #include "boozermagneticfield.h"
 #include "shearalfvenwave.h"
 #include "regular_grid_interpolant_3d.h"
 #include "tracing_helpers.h"
+#include "collisions.h"
 
 using std::array;
 using std::shared_ptr;
@@ -18,6 +21,11 @@ public:
     virtual ~BaseRHS() = default;
     virtual void operator()(const vector<double>& y, vector<double>& dydt, double t) = 0;
     virtual int get_state_size() const = 0;
+    virtual void set_mu(double) {
+        throw std::invalid_argument(
+            "this right-hand side does not support collisions: mu is not settable"
+        );
+    }
 };
 
 // Overloaded solve() function that accepts a BaseRHS object
@@ -29,7 +37,7 @@ solve(
     double dtau,
     double dtau_max,
     double abstol,
-    double reltol, 
+    double reltol,
     vector<double> phases,
     vector<double> n_zetas,
     vector<double> m_thetas,
@@ -76,6 +84,48 @@ particle_guiding_center_boozer_perturbed_tracing(
         double DP_hmin=0.0
 );
 
+
+tuple<vector<vector<double>>, vector<vector<double>>>
+particle_guiding_center_boozer_collision_tracing(
+        shared_ptr<BoozerMagneticField> field,
+        vector<double> stz_init,
+        double m,
+        double q,
+        double vtotal,
+        double vtang,
+        double tmax,
+        const vector<ThermalBackground>& backgrounds,
+        bool vacuum,
+        bool noK,
+        vector<shared_ptr<StoppingCriterion>> stopping_criteria={},
+        int axis=2,
+        double abstol=1e-9,
+        double reltol=1e-9,
+        string ode_solver="dormand_prince",
+        double DP_hmin=0.0,
+        uint64_t rng_seed=0
+);
+
+tuple<vector<vector<double>>, vector<vector<double>>>
+particle_guiding_center_boozer_perturbed_collision_tracing(
+        shared_ptr<ShearAlfvenWave> perturbed_field,
+        vector<double> stz_init,
+        double m,
+        double q,
+        double vtang,
+        double mu_init,
+        double tmax,
+        const vector<ThermalBackground>& backgrounds,
+        bool vacuum,
+        bool noK,
+        vector<shared_ptr<StoppingCriterion>> stopping_criteria={},
+        int axis=2,
+        double abstol=1e-9,
+        double reltol=1e-9,
+        string ode_solver="dormand_prince",
+        double DP_hmin=0.0,
+        uint64_t rng_seed=0
+);
 
 tuple<vector<vector<double>>, vector<vector<double>>>
 particle_guiding_center_boozer_tracing(

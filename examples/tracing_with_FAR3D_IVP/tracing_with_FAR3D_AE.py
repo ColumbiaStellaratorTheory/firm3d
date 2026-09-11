@@ -82,12 +82,12 @@ points = initialize_position_profile(field, nParticles, reactivity, comm=comm_wo
 Ekin = FUSION_ALPHA_PARTICLE_ENERGY
 mass = ALPHA_PARTICLE_MASS
 charge = ALPHA_PARTICLE_CHARGE
-# Initialize uniformly distributed parallel velocities
-vpar0 = np.sqrt(2 * Ekin / mass)
-vpar_init = initialize_velocity_uniform(vpar0, nParticles, comm=comm_world)
+# Isotropic pitch angle: v_par/v drawn uniformly in [-1, 1] at fixed birth energy
+v0 = np.sqrt(2 * Ekin / mass)
+vpar_init = initialize_velocity_uniform(v0, nParticles, comm=comm_world)
 
 field.set_points(points)
-mu_init = (vpar0**2 - vpar_init**2) / (2 * field.modB()[:, 0])
+mu_init = (v0**2 - vpar_init**2) / (2 * field.modB()[:, 0])
 
 time1 = time.time()
 
