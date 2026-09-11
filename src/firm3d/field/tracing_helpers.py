@@ -315,11 +315,15 @@ def initialize_velocity_uniform(v0, nParticles, comm=None, seed=None):
 
 def _validate_parallel_speeds(parallel_speeds, vtotal):
     r"""
-    Raise if any :math:`|v_\parallel|` exceeds the total speed, which would
-    make :math:`\mu = (v^2 - v_\parallel^2)/(2|B|)` negative.  ``vtotal`` may
-    be a scalar or a per-particle array; the "not <=" form also rejects NaN.
+    Raise if ``vtotal`` is not finite and positive, since it sets the velocity
+    and time normalization, or if any :math:`|v_\parallel|` exceeds it, which
+    would make :math:`\mu = (v^2 - v_\parallel^2)/(2|B|)` negative.  ``vtotal``
+    may be a scalar or a per-particle array; the "not" forms also reject NaN.
     """
-    if not np.all(np.abs(parallel_speeds) <= np.abs(vtotal)):
+    vtotal = np.asarray(vtotal, dtype=float)
+    if not np.all(np.isfinite(vtotal) & (vtotal > 0.0)):
+        raise ValueError("vtotal must be finite and positive")
+    if not np.all(np.abs(parallel_speeds) <= vtotal):
         raise ValueError(
             "|parallel_speeds| must not exceed vtotal, else mu is negative"
         )
