@@ -823,7 +823,7 @@ def test_timestep(
                     x[0],
                     x[1] * np.cos(x[2]),
                     x[1] * np.sin(x[2]),
-                    np.fmod(x[3], zrange[1]),
+                    x[3],
                     x[4],
                 ]
                 for x in cpu_positions
