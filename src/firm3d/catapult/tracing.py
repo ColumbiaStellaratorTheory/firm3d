@@ -37,6 +37,8 @@ def trace_particles_boozer_gpu(
     vtotal: total velocity of each particle
     tol: tolerance for the ODE solver
     dt: the initial time step size for the solver (optional)
+    mu: the initial magnetic moment for the solver (optional)
+    in_boozer: if True, the initial conditions are in Boozer coordinates, else in pseudo-Cartesian coordinates
     """
     nparticles = stz_inits.shape[0]
 
