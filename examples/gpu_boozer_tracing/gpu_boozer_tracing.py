@@ -70,9 +70,6 @@ vpar0 = np.sqrt(2 * Ekin / mass)
 vpar_inits = initialize_velocity_uniform(vpar0, nparticles, seed=1)
 
 
-tmax = 1e-4
-print(stz_inits)
-
 for tmax in [1e-4, 1e-3, 1e-2, 5e-2]:
     start = time.time()
     last_time_dbl = trace_particles_boozer_gpu(
