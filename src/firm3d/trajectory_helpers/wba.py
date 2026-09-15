@@ -197,21 +197,8 @@ class WBAPerturbedParticles:
             self.gc_tys = gc_tys
 
             if points is None:
-                s_ic = []
-                theta_ic = []
-                zeta_ic = []
-                v_pars = []
-
-                for elem in gc_tys:
-                    s_ic.append(elem[-1, 1])
-                    theta_ic.append(elem[-1, 2])
-                    zeta_ic.append(elem[-1, 3])
-                    v_pars.append(elem[-1, 4])
-
-                points = np.zeros((len(gc_tys), 3))
-                points[:, 0] = s_ic
-                points[:, 1] = theta_ic
-                points[:, 2] = zeta_ic
+                points = np.array([elem[0, 1:4] for elem in gc_tys])
+                v_pars = np.array([elem[0, 4] for elem in gc_tys])
 
             if mu_per_mass is None:
                 warn(
@@ -220,13 +207,10 @@ class WBAPerturbedParticles:
                     " may be inaccurate if not provided directly.",
                     stacklevel=2,
                 )
-                mu_per_mass = []
-                for i in range(len(gc_tys)):
-                    self.B0.set_points(points[i, :])
-                    modB = self.B0.modB()[:, 0]
-
-                    eperp_per_mass = (self.Ekin / self.mass) - 0.5 * v_pars[i] ** 2
-                    mu_per_mass.append(eperp_per_mass / modB[0])
+                self.B0.set_points(points[:, :3])
+                modB = self.B0.modB()[:, 0]
+                eperp_per_mass = self.Ekin / self.mass - 0.5 * np.asarray(v_pars) ** 2
+                mu_per_mass = eperp_per_mass / modB
 
         self.points0 = points
         self.v_pars0 = v_pars
