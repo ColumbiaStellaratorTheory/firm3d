@@ -284,6 +284,9 @@ class WBAPerturbedParticles:
             else:
                 points_trajectory = self.gc_tys[itrj]
 
+            if self.save_gc_trajectories:
+                res_tys.append(points_trajectory)
+
             time_momentum, s_path, theta_path, zeta_path, vpar_path = (
                 points_trajectory[:, 0],
                 points_trajectory[:, 1],
@@ -393,8 +396,6 @@ class WBAPerturbedParticles:
             DA_data.append(final_DA)
             wall_lost.append(points_trajectory[-1, 3])
             dense_output.append(particle_out)
-            if self.save_gc_trajectories:
-                res_tys.append(points_trajectory)
 
         if self.comm is not None:
             res_tys = [i for o in self.comm.allgather(res_tys) for i in o]
@@ -406,7 +407,6 @@ class WBAPerturbedParticles:
             import pickle
 
             if self.save_gc_trajectories:
-                self.gc_tys = res_tys
                 with open(self.final_filepaths["TRAJS"], "wb") as f:
                     pickle.dump(res_tys, f)
             if self.savedata:
@@ -742,6 +742,9 @@ class WBAParticles:
             else:
                 points_trajectory = self.gc_tys[itrj]
 
+            if self.save_gc_trajectories:
+                res_tys.append(points_trajectory)
+
             time_momentum = points_trajectory[:, 0]
             s_path = points_trajectory[:, 1]
             theta_path = points_trajectory[:, 2]
@@ -830,7 +833,7 @@ class WBAParticles:
         if self.verbose:
             import pickle
 
-            if self.save_gc_trajectories and self.trace:
+            if self.save_gc_trajectories:
                 with open(self.final_filepaths["TRAJS"], "wb") as f:
                     pickle.dump(res_tys, f)
             if self.savedata:
