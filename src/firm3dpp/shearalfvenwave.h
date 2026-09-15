@@ -67,6 +67,7 @@ protected:
     }
     shared_ptr<BoozerMagneticField> B0;
     Array2 points;
+    Array2 p_b0;
     Array2 data_Phi;
     Array2 data_dPhidpsi, data_dPhidtheta, data_dPhidzeta, data_Phidot;
     Array2 data_alpha;
@@ -90,7 +91,8 @@ public:
         memcpy(points.data(), p.data(), 4 * npoints * sizeof(double));
         // Set points for B0 using the first three columns of p
         // (s, theta, zeta):
-        Array2 p_b0 = xt::view(p, xt::all(), xt::range(0, 3));
+        p_b0.resize({npoints, 3});
+        xt::noalias(p_b0) = xt::view(p, xt::all(), xt::range(0, 3));
         B0->set_points(p_b0);
     }
 
@@ -233,6 +235,16 @@ private:
   * Sorts both `s_values` and `Phihat_values` in ascending order
   * of `s_values` to ensure correct interpolation.
   */
+  /**
+  * @brief Index i of the interval [s_values[i], s_values[i+1]] containing s,
+  * clamped to the last interval. Binary search.
+  */
+  size_t interval(double s) const {
+    auto it = std::upper_bound(s_values.begin(), s_values.end(), s);
+    size_t i = (it == s_values.begin()) ? 0 : size_t(it - s_values.begin()) - 1;
+    return std::min(i, s_values.size() - 2);
+  }
+
   void sortData() {
     std::vector<size_t> indices(s_values.size());
     std::iota(indices.begin(), indices.end(), 0);
@@ -289,15 +301,8 @@ public:
       return Phihat_values.back();
     }
 
-    size_t i_left = 0;
-    size_t i_right = s_values.size() - 1;
-    for (int i = s_values.size() - 1; i >= 0; --i) {
-      if (s_values[i] <= s && (i + 1 < s_values.size())) {
-        i_left = i;
-        i_right = i + 1;
-        break;
-      }
-    }
+    size_t i_left = interval(s);
+    size_t i_right = i_left + 1;
 
     double slope = (Phihat_values[i_right] - Phihat_values[i_left]) /
                    (s_values[i_right] - s_values[i_left]);
@@ -322,15 +327,8 @@ public:
       return 0.0;
     }
 
-    size_t i_left = 0;
-    size_t i_right = s_values.size() - 1;
-    for (int i = s_values.size() - 1; i >= 0; --i) {
-      if (s_values[i] <= s && (i + 1 < s_values.size())) {
-        i_left = i;
-        i_right = i + 1;
-        break;
-      }
-    }
+    size_t i_left = interval(s);
+    size_t i_right = i_left + 1;
 
     return (Phihat_values[i_right] - Phihat_values[i_left]) /
            (s_values[i_right] - s_values[i_left]);
@@ -343,6 +341,13 @@ public:
   */
   const std::vector<double>& get_s_basis() const {
     return s_values;
+  }
+
+  /**
+  * @brief Returns the Phihat values on the sorted s_values.
+  */
+  const std::vector<double>& get_values() const {
+    return Phihat_values;
   }
 };
 
@@ -566,6 +571,7 @@ public:
     }
     waves.push_back(wave);
     harmonics.push_back(harmonic);
+    build_table();
     reevaluate();
   }
 
@@ -620,6 +626,65 @@ public:
 
 private:
   std::vector<ShearAlfvenHarmonic*> harmonics;  // non-owning; parallel to waves
+  // Radial profiles of all harmonics on their common s grid, used when every
+  // harmonic has the same grid. Row i holds the n_harmonics values at s_i;
+  // slope rows hold the linear-interpolation slopes of interval i.
+  bool shared_grid = false;
+  std::vector<double> table_s;
+  std::vector<double> table_phihat;  // n_s x n_harmonics
+  std::vector<double> table_slope;   // (n_s - 1) x n_harmonics
+  size_t hint = 0;  // interval found by the previous lookup
+
+  void build_table() {
+    shared_grid = false;
+    if (harmonics.empty()) {
+      return;
+    }
+    const auto& s = harmonics[0]->phihat.get_s_basis();
+    for (const auto* h : harmonics) {
+      if (h->phihat.get_s_basis() != s) {
+        return;
+      }
+    }
+    const size_t ns = s.size(), nh = harmonics.size();
+    table_s = s;
+    table_phihat.assign(ns * nh, 0.);
+    table_slope.assign((ns - 1) * nh, 0.);
+    for (size_t k = 0; k < nh; ++k) {
+      const auto& v = harmonics[k]->phihat.get_values();
+      for (size_t i = 0; i < ns; ++i) {
+        table_phihat[i * nh + k] = v[i];
+      }
+      for (size_t i = 0; i + 1 < ns; ++i) {
+        table_slope[i * nh + k] = (v[i + 1] - v[i]) / (s[i + 1] - s[i]);
+      }
+    }
+    hint = 0;
+    shared_grid = true;
+  }
+
+  // Interval i with table_s[i] <= s < table_s[i+1] (clamped to the last
+  // interval), tried first around the previous hit since consecutive calls
+  // come from consecutive points of an orbit.
+  size_t interval(double s) {
+    const size_t last = table_s.size() - 2;
+    size_t i = std::min(hint, last);
+    const auto in = [&](size_t j) { return s >= table_s[j] && s < table_s[j + 1]; };
+    if (!in(i)) {
+      if (i < last && in(i + 1)) {
+        ++i;
+      } else if (i > 0 && in(i - 1)) {
+        --i;
+      } else {
+        auto it = std::upper_bound(table_s.begin(), table_s.end(), s);
+        i = (it == table_s.begin()) ? 0 : size_t(it - table_s.begin()) - 1;
+        i = std::min(i, last);
+      }
+    }
+    hint = i;
+    return i;
+  }
+
   Array2 total_Phi, total_dPhidpsi, total_dPhidtheta, total_dPhidzeta,
       total_Phidot, total_alpha, total_alphadot, total_dalphadpsi,
       total_dalphadtheta, total_dalphadzeta;
@@ -679,12 +744,32 @@ private:
       }
       const double denom = G + iota * I;
 
+      // Radial profile row for this point: values at the left node and the
+      // interval slopes (null outside the grid, where the profile is flat).
+      const double* phihat_row = nullptr;
+      const double* slope_row = nullptr;
+      double ds = 0.;
+      if (shared_grid) {
+        const size_t nh = harmonics.size();
+        if (s < table_s.front()) {
+          phihat_row = table_phihat.data();
+        } else if (s > table_s.back()) {
+          phihat_row = table_phihat.data() + (table_s.size() - 1) * nh;
+        } else {
+          const size_t i = interval(s);
+          phihat_row = table_phihat.data() + i * nh;
+          slope_row = table_slope.data() + i * nh;
+          ds = s - table_s[i];
+        }
+      }
+
       double sum_Phi = 0., sum_dPhidpsi = 0., sum_dPhidtheta = 0.,
              sum_dPhidzeta = 0., sum_Phidot = 0., sum_alpha = 0.,
              sum_alphadot = 0., sum_dalphadpsi = 0., sum_dalphadtheta = 0.,
              sum_dalphadzeta = 0.;
 
-      for (const auto* h : harmonics) {
+      for (size_t k = 0; k < harmonics.size(); ++k) {
+        const auto* h = harmonics[k];
         const double alpha_fac =
             (iota * h->Phim - h->Phin) / (h->omega * denom);
         double d_alpha_fac_dpsi = (diotadpsi * h->Phim) / (h->omega * denom);
@@ -697,8 +782,15 @@ private:
             h->Phim * theta - h->Phin * zeta + h->omega * time + h->phase;
         const double data_cos = cos(arg);
         const double data_sin = sin(arg);
-        const double phihat_s = h->phihat(s);
-        const double dphihatdpsi = h->phihat.derivative(s) / psi0;
+        double phihat_s, dphihatds;
+        if (shared_grid) {
+          dphihatds = slope_row ? slope_row[k] : 0.;
+          phihat_s = phihat_row[k] + dphihatds * ds;
+        } else {
+          phihat_s = h->phihat(s);
+          dphihatds = h->phihat.derivative(s);
+        }
+        const double dphihatdpsi = dphihatds / psi0;
 
         const double Phi = phihat_s * data_sin;
         const double dPhidpsi = dphihatdpsi * data_sin;
@@ -733,42 +825,42 @@ private:
 
 protected:
   void _Phi_impl(Array2& Phi) override {
-    Phi = total_Phi;
+    xt::noalias(Phi) = total_Phi;
   }
 
   void _dPhidpsi_impl(Array2& dPhidpsi) override {
-    dPhidpsi = total_dPhidpsi;
+    xt::noalias(dPhidpsi) = total_dPhidpsi;
   }
 
   void _dPhidtheta_impl(Array2& dPhidtheta) override {
-    dPhidtheta = total_dPhidtheta;
+    xt::noalias(dPhidtheta) = total_dPhidtheta;
   }
 
   void _dPhidzeta_impl(Array2& dPhidzeta) override {
-    dPhidzeta = total_dPhidzeta;
+    xt::noalias(dPhidzeta) = total_dPhidzeta;
   }
 
   void _Phidot_impl(Array2& Phidot) override {
-    Phidot = total_Phidot;
+    xt::noalias(Phidot) = total_Phidot;
   }
 
   void _alpha_impl(Array2& alpha) override {
-    alpha = total_alpha;
+    xt::noalias(alpha) = total_alpha;
   }
 
   void _dalphadpsi_impl(Array2& dalphadpsi) override {
-    dalphadpsi = total_dalphadpsi;
+    xt::noalias(dalphadpsi) = total_dalphadpsi;
   }
 
   void _dalphadtheta_impl(Array2& dalphadtheta) override {
-    dalphadtheta = total_dalphadtheta;
+    xt::noalias(dalphadtheta) = total_dalphadtheta;
   }
 
   void _dalphadzeta_impl(Array2& dalphadzeta) override {
-    dalphadzeta = total_dalphadzeta;
+    xt::noalias(dalphadzeta) = total_dalphadzeta;
   }
 
   void _alphadot_impl(Array2& alphadot) override {
-    alphadot = total_alphadot;
+    xt::noalias(alphadot) = total_alphadot;
   }
 };
