@@ -796,11 +796,7 @@ class WBAParticles:
                 convergence_petas,
                 convergence_DAs,
             ]
-            points = np.zeros((1, 3))
-            points[:, 0] = points_trajectory[-1, 0]
-            points[:, 1] = points_trajectory[-1, 1]
-            points[:, 2] = points_trajectory[-1, 2]
-            self.B0.set_points(points)
+            self.B0.set_points(points_trajectory[0:1, :])
             B = self.B0.modB()[0, 0]
             mu = (1 / 2) * self.mass * (self.vtotal**2 - vpar_path[0] ** 2) / B
             # start state vector:  [s, theta, zeta, vpar, mu]
