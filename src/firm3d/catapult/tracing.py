@@ -10,6 +10,15 @@ from firm3d.catapult.utils import (
 from firm3d.field.boozermagneticfield import ShearAlfvenWavesSuperposition
 
 
+def _dt_in(dt, nparticles):
+    # one initial step per particle; -1 lets the kernel choose
+    if dt is None:
+        return -np.ones(nparticles)
+    return np.ascontiguousarray(
+        np.broadcast_to(np.asarray(dt, dtype=float), nparticles)
+    )
+
+
 def trace_particles_boozer_gpu(
     field,
     stz_inits,
@@ -37,6 +46,7 @@ def trace_particles_boozer_gpu(
     dt: the initial time step size for the solver (optional)
     """
     nparticles = stz_inits.shape[0]
+    dt_in = _dt_in(dt, nparticles)
 
     if isinstance(field, ShearAlfvenWavesSuperposition):
         B0 = field.B0
@@ -77,7 +87,7 @@ def trace_particles_boozer_gpu(
                 vtang=parallel_speeds,
                 tmax=tmax,
                 tol=tol,
-                dt_in=dt if dt is not None else -np.ones(nparticles),
+                dt_in=dt_in,
                 psi0=B0.psi0,
                 nparticles=nparticles,
             )
@@ -100,7 +110,7 @@ def trace_particles_boozer_gpu(
                 vtang=parallel_speeds,
                 tmax=tmax,
                 tol=tol,
-                dt_in=dt if dt is not None else -np.ones(nparticles),
+                dt_in=dt_in,
                 psi0=B0.psi0,
                 nparticles=nparticles,
             )
@@ -129,7 +139,7 @@ def trace_particles_boozer_gpu(
             vtang=parallel_speeds,
             tmax=tmax,
             tol=tol,
-            dt_in=-np.ones(nparticles),
+            dt_in=dt_in,
             psi0=psi0,
             nparticles=nparticles,
             vacuum=vacuum,
@@ -165,6 +175,7 @@ def trace_particles_cartesian_gpu(
     dt: the initial time step size for the solver (optional)
     """
     nparticles = xyz_inits.shape[0]
+    dt_in = _dt_in(dt, nparticles)
     r_range, phi_range, z_range, quad_info = cartesian_interpolant(
         field, surface_classifier
     )
@@ -180,7 +191,7 @@ def trace_particles_cartesian_gpu(
         vtang=parallel_speeds,
         tmax=tmax,
         tol=tol,
-        dt_in=dt if dt is not None else -np.ones(nparticles),
+        dt_in=dt_in,
         nparticles=nparticles,
     )
     last_time = np.reshape(last_time, (nparticles, 6))
