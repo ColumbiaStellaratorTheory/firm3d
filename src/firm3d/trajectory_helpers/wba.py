@@ -176,9 +176,9 @@ class WBAPerturbedParticles:
         expected_length = int(self.tmax / self.min_timestep)
         expected_step = int(expected_length / self.convergence_points)
         self.WBA_transit_indicies = np.linspace(
-            expected_step, expected_length - 1, num=nconvergence_points, dtype=int
+            expected_step, expected_length - 1, num=self.convergence_points, dtype=int
         ).tolist()
-        self.convergence_plot = nconvergence_points > 1
+        self.convergence_plot = self.convergence_points > 1
 
         self.tol = tol
 
