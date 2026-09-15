@@ -76,31 +76,47 @@ def trace_particles_boozer_perturbed(
     where :math:`q` is the charge, :math:`m` is the mass, and
     :math:`v_\perp^2 = 2\mu|B|`.
 
-    In the case of ``mode='gc'`` we solve the general guiding center equations
-    for an MHD equilibrium:
+    Note that the current implementation has no perturbed guiding-center RHS
+    that retains a general :math:`K(s,\theta,\zeta)`. For perturbed tracing,
+    ``mode='gc'`` and ``mode='gc_noK'`` both evaluate the :math:`K=0`
+    equations below; a full-:math:`K` equilibrium is silently treated as
+    :math:`K=0` whenever a shear Alfvén wave perturbation is present. In the
+    case of ``mode='gc'`` we solve the guiding center equations with
+    :math:`K=0`:
 
     .. math::
 
-        \dot s = (I |B|_{,\zeta} - G |B|_{,\theta})m(v_{||}^2/|B| + \mu)
-        /(\iota D \psi_0)
+        \dot s = \Big(-G \Phi_{,\theta}q + I\Phi_{,\zeta}q
+        + |B| qv_{||}(\alpha_{,\theta}G-\alpha_{,\zeta}I)
+        + (-|B|_{,\theta}G + |B|_{,\zeta}I)
+        (mv_{||}^2/|B| + m\mu)\Big)/(D \psi_0)
 
-        \dot \theta = ((G |B|_{,\psi} - K |B|_{,\zeta}) m(v_{||}^2/|B| + \mu)
-        - C v_{||} |B|)/(\iota D)
+        \dot \theta = \Big(G q \Phi_{,\psi}
+        + |B| q v_{||} (-\alpha_{,\psi} G - \alpha G'(\psi) + \iota)
+        - G'(\psi) m v_{||}^2 + |B|_{,\psi} G (mv_{||}^2/|B| + m\mu)\Big)/D
 
-        \dot \zeta = (F v_{||} |B| - (|B|_{,\psi} I - |B|_{,\theta} K)
-        m(\rho_{||}^2 |B| + \mu) )/(\iota D)
+        \dot \zeta = \Big(-I (|B|_{,\psi} m \mu + \Phi_{,\psi} q)
+        + |B| q v_{||} (1 + \alpha_{,\psi} I + \alpha I'(\psi))
+        + (m v_{||}^2/|B|) (|B| I'(\psi) - |B|_{,\psi} I)\Big)/D
 
-        \dot v_{||} = (C|B|_{,\theta} - F|B|_{,\zeta})\mu |B|/(\iota D)
+        \dot v_{||} = \Big((|B|q/m) \big(-m \mu
+        (|B|_{,\zeta}(1 + \alpha_{,\psi} I + \alpha I'(\psi))
+        + |B|_{,\psi} (\alpha_{,\theta} G - \alpha_{,\zeta} I)
+        + |B|_{,\theta} (\iota - \alpha G'(\psi) - \alpha_{,\psi} G))
+        - q \big(\dot{\alpha} (G + I (\iota - \alpha G'(\psi)) + \alpha G I'(\psi))
+        + (\alpha_{,\theta} G - \alpha_{,\zeta} I) \Phi_{,\psi}
+        + (\iota - \alpha G'(\psi) - \alpha_{,\psi} G) \Phi_{,\theta}
+        + (1 + \alpha I'(\psi) + \alpha_{,\psi} I) \Phi_{,\zeta}\big) \big)
+        + (q v_{||}/|B|) \big((|B|_{,\theta} G - |B|_{,\zeta} I) \Phi_{,\psi}
+        + |B|_{,\psi} (I \Phi_{,\zeta} - G \Phi_{,\theta})\big)
+        + v_{||} \big(m \mu (|B|_{,\theta} G'(\psi) - |B|_{,\zeta} I'(\psi))
+        + q (\dot \alpha (G'(\psi) I - G I'(\psi))
+        + G'(\psi) \Phi_{,\theta} - I'(\psi)\Phi_{,\zeta})\big)\Big)/D
 
-        C = - m v_{||} K_{,\zeta}/|B|  - q \iota + m v_{||}G'/|B|
+        D = q (G + I(-\alpha G'(\psi) + \iota) + \alpha G I'(\psi))
+        + (m v_{||}/|B|) (-G'(\psi)I + G I'(\psi))
 
-        F = - m v_{||} K_{,\theta}/|B| + q + m v_{||}I'/|B|
-
-        D = (F G - C I)/\iota
-
-    where primes indicate differentiation wrt :math:`\psi`. In the case
-    ``mode='gc_noK'``,
-    the above equations are used with :math:`K=0`.
+    where primes indicate differentiation wrt :math:`\psi`.
 
     Args:
         perturbed_field: The :class:`ShearAlfvenWave` instance
@@ -132,10 +148,10 @@ def trace_particles_boozer_perturbed(
         n_zetas: list of toroidal mode numbers for stopping criterion
         m_thetas: list of poloidal mode numbers for stopping criterion
         omegas: list of frequencies defining a stopping criterion such that
-              n_zetas*zetas + m_thetas*thetas - omega_thetas*t = phase. Must have the
-              same length as thetas.
+              n_zetas*zeta + m_thetas*theta - omegas*t = phases. Must have the
+              same length as phases.
               If provided, the solver will stop when the particle hits the
-              plane defined by thetas and omega_thetas.
+              plane defined by n_zetas, m_thetas, and omegas.
         vpars: list of parallel velocities defining a stopping criterion such
               that the solver will stop when the particle hits these values.
         stopping_criteria: list of stopping criteria, mostly used in
@@ -170,15 +186,13 @@ def trace_particles_boozer_perturbed(
 
         - ``res_hits``:
             A list of numpy arrays (one for each particle) containing
-            information on each time the particle hits one of the zeta planes or
+            information on each time the particle hits one of the phase planes or
             one of the stopping criteria. Each row or the array contains
             `[time] + [idx] + state`, where `idx` tells us which of the hit
             planes or stopping criteria was hit.
             If `idx>=0` and `idx<len(phases)`, then the `phases[idx]` plane was
             hit. If `len(vpars)+len(phases)>idx>=len(phases)`, then the
-            `vpars[idx-len(phases)]` plane was hit.
-            If `idx>=len(vpars)+len(phases)`, then the
-            `thetas[idx-len(vpars)-len(phases)]` plane was hit.
+            `vpars[idx-len(phases)]` value was hit.
             If `idx<0`, then `stopping_criteria[int(-idx)-1]` was hit. The
             state vector is `[s, theta, zeta, v_par, t]`.
     """
@@ -365,10 +379,10 @@ def trace_particles_boozer(
         n_zetas: list of toroidal mode numbers for stopping criterion
         m_thetas: list of poloidal mode numbers for stopping criterion
         omegas: list of frequencies defining a stopping criterion such that
-              n_zetas*zetas + m_thetas*thetas - omega_thetas*t = phase. Must have the
-              same length as thetas.
+              n_zetas*zeta + m_thetas*theta - omegas*t = phases. Must have the
+              same length as phases.
               If provided, the solver will stop when the particle hits the
-              plane defined by thetas and omega_thetas.
+              plane defined by n_zetas, m_thetas, and omegas.
         vpars: list of parallel velocities defining a stopping criterion such
               that the solver will stop when the particle hits these values.
         stopping_criteria: list of stopping criteria, mostly used in
@@ -412,15 +426,13 @@ def trace_particles_boozer(
 
         - ``res_hits``:
             A list of numpy arrays (one for each particle) containing
-            information on each time the particle hits one of the zeta planes or
+            information on each time the particle hits one of the phase planes or
             one of the stopping criteria. Each row or the array contains
             `[time] + [idx] + state`, where `idx` tells us which of the hit
             planes or stopping criteria was hit.
-            If `idx>=0` and `idx<len(phases)`, then the `zetas[idx]` plane was hit.
+            If `idx>=0` and `idx<len(phases)`, then the `phases[idx]` plane was hit.
             If `len(vpars)+len(phases)>idx>=len(phases)`, then the
-            `vpars[idx-len(phases)]` plane was hit.
-            If `idx>=len(vpars)+len(phases)`, then the
-            `thetas[idx-len(vpars)-len(phases)]` plane was hit.
+            `vpars[idx-len(phases)]` value was hit.
             If `idx<0`, then `stopping_criteria[int(-idx)-1]` was hit.
             The state vector is `[s, theta, zeta, v_par]`.
     """
@@ -597,11 +609,9 @@ class ToroidalTransitStoppingCriterion(sopp.ToroidalTransitStoppingCriterion):
 
     .. code-block::
 
-        stopping_criteria=[ToroidalTransitStoppingCriterion(ntransits,flux)]
+        stopping_criteria=[ToroidalTransitStoppingCriterion(ntransits)]
 
-    where ``ntransits`` is the maximum number of toroidal transits and ``flux``
-    is a boolean indicating whether tracing is being performed in a flux
-    coordinate system.
+    where ``ntransits`` is the maximum number of toroidal transits.
     """
 
     pass

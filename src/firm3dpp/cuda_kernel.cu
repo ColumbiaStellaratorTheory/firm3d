@@ -815,7 +815,7 @@ __device__ void check_has_left<CoordSys::Boozer>(bool* has_left, double* state, 
 // and adjust the step size
 template<RHS id>
 __device__ void adjust_time(double* t, double* dt, double* state, double* derivs, double* x_temp, bool* has_left, double* dtmax){
-    if(has_left[threadIdx.x]){
+    if(has_left[threadIdx.x] || t[threadIdx.x] >= tmax_d){
         return;
     }
     const double bhat1 = 71.0 / 57600.0, bhat3 = -71.0 / 16695.0, bhat4 = 71.0 / 1920.0, bhat5 = -17253.0 / 339200.0, bhat6 = 22.0 / 525.0, bhat7 = -1.0 / 40.0;

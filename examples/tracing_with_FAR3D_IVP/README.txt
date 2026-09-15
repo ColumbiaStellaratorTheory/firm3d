@@ -4,4 +4,6 @@ Running FAR3D produces `phi_0000` and `temp_grwth_omega` files. `phi_0000` conta
 
 `tracing_with_FAR3D_AE.py` reads the numpy file and provided VMEC equilibrium file in Boozer coordinates (boozmn.nc) and performs the perturbed particle tracing for an fusion-born alpha particle population.
 
+On perlmutter (08.17.26), the wallclock time is about 8 minutes using the included slurm script.
+
 FAR3D: J. Varela, *et al.* Stability optimization of energetic particle driven modes in nuclear fusion devices: the FAR3d gyrofluid code. *Front. Phys.* 12:1422411. 2024. doi: 10.3389/fphy.2024.1422411.

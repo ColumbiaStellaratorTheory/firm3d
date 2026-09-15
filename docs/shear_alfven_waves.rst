@@ -5,7 +5,7 @@ Given an equilibrium field :math:`\textbf{B}_0`, a shear Alfvén wave is modeled
 
 .. math::
 
-   \delta \textbf{E} = -\nabla \Phi - \frac{\partial \alpha}{\partial t}
+   \delta \textbf{E} = -\nabla \Phi - B_0 \frac{\partial \alpha}{\partial t}
 
    \delta \textbf{B} = \nabla \times \left(\alpha \textbf{B}_0 \right)
 
@@ -42,7 +42,7 @@ A single float value representing a uniform amplitude across all radial position
 
    # Uniform amplitude across all s
    Phihat = 0.01
-   saw = ShearAlfvenHarmonic(Phihat, m=2, n=1, omega=1.0, phase=0.0, B0=field)
+   saw = ShearAlfvenHarmonic(Phihat, Phim=2, Phin=1, omega=1.0, phase=0.0, B0=field)
 
 **2. Varying Profile (Tabulated)**
 A tuple of two lists defining the radial dependence: `(s_values, Phihat_values)`:
@@ -56,12 +56,15 @@ A tuple of two lists defining the radial dependence: `(s_values, Phihat_values)`
    # Create wave with varying profile
    saw = ShearAlfvenHarmonic(
        (s_values, Phihat_values),
-       m=2, n=1, omega=1.0, phase=0.0, B0=field
+       Phim=2, Phin=1, omega=1.0, phase=0.0, B0=field
    )
 
 .. note::
    The `s_values` must be in the range [0, 1] and will be automatically sorted.
-   For non-zero poloidal mode numbers (m ≠ 0), the profile is automatically set to zero at s = 0.
+   For non-zero poloidal mode numbers (m ≠ 0), if the profile does not already
+   include a point at s = 0, one is inserted with :math:`\hat{\Phi}=0` (the
+   expected boundary condition at the axis for m ≠ 0). A value explicitly
+   provided at s = 0 is not overridden.
 
 Usage Example
 ~~~~~~~~~~~~~
@@ -72,7 +75,7 @@ Usage Example
    import numpy as np
 
    # Create equilibrium field
-   eq_field = BoozerAnalytic(B0=1.0, iota0=0.5)
+   eq_field = BoozerAnalytic(etabar=0.1, B0=1.0, N=0, G0=1.0, psi0=0.1, iota0=0.5)
 
    # Define radial profile (constant amplitude)
    Phihat = 0.01
@@ -80,8 +83,8 @@ Usage Example
    # Create shear Alfvén wave
    saw = ShearAlfvenHarmonic(
        Phihat,  # radial profile amplitude
-       m=2,     # poloidal mode number
-       n=1,     # toroidal mode number
+       Phim=2,     # poloidal mode number
+       Phin=1,     # toroidal mode number
        omega=1.0,  # frequency
        phase=0.0,  # phase shift
        B0=eq_field  # equilibrium field
@@ -108,17 +111,17 @@ Usage Example
    Phihat1 = 0.01
 
    wave1 = ShearAlfvenHarmonic(
-       Phihat1, m=2, n=1, omega=1.0, phase=0.0, B0=eq_field
+       Phihat1, Phim=2, Phin=1, omega=1.0, phase=0.0, B0=eq_field
    )
 
-   # Create superposition
-   saw_super = ShearAlfvenWavesSuperposition(wave1)
+   # Create superposition (constructor takes a list of waves)
+   saw_super = ShearAlfvenWavesSuperposition([wave1])
 
    # Add additional waves
    Phihat2 = 0.005
 
    wave2 = ShearAlfvenHarmonic(
-       Phihat2, m=3, n=1, omega=1.5, phase=0.0, B0=eq_field
+       Phihat2, Phim=3, Phin=1, omega=1.5, phase=0.0, B0=eq_field
    )
 
    saw_super.add_wave(wave2)
@@ -129,11 +132,12 @@ InterpolatedShearAlfvenWave
 ``InterpolatedShearAlfvenWave`` accelerates evaluation of wave quantities by
 interpolating a ``ShearAlfvenWave`` or ``ShearAlfvenWavesSuperposition`` on a
 regular grid in :math:`(s,\theta,\zeta)` using the C++ ``RegularGridInterpolant3D``.
-The interpolant is built at :math:`t=0`; time dependence is restored at
-evaluation time. Use it in tracing loops where repeated wave evaluations dominate
-runtime, especially for a large number of harmonics. 
+The interpolant is built by sampling each quantity at two reference times
+(:math:`t=0` and a quarter-period offset) and reconstructing the full time
+dependence at evaluation time via trigonometric identities. Use it in tracing loops where repeated wave evaluations dominate
+runtime, especially for a large number of harmonics.
 
-Usage Example 
+Usage Example
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
@@ -164,7 +168,7 @@ Usage Example
        minor_radius_meters=1.7,
    )
 
-   # Interpolant for fast tracing 
+   # Interpolant for fast tracing
    saw_interp = InterpolatedShearAlfvenWave(
        saw,
        degree=3,
@@ -204,4 +208,4 @@ ShearAlfvenWave classes provide methods to evaluate the perturbed fields. First,
    # For single point evaluation
    single_point = np.array([[0.5, 0.0, 0.0, 0.0]])  # shape (1, 4)
    saw.set_points(single_point)
-   phi_single = saw.phi()[0]  # get first (and only) value
+   phi_single = saw.Phi()[0]  # get first (and only) value

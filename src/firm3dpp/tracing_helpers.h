@@ -1,6 +1,7 @@
 #pragma once
 
 #include <boost/math/tools/roots.hpp>
+#include <boost/math/tools/toms748_solve.hpp>
 #include "tracing_helpers.h"
 #include <array>
 #include <vector>
@@ -19,28 +20,6 @@ class StoppingCriterion {
         // Should return true if the Criterion is satisfied.
         virtual bool operator()(int iter, double dt, double t, double x, double y, double z, double vpar=0) = 0;
         virtual ~StoppingCriterion() {}
-};
-
-class ZetaStoppingCriterion : public StoppingCriterion {
-    private:
-        int nfp;
-    public:
-        ZetaStoppingCriterion(int nfp) : nfp(nfp) {
-        };
-        bool operator()(int iter, double dt, double t, double s, double theta, double zeta, double vpar=0) override {
-            return std::abs(zeta)>=2*M_PI/nfp;
-        };
-};
-
-class VparStoppingCriterion : public StoppingCriterion {
-    private:
-        double vpar_crit;
-    public:
-        VparStoppingCriterion(double vpar_crit) : vpar_crit(vpar_crit) {
-        };
-        bool operator()(int iter, double dt, double t, double x, double y, double z, double vpar) override {
-            return std::abs(vpar)<=vpar_crit;
-        };
 };
 
 class ToroidalTransitStoppingCriterion : public StoppingCriterion {
@@ -97,9 +76,9 @@ class IterationStoppingCriterion : public StoppingCriterion {
 
 class StepSizeStoppingCriterion : public StoppingCriterion {
     private:
-        int min_dt;
+        double min_dt;
     public:
-        StepSizeStoppingCriterion(int min_dt) : min_dt(min_dt) {};
+        StepSizeStoppingCriterion(double min_dt) : min_dt(min_dt) {};
         bool operator()(int iter, double dt, double t, double s, double theta, double zeta, double vpar=0) override {
             return dt<min_dt;
         };

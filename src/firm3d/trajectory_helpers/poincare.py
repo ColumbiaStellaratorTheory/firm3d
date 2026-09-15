@@ -559,7 +559,9 @@ class PassingPoincare:
 
         Args:
             ax : Matplotlib axis to plot on. If None, a new figure and axis are
-                 created.
+                 created. A figure created here is closed before returning, so
+                 that repeated calls do not accumulate figures in pyplot's
+                 global registry. A figure supplied by the caller is left open.
             plot_fluxsurface : If True (default), plot s on the y axis. If False, plot
                           p_eta on the y axis (requires helicity_M and helicity_N
                           to have been provided at construction).
@@ -586,10 +588,10 @@ class PassingPoincare:
         except ImportError:
             cmap = "viridis"
 
+        created_fig = None
         if ax is None:
-            fig, ax = plt.subplots()
-        else:
-            fig = ax.get_figure()
+            created_fig, ax = plt.subplots()
+        fig = ax.get_figure()
 
         if not plot_fluxsurface and not self.peta_profile:
             raise ValueError(
@@ -672,7 +674,7 @@ class PassingPoincare:
         if title != "":
             ax.set_title(title)
         fig.tight_layout()
-        plt.savefig(filename, dpi=300)
+        fig.savefig(filename, dpi=300)
 
         if self.DA_poinc and self.nconvergence_points > 1:
             fig_convergence, ax2 = plt.subplots(1, 1)
@@ -698,8 +700,11 @@ class PassingPoincare:
             )
 
             fig_convergence.tight_layout()
-            plt.savefig(filename[:-4] + "_convergence.pdf")
-            plt.clf()
+            fig_convergence.savefig(filename[:-4] + "_convergence.pdf")
+            plt.close(fig_convergence)
+
+        if created_fig is not None:
+            plt.close(created_fig)
 
         return ax
 
@@ -1200,7 +1205,9 @@ class TrappedPoincare:
 
         Args:
             ax : Matplotlib axis to plot on. If None, a new figure and axis are
-                 created.
+                 created. A figure created here is closed before returning, so
+                 that repeated calls do not accumulate figures in pyplot's
+                 global registry. A figure supplied by the caller is left open.
             filename : Name of the file to save the plot
                        (default: 'trapped_poincare.pdf').
             convergence_test_indicies : List of trajectory indices to include in
@@ -1223,10 +1230,10 @@ class TrappedPoincare:
         except ImportError:
             cmap = "viridis"
 
+        created_fig = None
         if ax is None:
-            fig, ax = plt.subplots()
-        else:
-            fig = ax.get_figure()
+            created_fig, ax = plt.subplots()
+        fig = ax.get_figure()
 
         if convergence_test_indicies is None:
             convergence_test_indicies = list(range(len(self.s_all)))
@@ -1287,7 +1294,10 @@ class TrappedPoincare:
                 orientation="vertical",
                 label="Digit Accuracy",
             )
-        plt.savefig(filename)
+        fig.savefig(filename)
+
+        if created_fig is not None:
+            plt.close(created_fig)
 
         return ax
 
@@ -1939,10 +1949,10 @@ class PassingPerturbedPoincare:
         if convergence_test_indicies is None:
             convergence_test_indicies = list(range(len(self.s_all)))
 
+        created_fig = None
         if ax is None:
-            fig, ax = plt.subplots()
-        else:
-            fig = ax.get_figure()
+            created_fig, ax = plt.subplots()
+        fig = ax.get_figure()
 
         if self.chaos_detection and self.nconvergence_points > 1:
             s_itrj_map = {}
@@ -1974,7 +1984,10 @@ class PassingPerturbedPoincare:
         )
 
         fig.tight_layout()
-        plt.savefig(filename[:-4] + "_convergence.pdf")
+        fig.savefig(filename[:-4] + "_convergence.pdf")
+
+        if created_fig is not None:
+            plt.close(created_fig)
 
         return ax
 
@@ -1997,7 +2010,9 @@ class PassingPerturbedPoincare:
         call this function on MPI rank 0.
         Args:
             ax : Matplotlib axis to plot on. If None, a new figure and axis are
-                 created.
+                 created. A figure created here is closed before returning, so
+                 that repeated calls do not accumulate figures in pyplot's
+                 global registry. A figure supplied by the caller is left open.
             filename : Name of the file to save the plot
                 (default: 'passing_poincare.pdf').
             convergence_test_indicies : Indices of initial conditions to show
@@ -2040,10 +2055,10 @@ class PassingPerturbedPoincare:
         else:
             star_ICs = True
 
+        created_fig = None
         if ax is None:
-            fig, ax = plt.subplots()
-        else:
-            fig = ax.get_figure()
+            created_fig, ax = plt.subplots()
+        fig = ax.get_figure()
 
         if bg_field is None:
             bg_field = self.B0
@@ -2232,6 +2247,10 @@ class PassingPerturbedPoincare:
             self.convergence_plot(
                 convergence_test_indicies=convergence_test_indicies, DA_max=DA_max
             )
+
+        if created_fig is not None:
+            plt.close(created_fig)
+
         return ax, lines_2
 
     def get_poincare_data(self):
@@ -2239,7 +2258,8 @@ class PassingPerturbedPoincare:
         Return the Poincare map data.
 
         Returns:
-            s_all, chis_all, etas_all, vpars_all, t_all : Lists of trajectory data.
+            s_all, chis_all, etas_all, vpars_all, t_all, DA_all, DA_times :
+                Lists of trajectory data.
         """
         return (
             self.s_all,

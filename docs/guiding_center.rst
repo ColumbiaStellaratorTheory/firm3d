@@ -5,9 +5,9 @@ Guiding center integration in Boozer coordinates is performed using equations of
 
 .. math::
 
-   L(\psi,\theta,\zeta,\rho_{||})  = q\left(\left[\psi + I  \rho_{||}\right] \dot{\theta} + \left[- \chi + G \rho_{||} \right] \dot{\zeta} + \rho_{||} K \dot{\psi}\right)  - \frac{\rho_{||}^2 B_0^2q^2}{2m} - \mu B_0
+   L(\psi,\theta,\zeta,\rho_{||})  = q\left(\left[\psi + I  \rho_{||}\right] \dot{\theta} + \left[- \chi + G \rho_{||} \right] \dot{\zeta} + \rho_{||} K \dot{\psi}\right)  - \frac{\rho_{||}^2 B^2q^2}{2m} - m\mu B
 
-where :math:`2\pi \psi` is the toroidal flux, :math:`2\pi \chi` is the poloidal flux, :math:`q` is the charge, :math:`m` is the mass, :math:`\rho_{||} = q v_{||}/(m B)` and the covariant form of the magnetic field is:
+where :math:`2\pi \psi` is the toroidal flux, :math:`2\pi \chi` is the poloidal flux, :math:`q` is the charge, :math:`m` is the mass, :math:`\rho_{||} = m v_{||}/(q B)`, :math:`\mu = v_\perp^2/(2B)` is the magnetic moment per unit mass (so that :math:`m\mu B = \tfrac{1}{2}mv_\perp^2`, matching the convention used throughout the rest of this page), and the covariant form of the magnetic field is:
 
 .. math::
 
@@ -15,7 +15,7 @@ where :math:`2\pi \psi` is the toroidal flux, :math:`2\pi \chi` is the poloidal 
 
 See R. White, Theory of Tokamak Plasmas, Sec. 3.2.
 
-The trajectory information is saved as :math:`(s,\theta,\zeta,v_{||})`, where :math:`s = \psi_0` is the toroidal flux normalized to its value on the boundary, :math:`2\pi\psi_0`.
+The trajectory information is saved as :math:`(s,\theta,\zeta,v_{||})`, where :math:`s = \psi/\psi_0` is the toroidal flux normalized to its (signed) value on the boundary, :math:`2\pi\psi_0`.
 
 Unperturbed Guiding Center Integration
 --------------------------------------
@@ -91,7 +91,16 @@ where :math:`q` is the charge, :math:`m` is the mass, and :math:`v_\perp^2 = 2\m
 General Mode (gc)
 ~~~~~~~~~~~~~~~~~
 
-In the case of ``mode='gc'`` we solve the general guiding center equations for an MHD equilibrium:
+.. note::
+   The current implementation has no perturbed guiding-center RHS that
+   retains a general :math:`K(s,\theta,\zeta)`. For perturbed tracing,
+   ``mode='gc'`` and ``mode='gc_noK'`` both evaluate the :math:`K=0` equations
+   shown below; a full-:math:`K` equilibrium is silently treated as
+   :math:`K=0` whenever a shear Alfvén wave perturbation is present. This
+   differs from unperturbed tracing, where ``mode='gc'`` does retain the
+   general :math:`K`-dependent equations shown in the previous section.
+
+In the case of ``mode='gc'`` we solve the guiding center equations with :math:`K=0`:
 
 .. math::
 

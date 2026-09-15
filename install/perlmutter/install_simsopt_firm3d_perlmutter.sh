@@ -40,6 +40,10 @@ echo "Installing numpy (>=2.0,<2.4 for jax/simsopt + numba compatibility)..."
 pip install "numpy>=2.0,<2.4"
 check_success "Failed to install numpy"
 
+echo "Installing Boost headers..."
+conda install -y -c conda-forge libboost-headers
+check_success "Failed to install Boost headers"
+
 echo "Installing firm3d (with CUDA)..."
 cd firm3d || { echo "Error: firm3d directory not found. Exiting."; exit 1; }
 env CC=cc CXX=CC pip install -e ".[dev]"

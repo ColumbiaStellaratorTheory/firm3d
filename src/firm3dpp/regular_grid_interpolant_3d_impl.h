@@ -13,21 +13,83 @@
 #define _EPS_ 1e-13
 
 template<class Array>
-const int RegularGridInterpolant3D<Array>::simdcount;
+const int RegularGridInterpolant3D<Array>::MAX_NODES;
 
-// interpolate_batch is unchanged; set_interpolant_data (below) reuses the
-// all_local_vals_map rebuild logic but skips the function evaluation
+// Copy the dof-ordered vals array into per-cell contiguous blocks
+// (local_vals_flat + cell_offsets), which is the storage evaluate_local()
+// reads. vals is freed afterwards; get_interpolant_data() reconstructs it
+// on demand via reconstruct_vals().
+template<class Array>
+void RegularGridInterpolant3D<Array>::build_local_vals() {
+    int degree = rule.degree;
+    cell_offsets.assign((size_t)nx*ny*nz, -1);
+    local_vals_flat.assign((size_t)cells_to_keep * local_vals_size, 0.);
+    int64_t flat_offset = 0;
+    for (int xidx = 0; xidx < nx; ++xidx) {
+        for (int yidx = 0; yidx < ny; ++yidx) {
+            for (int zidx = 0; zidx < nz; ++zidx) {
+                int meshidx = idx_cell(xidx, yidx, zidx);
+                if(skip_cell[meshidx])
+                    continue;
+                cell_offsets[meshidx] = flat_offset;
+                double* local_vals = local_vals_flat.data() + flat_offset;
+                for (int i = 0; i < degree+1; ++i) {
+                    for (int j = 0; j < degree+1; ++j) {
+                        for (int k = 0; k < degree+1; ++k) {
+                            size_t offset = (size_t)value_size*full_to_reduced_map[idx_dof(xidx*degree+i, yidx*degree+j, zidx*degree+k)];
+                            int offset_local = value_size * idx_dof_local(i, j, k);
+                            for (int l = 0; l < value_size; ++l) {
+                                local_vals[offset_local + l] = vals[offset + l];
+                            }
+                        }
+                    }
+                }
+                flat_offset += local_vals_size;
+            }
+        }
+    }
+    Vec().swap(vals);
+}
+
+template<class Array>
+Vec RegularGridInterpolant3D<Array>::reconstruct_vals() const {
+    int degree = rule.degree;
+    Vec v((size_t)dofs_to_keep * value_size, 0.);
+    for (int xidx = 0; xidx < nx; ++xidx) {
+        for (int yidx = 0; yidx < ny; ++yidx) {
+            for (int zidx = 0; zidx < nz; ++zidx) {
+                int64_t flat_offset = cell_offsets[idx_cell(xidx, yidx, zidx)];
+                if(flat_offset < 0)
+                    continue;
+                const double* local_vals = local_vals_flat.data() + flat_offset;
+                for (int i = 0; i < degree+1; ++i) {
+                    for (int j = 0; j < degree+1; ++j) {
+                        for (int k = 0; k < degree+1; ++k) {
+                            size_t offset = (size_t)value_size*full_to_reduced_map[idx_dof(xidx*degree+i, yidx*degree+j, zidx*degree+k)];
+                            int offset_local = value_size * idx_dof_local(i, j, k);
+                            for (int l = 0; l < value_size; ++l) {
+                                v[offset + l] = local_vals[offset_local + l];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return v;
+}
+
 template<class Array>
 void RegularGridInterpolant3D<Array>::interpolate_batch(std::function<Vec(Vec, Vec, Vec)> &f) {
+    vals.assign((size_t)dofs_to_keep * value_size, 0.);
     int BATCH_SIZE = 16384;
     int NUM_BATCHES = dofs_to_keep/BATCH_SIZE + (dofs_to_keep % BATCH_SIZE != 0);
 
     for (int i = 0; i < NUM_BATCHES; ++i) {
         uint32_t first = i * BATCH_SIZE;
         uint32_t last = std::min((uint32_t)((i+1) * BATCH_SIZE), dofs_to_keep);
-        Vec xsub(xdoftensor_reduced.begin() + first, xdoftensor_reduced.begin() + last);
-        Vec ysub(ydoftensor_reduced.begin() + first, ydoftensor_reduced.begin() + last);
-        Vec zsub(zdoftensor_reduced.begin() + first, zdoftensor_reduced.begin() + last);
+        Vec xsub(last-first, 0.), ysub(last-first, 0.), zsub(last-first, 0.);
+        dof_coords(first, last, xsub, ysub, zsub);
         Vec fxyzsub  = f(xsub, ysub, zsub);
         for (int j = 0; j < last-first; ++j) {
             for (int l = 0; l < value_size; ++l) {
@@ -35,32 +97,7 @@ void RegularGridInterpolant3D<Array>::interpolate_batch(std::function<Vec(Vec, V
             }
         }
     }
-    int degree = rule.degree;
-    all_local_vals_map = std::unordered_map<int, AlignedPaddedVec>();
-    all_local_vals_map.reserve(cells_to_keep);
-
-    for (int xidx = 0; xidx < nx; ++xidx) {
-        for (int yidx = 0; yidx < ny; ++yidx) {
-            for (int zidx = 0; zidx < nz; ++zidx) {
-                int meshidx = idx_cell(xidx, yidx, zidx);
-                if(skip_cell[meshidx])
-                    continue;
-                AlignedPaddedVec local_vals(local_vals_size, 0.);
-                for (int i = 0; i < degree+1; ++i) {
-                    for (int j = 0; j < degree+1; ++j) {
-                        for (int k = 0; k < degree+1; ++k) {
-                            int offset = value_size*full_to_reduced_map[idx_dof(xidx*degree+i, yidx*degree+j, zidx*degree+k)];
-                            int offset_local = padded_value_size * idx_dof_local(i, j, k);
-                            for (int l = 0; l < value_size; ++l) {
-                                local_vals[offset_local + l] = vals[offset + l];
-                            }
-                        }
-                    }
-                }
-                all_local_vals_map.insert({meshidx, local_vals});
-            }
-        }
-    }
+    build_local_vals();
 }
 
 #ifdef USE_MPI
@@ -81,9 +118,8 @@ void RegularGridInterpolant3D<Array>::interpolate_batch(std::function<Vec(Vec, V
 
     for (int first = local_first; first < local_last; first += BATCH_SIZE) {
         int last = std::min(first + BATCH_SIZE, local_last);
-        Vec xsub(xdoftensor_reduced.begin() + first, xdoftensor_reduced.begin() + last);
-        Vec ysub(ydoftensor_reduced.begin() + first, ydoftensor_reduced.begin() + last);
-        Vec zsub(zdoftensor_reduced.begin() + first, zdoftensor_reduced.begin() + last);
+        Vec xsub(last-first, 0.), ysub(last-first, 0.), zsub(last-first, 0.);
+        dof_coords(first, last, xsub, ysub, zsub);
         Vec fxyzsub = f(xsub, ysub, zsub);
 
         int local_offset = (first - local_first) * value_size;
@@ -114,32 +150,8 @@ void RegularGridInterpolant3D<Array>::interpolate_batch(std::function<Vec(Vec, V
         MPI_DOUBLE,
         comm
     );
-    // Build all_local_vals_map (same on all ranks)
-    int degree = rule.degree;
-    all_local_vals_map = std::unordered_map<int, AlignedPaddedVec>();
-    all_local_vals_map.reserve(cells_to_keep);
-    for (int xidx = 0; xidx < nx; ++xidx) {
-        for (int yidx = 0; yidx < ny; ++yidx) {
-            for (int zidx = 0; zidx < nz; ++zidx) {
-                int meshidx = idx_cell(xidx, yidx, zidx);
-                if(skip_cell[meshidx])
-                    continue;
-                AlignedPaddedVec local_vals(local_vals_size, 0.);
-                for (int i = 0; i < degree+1; ++i) {
-                    for (int j = 0; j < degree+1; ++j) {
-                        for (int k = 0; k < degree+1; ++k) {
-                            int offset = value_size*full_to_reduced_map[idx_dof(xidx*degree+i, yidx*degree+j, zidx*degree+k)];
-                            int offset_local = padded_value_size * idx_dof_local(i, j, k);
-                            for (int l = 0; l < value_size; ++l) {
-                                local_vals[offset_local + l] = vals[offset + l];
-                            }
-                        }
-                    }
-                }
-                all_local_vals_map.insert({meshidx, local_vals});
-            }
-        }
-    }
+    // Build the per-cell evaluation storage (same on all ranks)
+    build_local_vals();
 }
 #endif
 
@@ -154,29 +166,11 @@ void RegularGridInterpolant3D<Array>::evaluate_batch(Array& xyz, Array& fxyz){
 }
 
 template<class Array>
-void RegularGridInterpolant3D<Array>::evaluate_batch_1D(Array& xyz, Array& fxyz){
-    if(fxyz.layout() != xt::layout_type::row_major)
-          throw std::runtime_error("fxyz needs to be in row-major storage order");
-    int npoints = xyz.shape(0);
-    for (int i = 0; i < npoints; ++i) {
-        evaluate_inplace(xyz(i, 0), fxyz.data() + value_size*i);
-    }
-}
-
-template<class Array>
 Vec RegularGridInterpolant3D<Array>::evaluate(double x, double y, double z){
     Vec fxyz(value_size, 0.);
     evaluate_inplace(x, y, z, fxyz.data());
     return fxyz;
 
-}
-
-template<class Array>
-int RegularGridInterpolant3D<Array>::locate_unsafe(double x, double y, double z){
-    int xidx = int(nx*(x-xmin)/(xmax-xmin)); // find idx so that xmesh[xidx] <= x <= xs[xidx+1]
-    int yidx = int(ny*(y-ymin)/(ymax-ymin));
-    int zidx = int(nz*(z-zmin)/(zmax-zmin));
-    return idx_cell(xidx, yidx, zidx);
 }
 
 template<class Array>
@@ -196,23 +190,16 @@ void RegularGridInterpolant3D<Array>::evaluate_inplace(double x, double y, doubl
     int zidx = int(nz*(z-zmin)/(zmax-zmin));
     if(!out_of_bounds_ok){
         if(xidx < 0 || xidx >= nx)
-            throw std::runtime_error((boost::format("xidxs={} not within [0, {}]") % xidx % (nx-1)).str());
+            throw std::runtime_error((boost::format("xidx=%d not within [0, %d]") % xidx % (nx-1)).str());
         if(yidx < 0 || yidx >= ny)
-            throw std::runtime_error((boost::format("yidxs={} not within [0, {}]") % yidx % (ny-1)).str());
+            throw std::runtime_error((boost::format("yidx=%d not within [0, %d]") % yidx % (ny-1)).str());
         if(zidx < 0 || zidx >= nz)
-            throw std::runtime_error((boost::format("zidxs={} not within [0, {}]") % zidx % (nz-1)).str());
+            throw std::runtime_error((boost::format("zidx=%d not within [0, %d]") % zidx % (nz-1)).str());
     } else {
-        // Clamp cell indices to match CUDA kernel convention (cuda_kernel.cu:700-704):
-        //   x (s, radial): clamp both lower and upper bounds — s can legitimately
-        //     fall below 0 or above 1 during tracing.
-        //   y (theta), z (zeta): clamp upper bound only — these are periodic
-        //     coordinates and a negative index never occurs in practice.
-        // The coordinate itself is left at its true value so that xlocal can
-        // exceed [0,1), giving polynomial extrapolation from the boundary cell
-        // rather than returning zero (which caused modB=0 and an unbounded RHS).
+        // Clamp cell indices to match CUDA kernel convention (cuda_kernel.cu:700-704).
         xidx = std::max(0, std::min(nx-1, xidx));
-        yidx = std::min(ny-1, yidx);
-        zidx = std::min(nz-1, zidx);
+        yidx = std::max(0, std::min(ny-1, yidx));
+        zidx = std::max(0, std::min(nz-1, zidx));
     }
     double xlocal = (x-xmesh[xidx])/hx;
     double ylocal = (y-ymesh[yidx])/hy;
@@ -220,41 +207,54 @@ void RegularGridInterpolant3D<Array>::evaluate_inplace(double x, double y, doubl
     return evaluate_local(xlocal, ylocal, zlocal, idx_cell(xidx, yidx, zidx), res);
 }
 
-template<class Array>
-void RegularGridInterpolant3D<Array>::evaluate_inplace(double x, double* res){
-
-    // to avoid funny business when the data is just a tiny bit out of bounds
-    // due to machine precision, we perform this check and shift
-    if(x >= xmax) x -= _EPS_;
-    else if (x <= xmin) x += _EPS_;
-
-    int xidx = int(nx*(x-xmin)/(xmax-xmin)); // find idx so that xmesh[xidx] <= x <= xs[xidx+1]
-
-    if(!out_of_bounds_ok){
-        if(xidx < 0 || xidx >= nx)
-            throw std::runtime_error((boost::format("xidxs={} not within [0, {}]") % xidx % (nx-1)).str());
-    } else {
-        // Clamp cell index (matching CUDA kernel behaviour): extrapolate from
-        // last cell rather than returning zero.
-        xidx = std::max(0, std::min(nx-1, xidx));
+// Evaluate one cell: res[l] = sum_i p_i(x) [ sum_j p_j(y) [ sum_k p_k(z)
+// v[i,j,k,l] ] ], over the (degree+1)^3 dofs of the cell, whose values are
+// stored contiguously (VS per dof) at vp.
+template<int VS>
+static inline void interp_cell_accumulate(const double* __restrict vp, const double* pkxs, const double* pkys, const double* pkzs, int degree, double* __restrict res)
+{
+    double sumi[VS];
+    for (int l = 0; l < VS; ++l)
+        sumi[l] = 0.;
+    for (int i = 0; i < degree+1; ++i) {
+        double sumj[VS];
+        for (int l = 0; l < VS; ++l)
+            sumj[l] = 0.;
+        for (int j = 0; j < degree+1; ++j) {
+            double sumk[VS];
+            for (int l = 0; l < VS; ++l)
+                sumk[l] = 0.;
+            for (int k = 0; k < degree+1; ++k) {
+                double pkz = pkzs[k];
+                for (int l = 0; l < VS; ++l)
+                    sumk[l] += vp[l] * pkz;
+                vp += VS;
+            }
+            double pjy = pkys[j];
+            for (int l = 0; l < VS; ++l)
+                sumj[l] += sumk[l] * pjy;
+        }
+        double pix = pkxs[i];
+        for (int l = 0; l < VS; ++l)
+            sumi[l] += sumj[l] * pix;
     }
-    double xlocal = (x-xmesh[xidx])/hx;
-    return evaluate_local(xlocal, idx_cell(xidx, 0, 0), res);
+    for (int l = 0; l < VS; ++l)
+        res[l] = sumi[l];
 }
 
 template<class Array>
 void RegularGridInterpolant3D<Array>::evaluate_local(double x, double y, double z, int cell_idx, double* res)
 {
     int degree = rule.degree;
-    auto got = all_local_vals_map.find(cell_idx);
-    if (got == all_local_vals_map.end()) {
+    int64_t flat_offset = cell_offsets[cell_idx];
+    if (flat_offset < 0) {
         if(out_of_bounds_ok)
             return;
         else
-            throw std::runtime_error((boost::format("cell_idx={} not in all_local_vals_map") % cell_idx).str());
+            throw std::runtime_error((boost::format("cell_idx=%d is outside the interpolation domain") % cell_idx).str());
     }
 
-    double* vals_local = got->second.data();
+    double pkxs[MAX_NODES], pkys[MAX_NODES], pkzs[MAX_NODES];
     if(xsimd::simd_type<double>::size >= 3){
         simd_t xyz;
         xyz[0] = x;
@@ -274,65 +274,43 @@ void RegularGridInterpolant3D<Array>::evaluate_local(double x, double y, double 
         }
     }
 
-    // Potential optimization: Use barycentric interpolation here. Right now, the
-    // implementation is O(degree^3) in memory and O(degree^4) in computation,
-    // using Barycentric interpolation this could be reduced to O(degree^3) in
-    // memory and O(degree^3) in computation.
-    for(int l=0; l<padded_value_size; l += simdcount) {
-        simd_t sumi(0.);
-        int offset_local = l;
-        double* val_ptr = &(vals_local[offset_local]);
-        for (int i = 0; i < degree+1; ++i) {
-            simd_t sumj(0.);
-            for (int j = 0; j < degree+1; ++j) {
-                simd_t sumk(0.);
-                for (int k = 0; k < degree+1; ++k) {
-                    double pkz = pkzs[k];
-                    sumk = xsimd::fma(xsimd::load_aligned(val_ptr), simd_t(pkz), sumk);
-                    val_ptr += padded_value_size;
+    const double* val_ptr = local_vals_flat.data() + flat_offset;
+    switch (value_size) {
+        // dispatch the common small sizes to compile-time kernels
+        case 1: interp_cell_accumulate<1>(val_ptr, pkxs, pkys, pkzs, degree, res); return;
+        case 2: interp_cell_accumulate<2>(val_ptr, pkxs, pkys, pkzs, degree, res); return;
+        case 3: interp_cell_accumulate<3>(val_ptr, pkxs, pkys, pkzs, degree, res); return;
+        case 4: interp_cell_accumulate<4>(val_ptr, pkxs, pkys, pkzs, degree, res); return;
+    }
+    // general case (value_size > 4): same nesting as above, with scratch
+    // sized at runtime. The scratch vectors allocate on every call, which is
+    // acceptable because no field interpolant takes this path: everything in
+    // boozermagneticfield_interpolated.h has value_size <= 3.
+    const double* __restrict vp = val_ptr;
+    double* __restrict out = res;
+    std::vector<double> sumj(value_size), sumk(value_size);
+    for (int l = 0; l < value_size; ++l) {
+        out[l] = 0.;
+    }
+    for (int i = 0; i < degree+1; ++i) {
+        std::fill(sumj.begin(), sumj.end(), 0.);
+        for (int j = 0; j < degree+1; ++j) {
+            std::fill(sumk.begin(), sumk.end(), 0.);
+            for (int k = 0; k < degree+1; ++k) {
+                double pkz = pkzs[k];
+                for (int l = 0; l < value_size; ++l) {
+                    sumk[l] += vp[l] * pkz;
                 }
-                double pjy = pkys[j];
-                sumj = xsimd::fma(sumk, simd_t(pjy), sumj);
+                vp += value_size;
             }
-            double pix = pkxs[i];
-            sumi = xsimd::fma(sumj, simd_t(pix), sumi);
+            double pjy = pkys[j];
+            for (int l = 0; l < value_size; ++l) {
+                sumj[l] += sumk[l] * pjy;
+            }
         }
-        for (int ll = 0; ll < std::min(simdcount, value_size-l); ++ll) {
-            res[l+ll] = sumi[ll];
-        }
-    }
-}
-//TODO memory usage not fixed
-
-template<class Array>
-void RegularGridInterpolant3D<Array>::evaluate_local(double x, int cell_idx, double* res)
-{
-    int degree = rule.degree;
-    auto got = all_local_vals_map.find(cell_idx);
-    if (got == all_local_vals_map.end()) {
-        if(out_of_bounds_ok)
-            return;
-        else
-            throw std::runtime_error((boost::format("cell_idx={} not in all_local_vals_map") % cell_idx).str());
-    }
-
-    double* vals_local = got->second.data();
-
-    for (int k = 0; k < degree+1; ++k) {
-        pkxs[k] = this->rule.basis_fun(k, x);
-    }
-
-    for(int l=0; l<padded_value_size; l += simdcount) {
-        simd_t sumi(0.);
-        int offset_local = l;
-        double* val_ptr = &(vals_local[offset_local]);
-        for (int i = 0; i < degree+1; ++i) {
-            double pkx = pkxs[i];
-            sumi = xsimd::fma(xsimd::load_aligned(val_ptr), simd_t(pkx), sumi);
-            val_ptr += padded_value_size * (degree+1) * (degree+1);
-        }
-        for (int ll = 0; ll < std::min(simdcount, value_size-l); ++ll) {
-            res[l+ll] = sumi[ll];
+        double pix = pkxs[i];
+        for (int l = 0; l < value_size; ++l) {
+            out[l] += sumj[l] * pix;
         }
     }
 }
@@ -391,7 +369,7 @@ Vec linspace(double min, double max, int n, bool endpoint) {
 template<class Array>
 std::map<std::string, std::vector<double>> RegularGridInterpolant3D<Array>::get_interpolant_data() const {
     std::map<std::string, std::vector<double>> data;
-    data["vals"] = vals;
+    data["vals"] = reconstruct_vals();
     data["nx"] = {static_cast<double>(nx)};
     data["ny"] = {static_cast<double>(ny)};
     data["nz"] = {static_cast<double>(nz)};
@@ -414,37 +392,14 @@ void RegularGridInterpolant3D<Array>::set_interpolant_data(const std::map<std::s
     // Look up "vals" in the map. find() returns an iterator pointing to a
     // std::pair<key, value>. Access the value via .second (key is .first).
     auto it = data.find("vals");
-    if (it != data.end()) {
-        vals = it->second;
-    }
+    if (it == data.end())
+        throw std::runtime_error("set_interpolant_data: no 'vals' entry in data");
+    if (it->second.size() != (size_t)dofs_to_keep * value_size)
+        throw std::runtime_error((boost::format("set_interpolant_data: 'vals' has size %d but this grid needs %d") % it->second.size() % ((size_t)dofs_to_keep * value_size)).str());
+    vals = it->second;
 
-    // Rebuild all_local_vals_map from vals. This is the cell-indexed lookup table
-    // used by evaluate_local() - same construction as interpolate_batch() but
-    // without calling the function to compute values.
-    int degree = rule.degree;
-    all_local_vals_map = std::unordered_map<int, AlignedPaddedVec>();
-    all_local_vals_map.reserve(cells_to_keep);
-
-    for (int xidx = 0; xidx < nx; ++xidx) {
-        for (int yidx = 0; yidx < ny; ++yidx) {
-            for (int zidx = 0; zidx < nz; ++zidx) {
-                int meshidx = idx_cell(xidx, yidx, zidx);
-                if(skip_cell[meshidx])
-                    continue;
-                AlignedPaddedVec local_vals(local_vals_size, 0.);
-                for (int i = 0; i < degree+1; ++i) {
-                    for (int j = 0; j < degree+1; ++j) {
-                        for (int k = 0; k < degree+1; ++k) {
-                            int offset = value_size*full_to_reduced_map[idx_dof(xidx*degree+i, yidx*degree+j, zidx*degree+k)];
-                            int offset_local = padded_value_size * idx_dof_local(i, j, k);
-                            for (int l = 0; l < value_size; ++l) {
-                                local_vals[offset_local + l] = vals[offset + l];
-                            }
-                        }
-                    }
-                }
-                all_local_vals_map.insert({meshidx, local_vals});
-            }
-        }
-    }
+    // Rebuild the cell-indexed evaluation storage from vals - same
+    // construction as interpolate_batch() but without calling the function
+    // to compute values.
+    build_local_vals();
 }

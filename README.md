@@ -51,9 +51,9 @@ B(s,\theta,\zeta) = B_0 \left(1 + \overline{\eta} \sqrt{2s\psi_0/\overline{B}}\c
 the covariant components of equilibrium field are,
 
 ```math
-G(s) = G_0 + \sqrt{2s\psi_0/\overline{B}} G_1 \\
+G(s) = G_0 + s G_1 \\
 
-I(s) = I_0 + \sqrt{2s\psi_0/\overline{B}} I_1 \\
+I(s) = I_0 + s I_1 \\
 
 K(s,\theta,\zeta) = \sqrt{2s\psi_0/\overline{B}} K_1 \sin(\theta - N \zeta),
 ```
@@ -101,7 +101,7 @@ This field takes an existing ``BoozerMagneticField`` instance, such as [BoozerRa
 Given an equilibrium field $\textbf{B}_0$, a shear Alfvén wave is modeled through the perturbed electrostatic potential, $\Phi$, and parameter $\alpha$ defining the perturbed vector potential $\delta \textbf{A} = \alpha \textbf{B}_0$. The perturbed electric and magnetic fields then satisfy:
 
 ```math
-\delta \textbf{E} = -\nabla \Phi - \frac{\partial \alpha}{\partial t} \\
+\delta \textbf{E} = -\nabla \Phi - B_0 \frac{\partial \alpha}{\partial t} \\
 \delta \textbf{B} = \nabla \times \left(\alpha \textbf{B}_0 \right).
 ```
 
@@ -136,19 +136,19 @@ See Paul et al., JPP (2023; 89(5):905890515. doi:10.1017/S0022377823001095) for 
 
 Guiding center integration in Boozer coordinates is performed using equations of motion obtained from the Littlejohn Lagrangian,
 ```math
-L(\psi,\theta,\zeta,\rho_{||})  = q\left(\left[\psi + I  \rho_{||}\right] \dot{\theta} + \left[- \chi + G \rho_{||} \right] \dot{\zeta} + \rho_{||} K \dot{\psi}\right)  - \frac{\rho_{||}^2 B_0^2q^2}{2m} - \mu B_0 ,
+L(\psi,\theta,\zeta,\rho_{||})  = q\left(\left[\psi + I  \rho_{||}\right] \dot{\theta} + \left[- \chi + G \rho_{||} \right] \dot{\zeta} + \rho_{||} K \dot{\psi}\right)  - \frac{\rho_{||}^2 B^2q^2}{2m} - m\mu B ,
 ```
-where $2\pi \psi$ is the toroidal flux, $2\pi \chi$ is the poloidal flux, $q$ is the charge, $m$ is the mass$, $\rho_{||} = q v_{||}/(m B)$ and the covariant form of the magnetic field is,
+where $2\pi \psi$ is the toroidal flux, $2\pi \chi$ is the poloidal flux, $q$ is the charge, $m$ is the mass, $\rho_{||} = m v_{||}/(q B)$, $\mu = v_\perp^2/(2B)$ is the magnetic moment per unit mass (so that $m\mu B = \tfrac{1}{2}mv_\perp^2$, matching the convention used elsewhere in this document), and the covariant form of the magnetic field is,
 ```math
 \textbf{B} = G(\psi) \nabla \zeta + I(\psi) \nabla \theta + K(\psi,\theta,\zeta) \nabla \psi.
 ```
 See R. White, Theory of Tokamak Plasmas, Sec. 3.2.
 
-The trajectory information is saved as $(s,\theta,\zeta,v_{||})$, where $s = \psi_0$ is the toroidal flux normalized to its value on the boundary, $2\pi\psi_0$
+The trajectory information is saved as $(s,\theta,\zeta,v_{||})$, where $s = \psi/\psi_0$ is the toroidal flux normalized to its (signed) value on the boundary, $2\pi\psi_0$.
 
 Various integrators, equations of motion, and solver options are detailed below.
 
-### Perturbed guiding center integration
+### Vacuum and general modes
 
 The primary routine for unperturbed guiding center integration is ``trace_particles_boozer``.
 
@@ -179,7 +179,7 @@ In the case of ``mode='gc'`` we solve the general guiding center equations for a
 ```
 where primes indicate differentiation wrt $\psi$. In the case ``mod='gc_noK'``, the above equations are used with $K=0$.
 
-# Perturbed guiding center integration
+## Perturbed guiding center integration
 
 In the case of ``mode='gc_vac'`` we solve the guiding center equations under the vacuum assumption, i.e. $G =$ const. and $I = 0$.
 
@@ -193,7 +193,9 @@ In the case of ``mode='gc_vac'`` we solve the guiding center equations under the
 ```
 where $q$ is the charge, $m$ is the mass, and $v_\perp^2 = 2\mu B$.
 
-In the case of ``mode='gc'`` we solve the general guiding center equations for an MHD equilibrium:
+**Note:** the current implementation has no perturbed guiding-center RHS that retains a general $K(s,\theta,\zeta)$. For perturbed tracing, `mode='gc'` and `mode='gc_noK'` both evaluate the $K=0$ equations shown below; a full-$K$ equilibrium is silently treated as $K=0$ whenever a shear Alfvén wave perturbation is present. This differs from unperturbed tracing, where `mode='gc'` does retain the general $K$-dependent equations shown above.
+
+In the case of ``mode='gc'`` we solve the guiding center equations with $K=0$:
 ```math
    \dot{s} = \Bigg(-G \Phi_{,\theta}q + I\Phi_{,\zeta}q
                     + B qv_{||}(\alpha_{,\theta}G-\alpha_{,\zeta}I)
@@ -223,32 +225,32 @@ In the case of ``mode='gc'`` we solve the general guiding center equations for a
 
 ## Stopping criteria
 
-Guiding center integration is continued until the maximum integration time, `tmax`, is reached, or until one of the `StoppingCriteria` is hit. Stopping criteria include:
+Guiding center integration is continued until the maximum integration time, `tmax`, is reached, or until one of the `StoppingCriteria` is hit. All of these are imported from `firm3d.field.tracing`. Available stopping criteria include:
 - `MaxToroidalFluxStoppingCriterion`: stop when trajectory reaches a maximum value of normalized toroidal flux (e.g., $s=1$ indicates the plasma boundary)
-- `MinToroidalFluxStoppignCriterion`: stop when trajectory reaches a minimum value of normalized toroidal flux. Sometimes a point close to the axis, e.g. $s = 10^{-3}$, is chosen to avoid numerical issues associated with the coordinate singularity.
-- `ZetaStoppingCriterion`: stop when the toroidal angle reaches a given value (modulus $2\pi$).
-- `VparStoppingCriterion`: stop when the parallel velocity reaches a given value. For example, can be used to terminate tracing when a particle mirrors.
+- `MinToroidalFluxStoppingCriterion`: stop when trajectory reaches a minimum value of normalized toroidal flux. Sometimes a point close to the axis, e.g. $s = 10^{-3}$, is chosen to avoid numerical issues associated with the coordinate singularity.
 - `ToroidalTransitStoppingCriterion`: stop when the toroidal angle increases by an integer multiple of $2\pi$. Useful for resonance detection.
 - `IterationStoppingCriterion`: stop when a number of iterations is reached.
 - `StepSizeStoppingCriterion`: stop when the step size gets too small. When using adaptive timestepping, can avoid particles getting "stuck" due to small step size.
+
+To stop on a parallel-velocity crossing (e.g. when a particle mirrors), pass the target value(s) via the `vpars` argument to `trace_particles_boozer`/`trace_particles_boozer_perturbed` with `vpars_stop=True`, rather than a `StoppingCriterion` subclass; see [Trajectory saving](#trajectory-saving) below.
 
 ## Trajectory saving
 
 There are two ways the trajectory information can be saved: by recording "hits" of user-defined coordinate planes (e.g., Poincaré sections), or by recording uniform time intervals of the trajectory. The routines `trace_particles_boozer` or `trace_particles_boozer_perturbed` return this information in the tuple `(res_tys,res_hits)`.
 
 - If `forget_exact_path=False`, the parameter `dt_save` determines the time interval for trajectory saving. (Note that if this parameter is made too small, one may run into memory issues.) This trajectory information is returned in `res_tys`, which is a list (length = number of particles) of numpy arrays with shape `(nsave,5)`. Here `nsave` is the number of timesteps saved. Each row contains the time and the state, `[t, s, theta, zeta, v_par]`. If `forget_exact_path=True`, only the state at the initial and final time will be returned.
-- The "hits" are defined through the input lists `zetas`, `omegas`, `vpars`. If `vpars` is specified, the trajectory will be recorded when the parallel velocity hits a given value. For example, the Poincaré map for trapped particles is defined by recording the points with $v_{||} = 0$. If `zetas` is specified, the trajectory will be recorded when $\zeta - \omega t$ hits the values given in the `zetas` array, with the frequency $\omega$ given by the `omegas` array. The `zetas` and `omegas` lists must have same length. If `omegas` is not specified, it defaults to zeros. This feature is useful for defining the Poincaré map for passing particles (with or without a single-harmonic shear Alfvén wave). The hits are returned in `res_hits`, which is a list (length = number of particles) of numpy arrays with shape `(nhits,6)`, where `nhits` is the number of hits of a coordinate plane or stopping criteria. Each row or the array contains `[time] + [idx] + state`, where `idx` tells us which of the hit planes or stopping criteria was hit. If `idx>=0` and `idx<len(zetas)`, then the `zetas[idx]` plane was hit. If `idx>=len(zetas)`, then the `vpars[idx-len(zetas)]` plane was hit. If `idx<0`, then `stopping_criteria[int(-idx)-1]` was hit. The state vector is `[t, s, theta, zeta, v_par]`.
+- The "hits" are defined through the input lists `phases`, `n_zetas`, `m_thetas`, `omegas`, and `vpars`. If `phases` is specified, the trajectory will be recorded when $n_\zeta \zeta + m_\theta \theta - \omega t$ hits the values given in the `phases` array, with $n_\zeta$, $m_\theta$, and $\omega$ given elementwise by the `n_zetas`, `m_thetas`, and `omegas` arrays (all four lists must have the same length). This feature is useful for defining the Poincaré map for passing particles (with or without a single-harmonic shear Alfvén wave). If `vpars` is specified, the trajectory will be recorded when the parallel velocity hits a given value. For example, the Poincaré map for trapped particles is defined by recording the points with $v_{||} = 0$. The hits are returned in `res_hits`, which is a list (length = number of particles) of numpy arrays with shape `(nhits,6)`, where `nhits` is the number of hits of a coordinate plane or stopping criteria. Each row of the array contains `[time] + [idx] + state`, where `idx` tells us which of the hit planes or stopping criteria was hit. If `idx>=0` and `idx<len(phases)`, then the `phases[idx]` plane was hit. If `idx>=len(phases)`, then the `vpars[idx-len(phases)]` plane was hit. If `idx<0`, then `stopping_criteria[int(-idx)-1]` was hit. The state vector is `[s, theta, zeta, v_par]`.
 
 ## Magnetic axis handling
 
 The coordinate singularity at the magnetic axis can be handled in several ways using the keyword argument `axis` passed to
 `trace_particles_boozer` and `trace_particles_boozer_perturbed`.
 - If `axis=0`, the trajectory will be integrated in standard Boozer coordinates $(s,\theta,\zeta)$. If this is used, it is recommended that one passes a `MinToroidalFluxStoppingCriterion` to prevent particles from passing to $s < 0$.
-- If `axis=1`, the trajectory will be integrated in the pseudo-Cartesian coordinates $(\sqrt{s}\cos(\theta),\sqrt{s}\sin(\theta),\zeta)$, but all trajectory information will be saved in the standard Boozer coordinates $(s,\theta,\zeta)$. This option prevents particles from passing to $s < 0$. Because the equations of motion are mapped form $(s,\theta,\zeta)$ to $(\sqrt{s}\cos(\theta),\sqrt{s},\sin(\theta),\zeta)$, a division by $\sqrt{s}$ is performed. Thus this option may be ill-behaved near the axis.
+- If `axis=1`, the trajectory will be integrated in the pseudo-Cartesian coordinates $(\sqrt{s}\cos(\theta),\sqrt{s}\sin(\theta),\zeta)$, but all trajectory information will be saved in the standard Boozer coordinates $(s,\theta,\zeta)$. This option prevents particles from passing to $s < 0$. Because the equations of motion are mapped from $(s,\theta,\zeta)$ to $(\sqrt{s}\cos(\theta),\sqrt{s}\sin(\theta),\zeta)$, a division by $\sqrt{s}$ is performed. Thus this option may be ill-behaved near the axis.
 - If `axis=2`, the trajectory will be integrated in the pseudo-Cartesian coordinates $(s\cos(\theta),s\sin(\theta),\zeta)$, but all trajectory information will be saved in the standard Boozer coordinates $(s,\theta,\zeta)$. This option prevents particles from passing to $s < 0$. No division by $s$ is required to map to this coordinate system. This option is recommended if one would like to integrate near the magnetic axis.
 
 ## Solvers and solver options
 
 By default the Runge-Kutta Dormand-Prince 5(4) method implemented in [Boost](https://www.boost.org/doc/libs/1_54_0/boost/numeric/odeint/stepper/runge_kutta_dopri5.hpp) is used to integrate the ODEs. Adaptive time stepping is performed to satisfy the user-prescribed relative and absolute error tolerance parameters, `reltol` and `abstol`.
 
-If `solveSympl=True` in the `solver_options`, a symplectic solver is used with step size `dt`. The semi-implicit Euler scheme described in[Albert, C. G., et al. (2020). Symplectic integration with non-canonical quadrature for guiding-center orbits in magnetic confinement devices. Journal of computational physics, 403, 109065](https://doi.org/10.1016/j.jcp.2019.109065) is implemented. A root solve is performed to map from non-canonical to canonical variables, with tolerance given by `roottol`. If `predictor_step=True`, the initial guess for the next step is improved using first derivative information.
+If `ODE_solver="symplectic"` is passed to `trace_particles_boozer`, a symplectic solver is used with step size `dt`. The semi-implicit Euler scheme described in [Albert, C. G., et al. (2020). Symplectic integration with non-canonical quadrature for guiding-center orbits in magnetic confinement devices. Journal of computational physics, 403, 109065](https://doi.org/10.1016/j.jcp.2019.109065) is implemented. A root solve is performed to map from non-canonical to canonical variables, with tolerance given by `roottol`. If `predictor_step=True`, the initial guess for the next step is improved using first derivative information. A third option, `ODE_solver="dormand_prince"`, uses an alternative adaptive Dormand-Prince implementation with a configurable minimum timestep, `DP_hmin`.

@@ -22,7 +22,7 @@ void init_boozermagneticfields(py::module_ &m){
       BoozerMagneticField,
       BoozerMagneticFieldTrampoline<BoozerMagneticField>,
       shared_ptr<BoozerMagneticField>
-      >(m, "BoozerMagneticField", "")
+      >(m, "BoozerMagneticField", py::module_local(), "")
     .def(py::init<double,string>());
     mf
     .def(
@@ -406,7 +406,7 @@ void init_boozermagneticfields(py::module_ &m){
       InterpolatedBoozerField,
       BoozerMagneticField,
       shared_ptr<InterpolatedBoozerField>
-      >(m, "InterpolatedBoozerField")
+      >(m, "InterpolatedBoozerField", py::module_local())
       .def(
           py::init<shared_ptr<BoozerMagneticField>,
           InterpolationRule,
@@ -537,7 +537,7 @@ void init_boozermagneticfields(py::module_ &m){
         ShearAlfvenWave,
         ShearAlfvenWaveTrampoline<ShearAlfvenWave>,
         shared_ptr<ShearAlfvenWave>
-        >(m, "ShearAlfvenWave", "")
+        >(m, "ShearAlfvenWave", py::module_local(), "")
         .def(py::init<shared_ptr<BoozerMagneticField>>())
         .def(
             "Phi",
@@ -610,7 +610,7 @@ void init_boozermagneticfields(py::module_ &m){
         );
 
     // Phihat:
-    py::class_<Phihat>(m, "Phihat")
+    py::class_<Phihat>(m, "Phihat", py::module_local())
         .def(
             py::init<const std::vector<double>&,
             const std::vector<double>&>()
@@ -624,7 +624,7 @@ void init_boozermagneticfields(py::module_ &m){
         ShearAlfvenHarmonic,
         ShearAlfvenWave,
         shared_ptr<ShearAlfvenHarmonic>
-        >(m, "ShearAlfvenHarmonic")
+        >(m, "ShearAlfvenHarmonic", py::module_local())
         .def(py::init<const Phihat&, int, int, double, double, shared_ptr<BoozerMagneticField>>())
         .def_readwrite("Phim", &ShearAlfvenHarmonic::Phim)
         .def_readwrite("Phin", &ShearAlfvenHarmonic::Phin)
@@ -642,7 +642,7 @@ void init_boozermagneticfields(py::module_ &m){
         ShearAlfvenWavesSuperposition,
         ShearAlfvenWave,
         shared_ptr<ShearAlfvenWavesSuperposition>
-        >(m, "ShearAlfvenWavesSuperposition")
+        >(m, "ShearAlfvenWavesSuperposition", py::module_local())
         .def(py::init<shared_ptr<ShearAlfvenWave>>())
         .def("add_wave", &ShearAlfvenWavesSuperposition::add_wave)
         .def("set_points", &ShearAlfvenWavesSuperposition::set_points)

@@ -401,6 +401,23 @@ class BoozerMagneticField(sopp.BoozerMagneticField):
         self.field_type = field_type
         sopp.BoozerMagneticField.__init__(self, psi0, field_type)
 
+    def set_points(self, points):
+        """
+        Set the points where the field should be evaluated in Boozer
+        coordinates `(s,theta,zeta)`.
+
+        Args:
+            points: A (n, 3) array-like of `(s,theta,zeta)` points.
+        """
+        points = np.ascontiguousarray(points, dtype=np.float64)
+        if points.ndim != 2 or points.shape[1] != 3:
+            raise ValueError(
+                "points must have shape (n, 3), corresponding to "
+                f"(s, theta, zeta) for each of n points; got shape "
+                f"{points.shape}."
+            )
+        return sopp.BoozerMagneticField.set_points(self, points)
+
     def _modB_derivs_impl(self, modB_derivs):
         self._dmodBds_impl(modB_derivs[:, 0:1])
         self._dmodBdtheta_impl(modB_derivs[:, 1:2])
@@ -628,19 +645,19 @@ class BoozerAnalytic(BoozerMagneticField):
     the covariant components of equilibrium field are,
 
     .. math::
-        G(s) = G_0 + \sqrt{2s\psi_0/\overline{B}} G_1
+        G(s) = G_0 + s G_1
 
-        I(s) = I_0 + \sqrt{2s\psi_0/\overline{B}} I_1
+        I(s) = I_0 + s I_1
 
         K(s,\theta,\zeta) = \sqrt{2s\psi_0/\overline{B}} K_1 \sin(\theta - N \zeta),
 
     and the rotational transform is,
 
     .. math::
-        \iota(s) = \iota_0.
+        \iota(s) = \iota_0 + s \iota_1.
 
-    While formally :math:`I_0 = I_1 = G_1 = K_1 = 0`, these terms have been included
-    in order to test the guiding center equations at finite beta.
+    While formally :math:`I_0 = I_1 = G_1 = K_1 = \iota_1 = 0`, these terms have
+    been included in order to test the guiding center equations at finite beta.
 
     Args:
         etabar: magnitude of first order correction to magnetic field strength
@@ -654,6 +671,7 @@ class BoozerAnalytic(BoozerMagneticField):
         G1: first order correction to toroidal covariant component (defaults to 0)
         I1: first order correction to poloidal covariant component (defaults to 0)
         K1: first order correction to radial covariant component (defaults to 0)
+        iota1: first order correction to rotational transform (defaults to 0)
         B0z: amplitude of symmetry-breaking perturbation mode
         n: toroidal mode number for the perturbation
         m: poloidal mode bumber for the perturbation
@@ -2551,321 +2569,158 @@ class BoozerRadialInterpolant(BoozerMagneticField):
         if self.no_K:
             return
 
-        @self.iterate_and_invert
-        def _harmonics(im, s):
-            return self.kmns_splines(s)[:, im]
-
-        inverse_fourier = sopp.inverse_fourier_transform_odd
-
-        self._compute_impl(K[:, 0], _harmonics, inverse_fourier)
+        self._compute_impl(K[:, 0], self.kmns_splines, "odd")
 
         if self.asym:
-
-            @self.iterate_and_invert
-            def _harmonics(im, s):
-                return self.kmnc_splines(s)[:, im]
-
-            inverse_fourier = sopp.inverse_fourier_transform_even
-
-            self._compute_impl(K[:, 0], _harmonics, inverse_fourier)
+            self._compute_impl(K[:, 0], self.kmnc_splines, "even")
 
     def _dKdtheta_impl(self, dKdtheta):
         dKdtheta[:, 0] = 0.0
         if self.no_K:
             return
 
-        @self.iterate_and_invert
-        def _harmonics(im, s):
-            return self.kmns_splines(s)[:, im] * self.xm_b[im]
-
-        inverse_fourier = sopp.inverse_fourier_transform_even
-
-        self._compute_impl(dKdtheta[:, 0], _harmonics, inverse_fourier)
+        self._compute_impl(
+            dKdtheta[:, 0], lambda s: self.kmns_splines(s) * self.xm_b, "even"
+        )
 
         if self.asym:
-
-            @self.iterate_and_invert
-            def _harmonics(im, s):
-                return -self.kmnc_splines(s)[:, im] * self.xm_b[im]
-
-            inverse_fourier = sopp.inverse_fourier_transform_odd
-
-            self._compute_impl(dKdtheta[:, 0], _harmonics, inverse_fourier)
+            self._compute_impl(
+                dKdtheta[:, 0], lambda s: -self.kmnc_splines(s) * self.xm_b, "odd"
+            )
 
     def _dKdzeta_impl(self, dKdzeta):
         dKdzeta[:, 0] = 0.0
         if self.no_K:
             return
 
-        @self.iterate_and_invert
-        def _harmonics(im, s):
-            return -self.kmns_splines(s)[:, im] * self.xn_b[im]
-
-        inverse_fourier = sopp.inverse_fourier_transform_even
-
-        self._compute_impl(dKdzeta[:, 0], _harmonics, inverse_fourier)
+        self._compute_impl(
+            dKdzeta[:, 0], lambda s: -self.kmns_splines(s) * self.xn_b, "even"
+        )
 
         if self.asym:
-
-            @self.iterate_and_invert
-            def _harmonics(im, s):
-                return self.kmnc_splines(s)[:, im] * self.xn_b[im]
-
-            inverse_fourier = sopp.inverse_fourier_transform_odd
-
-            self._compute_impl(dKdzeta[:, 0], _harmonics, inverse_fourier)
+            self._compute_impl(
+                dKdzeta[:, 0], lambda s: self.kmnc_splines(s) * self.xn_b, "odd"
+            )
 
     def _nu_impl(self, nu):
         nu[:, 0] = 0.0
 
-        @self.iterate_and_invert
-        def _harmonics(im, s):
-            return self.numns_splines(s)[:, im]
-
-        inverse_fourier = sopp.inverse_fourier_transform_odd
-
-        self._compute_impl(nu[:, 0], _harmonics, inverse_fourier)
+        self._compute_impl(nu[:, 0], self.numns_splines, "odd")
 
         if self.asym:
-
-            @self.iterate_and_invert
-            def _harmonics(im, s):
-                return self.numnc_splines(s)[:, im]
-
-            inverse_fourier = sopp.inverse_fourier_transform_even
-
-            self._compute_impl(nu[:, 0], _harmonics, inverse_fourier)
+            self._compute_impl(nu[:, 0], self.numnc_splines, "even")
 
     def _dnudtheta_impl(self, dnudtheta):
         dnudtheta[:, 0] = 0.0
 
-        @self.iterate_and_invert
-        def _harmonics(im, s):
-            return self.numns_splines(s)[:, im] * self.xm_b[im]
-
-        inverse_fourier = sopp.inverse_fourier_transform_even
-
-        self._compute_impl(dnudtheta[:, 0], _harmonics, inverse_fourier)
+        self._compute_impl(
+            dnudtheta[:, 0], lambda s: self.numns_splines(s) * self.xm_b, "even"
+        )
 
         if self.asym:
-
-            @self.iterate_and_invert
-            def _harmonics(im, s):
-                return -self.numnc_splines(s)[:, im] * self.xm_b[im]
-
-            inverse_fourier = sopp.inverse_fourier_transform_odd
-
-            self._compute_impl(dnudtheta[:, 0], _harmonics, inverse_fourier)
+            self._compute_impl(
+                dnudtheta[:, 0], lambda s: -self.numnc_splines(s) * self.xm_b, "odd"
+            )
 
     def _dnudzeta_impl(self, dnudzeta):
         dnudzeta[:, 0] = 0.0
 
-        @self.iterate_and_invert
-        def _harmonics(im, s):
-            return -self.numns_splines(s)[:, im] * self.xn_b[im]
-
-        inverse_fourier = sopp.inverse_fourier_transform_even
-
-        self._compute_impl(dnudzeta[:, 0], _harmonics, inverse_fourier)
+        self._compute_impl(
+            dnudzeta[:, 0], lambda s: -self.numns_splines(s) * self.xn_b, "even"
+        )
 
         if self.asym:
-
-            @self.iterate_and_invert
-            def _harmonics(im, s):
-                return self.numnc_splines(s)[:, im] * self.xn_b[im]
-
-            inverse_fourier = sopp.inverse_fourier_transform_odd
-
-            self._compute_impl(dnudzeta[:, 0], _harmonics, inverse_fourier)
+            self._compute_impl(
+                dnudzeta[:, 0], lambda s: self.numnc_splines(s) * self.xn_b, "odd"
+            )
 
     def _dnuds_impl(self, dnuds):
         dnuds[:, 0] = 0.0
 
-        @self.iterate_and_invert
-        def _harmonics(im, s):
-            return self.dnumnsds_splines(s)[:, im]
-
-        inverse_fourier = sopp.inverse_fourier_transform_odd
-
-        self._compute_impl(dnuds[:, 0], _harmonics, inverse_fourier)
+        self._compute_impl(dnuds[:, 0], self.dnumnsds_splines, "odd")
 
         if self.asym:
-
-            @self.iterate_and_invert
-            def _harmonics(im, s):
-                return self.dnumncds_splines(s)[:, im]
-
-            inverse_fourier = sopp.inverse_fourier_transform_even
-
-            self._compute_impl(dnuds[:, 0], _harmonics, inverse_fourier)
+            self._compute_impl(dnuds[:, 0], self.dnumncds_splines, "even")
 
     def _dRdtheta_impl(self, dRdtheta):
         dRdtheta[:, 0] = 0.0
 
-        @self.iterate_and_invert
-        def _harmonics(im, s):
-            return -self.rmnc_splines(s)[:, im] * self.xm_b[im]
-
-        inverse_fourier = sopp.inverse_fourier_transform_odd
-
-        self._compute_impl(dRdtheta[:, 0], _harmonics, inverse_fourier)
+        self._compute_impl(
+            dRdtheta[:, 0], lambda s: -self.rmnc_splines(s) * self.xm_b, "odd"
+        )
 
         if self.asym:
-
-            @self.iterate_and_invert
-            def _harmonics(im, s):
-                return self.rmns_splines(s)[:, im] * self.xm_b[im]
-
-            inverse_fourier = sopp.inverse_fourier_transform_even
-
-            self._compute_impl(dRdtheta[:, 0], _harmonics, inverse_fourier)
+            self._compute_impl(
+                dRdtheta[:, 0], lambda s: self.rmns_splines(s) * self.xm_b, "even"
+            )
 
     def _dRdzeta_impl(self, dRdzeta):
         dRdzeta[:, 0] = 0.0
 
-        @self.iterate_and_invert
-        def _harmonics(im, s):
-            return self.rmnc_splines(s)[:, im] * self.xn_b[im]
-
-        inverse_fourier = sopp.inverse_fourier_transform_odd
-
-        self._compute_impl(dRdzeta[:, 0], _harmonics, inverse_fourier)
+        self._compute_impl(
+            dRdzeta[:, 0], lambda s: self.rmnc_splines(s) * self.xn_b, "odd"
+        )
 
         if self.asym:
-
-            @self.iterate_and_invert
-            def _harmonics(im, s):
-                return -self.rmns_splines(s)[:, im] * self.xn_b[im]
-
-            inverse_fourier = sopp.inverse_fourier_transform_even
-
-            self._compute_impl(dRdzeta[:, 0], _harmonics, inverse_fourier)
+            self._compute_impl(
+                dRdzeta[:, 0], lambda s: -self.rmns_splines(s) * self.xn_b, "even"
+            )
 
     def _dRds_impl(self, dRds):
         dRds[:, 0] = 0.0
 
-        @self.iterate_and_invert
-        def _harmonics(im, s):
-            return self.drmncds_splines(s)[:, im]
-
-        inverse_fourier = sopp.inverse_fourier_transform_even
-
-        self._compute_impl(dRds[:, 0], _harmonics, inverse_fourier)
+        self._compute_impl(dRds[:, 0], self.drmncds_splines, "even")
 
         if self.asym:
-
-            @self.iterate_and_invert
-            def _harmonics(im, s):
-                return self.drmnsds_splines(s)[:, im]
-
-            inverse_fourier = sopp.inverse_fourier_transform_odd
-
-            self._compute_impl(dRds[:, 0], _harmonics, inverse_fourier)
+            self._compute_impl(dRds[:, 0], self.drmnsds_splines, "odd")
 
     def _R_impl(self, R):
         R[:, 0] = 0.0
 
-        @self.iterate_and_invert
-        def _harmonics(im, s):
-            return self.rmnc_splines(s)[:, im]
-
-        inverse_fourier = sopp.inverse_fourier_transform_even
-
-        self._compute_impl(R[:, 0], _harmonics, inverse_fourier)
+        self._compute_impl(R[:, 0], self.rmnc_splines, "even")
 
         if self.asym:
-
-            @self.iterate_and_invert
-            def _harmonics(im, s):
-                return self.rmns_splines(s)[:, im]
-
-            inverse_fourier = sopp.inverse_fourier_transform_odd
-
-            self._compute_impl(R[:, 0], _harmonics, inverse_fourier)
+            self._compute_impl(R[:, 0], self.rmns_splines, "odd")
 
     def _dZdtheta_impl(self, dZdtheta):
         dZdtheta[:, 0] = 0.0
 
-        @self.iterate_and_invert
-        def _harmonics(im, s):
-            return self.zmns_splines(s)[:, im] * self.xm_b[im]
-
-        inverse_fourier = sopp.inverse_fourier_transform_even
-
-        self._compute_impl(dZdtheta[:, 0], _harmonics, inverse_fourier)
+        self._compute_impl(
+            dZdtheta[:, 0], lambda s: self.zmns_splines(s) * self.xm_b, "even"
+        )
 
         if self.asym:
-
-            @self.iterate_and_invert
-            def _harmonics(im, s):
-                return -self.zmnc_splines(s)[:, im] * self.xm_b[im]
-
-            inverse_fourier = sopp.inverse_fourier_transform_odd
-
-            self._compute_impl(dZdtheta[:, 0], _harmonics, inverse_fourier)
+            self._compute_impl(
+                dZdtheta[:, 0], lambda s: -self.zmnc_splines(s) * self.xm_b, "odd"
+            )
 
     def _dZdzeta_impl(self, dZdzeta):
         dZdzeta[:, 0] = 0.0
 
-        @self.iterate_and_invert
-        def _harmonics(im, s):
-            return -self.zmns_splines(s)[:, im] * self.xn_b[im]
-
-        inverse_fourier = sopp.inverse_fourier_transform_even
-
-        self._compute_impl(dZdzeta[:, 0], _harmonics, inverse_fourier)
+        self._compute_impl(
+            dZdzeta[:, 0], lambda s: -self.zmns_splines(s) * self.xn_b, "even"
+        )
 
         if self.asym:
-
-            @self.iterate_and_invert
-            def _harmonics(im, s):
-                return self.zmnc_splines(s)[:, im] * self.xn_b[im]
-
-            inverse_fourier = sopp.inverse_fourier_transform_odd
-
-            self._compute_impl(dZdzeta[:, 0], _harmonics, inverse_fourier)
+            self._compute_impl(
+                dZdzeta[:, 0], lambda s: self.zmnc_splines(s) * self.xn_b, "odd"
+            )
 
     def _dZds_impl(self, dZds):
         dZds[:, 0] = 0.0
 
-        @self.iterate_and_invert
-        def _harmonics(im, s):
-            return self.dzmnsds_splines(s)[:, im]
-
-        inverse_fourier = sopp.inverse_fourier_transform_odd
-
-        self._compute_impl(dZds[:, 0], _harmonics, inverse_fourier)
+        self._compute_impl(dZds[:, 0], self.dzmnsds_splines, "odd")
 
         if self.asym:
-
-            @self.iterate_and_invert
-            def _harmonics(im, s):
-                return self.dzmncds_splines(s)[:, im]
-
-            inverse_fourier = sopp.inverse_fourier_transform_even
-
-            self._compute_impl(dZds[:, 0], _harmonics, inverse_fourier)
+            self._compute_impl(dZds[:, 0], self.dzmncds_splines, "even")
 
     def _Z_impl(self, Z):
         Z[:, 0] = 0.0
 
-        @self.iterate_and_invert
-        def _harmonics(im, s):
-            return self.zmns_splines(s)[:, im]
-
-        inverse_fourier = sopp.inverse_fourier_transform_odd
-
-        self._compute_impl(Z[:, 0], _harmonics, inverse_fourier)
+        self._compute_impl(Z[:, 0], self.zmns_splines, "odd")
 
         if self.asym:
-
-            @self.iterate_and_invert
-            def _harmonics(im, s):
-                return self.zmnc_splines(s)[:, im]
-
-            inverse_fourier = sopp.inverse_fourier_transform_even
-
-            self._compute_impl(Z[:, 0], _harmonics, inverse_fourier)
+            self._compute_impl(Z[:, 0], self.zmnc_splines, "even")
 
     def _psip_impl(self, psip):
         points = self.get_points_ref()
@@ -2912,92 +2767,68 @@ class BoozerRadialInterpolant(BoozerMagneticField):
     def _modB_impl(self, modB):
         modB[:, 0] = 0.0
 
-        @self.iterate_and_invert
-        def _harmonics(im, s):
-            return self.bmnc_splines(s)[:, im]
-
-        inverse_fourier = sopp.inverse_fourier_transform_even
-
-        self._compute_impl(modB[:, 0], _harmonics, inverse_fourier)
+        self._compute_impl(modB[:, 0], self.bmnc_splines, "even")
 
         if self.asym:
-
-            @self.iterate_and_invert
-            def _harmonics(im, s):
-                return self.bmns_splines(s)[:, im]
-
-            inverse_fourier = sopp.inverse_fourier_transform_odd
-
-            self._compute_impl(modB[:, 0], _harmonics, inverse_fourier)
+            self._compute_impl(modB[:, 0], self.bmns_splines, "odd")
 
     def _dmodBdtheta_impl(self, dmodBdtheta):
         dmodBdtheta[:, 0] = 0.0
 
-        @self.iterate_and_invert
-        def _harmonics(im, s):
-            return -self.xm_b[im] * self.bmnc_splines(s)[:, im]
-
-        inverse_fourier = sopp.inverse_fourier_transform_odd
-
-        self._compute_impl(dmodBdtheta[:, 0], _harmonics, inverse_fourier)
+        self._compute_impl(
+            dmodBdtheta[:, 0], lambda s: -self.xm_b * self.bmnc_splines(s), "odd"
+        )
 
         if self.asym:
-
-            @self.iterate_and_invert
-            def _harmonics(im, s):
-                return self.xm_b[im] * self.bmns_splines(s)[:, im]
-
-            inverse_fourier = sopp.inverse_fourier_transform_even
-
-            self._compute_impl(dmodBdtheta[:, 0], _harmonics, inverse_fourier)
+            self._compute_impl(
+                dmodBdtheta[:, 0], lambda s: self.xm_b * self.bmns_splines(s), "even"
+            )
 
     def _dmodBdzeta_impl(self, dmodBdzeta):
         dmodBdzeta[:, 0] = 0.0
 
-        @self.iterate_and_invert
-        def _harmonics(im, s):
-            return self.xn_b[im] * self.bmnc_splines(s)[:, im]
-
-        inverse_fourier = sopp.inverse_fourier_transform_odd
-
-        self._compute_impl(dmodBdzeta[:, 0], _harmonics, inverse_fourier)
+        self._compute_impl(
+            dmodBdzeta[:, 0], lambda s: self.xn_b * self.bmnc_splines(s), "odd"
+        )
 
         if self.asym:
-
-            @self.iterate_and_invert
-            def _harmonics(im, s):
-                return -self.xn_b[im] * self.bmns_splines(s)[:, im]
-
-            inverse_fourier = sopp.inverse_fourier_transform_even
-
-            self._compute_impl(dmodBdzeta[:, 0], _harmonics, inverse_fourier)
+            self._compute_impl(
+                dmodBdzeta[:, 0], lambda s: -self.xn_b * self.bmns_splines(s), "even"
+            )
 
     def _dmodBds_impl(self, dmodBds):
         dmodBds[:, 0] = 0.0
 
-        @self.iterate_and_invert
-        def _harmonics(im, s):
-            return self.dbmncds_splines(s)[:, im]
-
-        inverse_fourier = sopp.inverse_fourier_transform_even
-
-        self._compute_impl(dmodBds[:, 0], _harmonics, inverse_fourier)
+        self._compute_impl(dmodBds[:, 0], self.dbmncds_splines, "even")
 
         if self.asym:
+            self._compute_impl(dmodBds[:, 0], self.dbmnsds_splines, "odd")
 
-            @self.iterate_and_invert
-            def _harmonics(im, s):
-                return self.dbmnsds_splines(s)[:, im]
+    def _compute_impl(self, output, coeffs, parity):
+        r"""
+        Add to ``output`` the inverse Fourier transform
 
-            inverse_fourier = sopp.inverse_fourier_transform_odd
+        .. math::
+            \sum_{mn} c_{mn}(s) \times \begin{cases}
+                \cos(m\theta - n\zeta) & \text{parity = "even"} \\
+                \sin(m\theta - n\zeta) & \text{parity = "odd"}
+            \end{cases}
 
-            self._compute_impl(dmodBds[:, 0], _harmonics, inverse_fourier)
+        evaluated at the current points.
 
-    def _compute_impl(self, output, harmonics, inverse_fourier):
+        Args:
+            output: 1d array of length ``npoints`` that the result is added to.
+            coeffs: callable mapping an array of ``s`` values to the
+                ``(len(s), nmodes)`` array of radial coefficients
+                :math:`c_{mn}(s)` for every Boozer mode. It is called once,
+                on the unique ``s`` values of the current point set.
+            parity: ``"even"`` or ``"odd"``, selecting cosine or sine.
+        """
+        assert parity in ("even", "odd")
         # Fast path for single point evaluation
         points = self.get_points_ref()
         if len(points) == 1:
-            return self._compute_single_point(output, harmonics, inverse_fourier)
+            return self._compute_single_point(output, coeffs, parity)
 
         if self.comm is not None:
             size = self.comm.size
@@ -3025,100 +2856,183 @@ class BoozerRadialInterpolant(BoozerMagneticField):
         zetas = points[:, 2]
         us, inv = np.unique(s, return_inverse=True)
 
+        # Evaluate the radial coefficients for every mode this rank owns. The
+        # splines are vector valued over the mode index, so this is a single
+        # call for all modes, on the unique s values only.
+        cmn = coeffs(us)[:, first_mn:last_mn]
+
+        result = self._sum_harmonics_separable(
+            cmn, inv, thetas, zetas, parity, first_mn, last_mn
+        )
+        if result is None:
+            result = self._sum_harmonics_pointwise(
+                cmn, inv, thetas, zetas, parity, first_mn, last_mn
+            )
+
+        if self.comm is not None:
+            # In place reduce is slightly slower
+            # self.mpi.comm_world.Allreduce(MPI.IN_PLACE,
+            # [result, MPI.DOUBLE], op=MPI.SUM)
+            self.comm.Allreduce([result, MPI.DOUBLE], recv_buffer, op=MPI.SUM)
+            output += recv_buffer
+        else:
+            output += result
+
+    def _sum_harmonics_pointwise(
+        self, cmn, inv, thetas, zetas, parity, first_mn, last_mn
+    ):
+        """
+        Sum the Fourier series one point at a time, in C++. Cost is
+        ``npoints * nmodes``; used for scattered points, where the point set
+        has no exploitable structure.
+        """
+        npoints = len(inv)
+
         # Pre-allocate and reuse buffers if possible
         if not hasattr(self, "_compute_buffers"):
             self._compute_buffers = {}
 
-        if len(s) > 1:
-            # Pre-compute padded arrays only when needed
-            if not hasattr(self, "_padded_cache") or len(self._padded_cache) != len(s):
-                self._padded_cache = {
-                    "thetas": align_and_pad(thetas),
-                    "zetas": align_and_pad(zetas),
-                }
+        # align_and_pad returns its argument untouched when it is already
+        # aligned and padded, so there is nothing to cache here.
+        padded_thetas = align_and_pad(thetas)
+        padded_zetas = align_and_pad(zetas)
 
-            padded_thetas = self._padded_cache["thetas"]
-            padded_zetas = self._padded_cache["zetas"]
+        # Optimize buffer allocation with better key strategy
+        buffer_key = ("padded", npoints)
+        if buffer_key not in self._compute_buffers:
+            self._compute_buffers[buffer_key] = allocate_aligned_and_padded_array(
+                (npoints,)
+            )
+        padded_buffer = self._compute_buffers[buffer_key]
 
-            # Optimize buffer allocation with better key strategy
-            buffer_key = ("padded", output.shape, len(s))
-            if buffer_key not in self._compute_buffers:
-                self._compute_buffers[buffer_key] = allocate_aligned_and_padded_array(
-                    output.shape
-                )
-            padded_buffer = self._compute_buffers[buffer_key]
+        # Use memset-like operation for faster clearing
+        if padded_buffer.size > 0:
+            padded_buffer.fill(0)
 
-            # Use memset-like operation for faster clearing
-            if padded_buffer.size > 0:
-                padded_buffer.fill(0)
+        # Optimize chunk allocation with better sizing
+        chunk_key = ("chunk", (last_mn - first_mn, npoints))
+        if chunk_key not in self._compute_buffers:
+            self._compute_buffers[chunk_key] = allocate_aligned_and_padded_array(
+                (last_mn - first_mn, npoints)
+            )
+        chunk_mn = self._compute_buffers[chunk_key]
+        # Broadcast the per-unique-s coefficients out to one column per point.
+        # take(..., out=) writes straight into the buffer; assigning
+        # cmn.T[:, inv] instead would materialize a second array of the same
+        # (nmodes, npoints) size.
+        np.take(cmn.T, inv, axis=1, out=chunk_mn[:, :npoints])
 
-            # Optimize chunk allocation with better sizing
-            chunk_key = ("chunk", (last_mn - first_mn, len(inv)))
-            if chunk_key not in self._compute_buffers:
-                self._compute_buffers[chunk_key] = allocate_aligned_and_padded_array(
-                    (last_mn - first_mn, len(inv))
-                )
-            chunk_mn = self._compute_buffers[chunk_key]
-
-            # release memory manually. maybe not be needed anymore
-            s, thetas, zetas = None, None, None
-            harmonics(us, chunk_mn, inv, 0, last_mn - first_mn, first_mn)
-            xm = self.xm_b[first_mn:last_mn]
-            xn = self.xn_b[first_mn:last_mn]
-        else:
-            padded_thetas = thetas
-            padded_zetas = zetas
-            padded_buffer = np.zeros(output.shape)
-
-            # Reuse chunk_mn for scalar case
-            chunk_key = ("chunk_scalar", (last_mn - first_mn,))
-            if chunk_key not in self._compute_buffers:
-                self._compute_buffers[chunk_key] = allocate_aligned_and_padded_array(
-                    (last_mn - first_mn,)
-                )
-            chunk_mn = self._compute_buffers[chunk_key]
-
-            harmonics(us, chunk_mn, inv, 0, last_mn - first_mn, first_mn)
-            xm = align_and_pad(self.xm_b[first_mn:last_mn])
-            xn = align_and_pad(self.xn_b[first_mn:last_mn])
-
+        inverse_fourier = (
+            sopp.inverse_fourier_transform_even
+            if parity == "even"
+            else sopp.inverse_fourier_transform_odd
+        )
         inverse_fourier(
             padded_buffer,
             chunk_mn,
-            xm,
-            xn,
+            self.xm_b[first_mn:last_mn],
+            self.xn_b[first_mn:last_mn],
             padded_thetas,
             padded_zetas,
             self.ntor,
             self.nfp,
             False,
         )
-        chunk_mn, padded_thetas, padded_zetas = None, None, None
+        return padded_buffer[:npoints]
 
-        if self.comm is not None:
-            # In place reduce is slightly slower
-            # self.mpi.comm_world.Allreduce(MPI.IN_PLACE,
-            # [padded_buffer[:len(inv)], MPI.DOUBLE], op=MPI.SUM)
-            self.comm.Allreduce(
-                [padded_buffer[: len(inv)], MPI.DOUBLE], recv_buffer, op=MPI.SUM
-            )
-            output += recv_buffer
+    def _sum_harmonics_separable(
+        self, cmn, inv, thetas, zetas, parity, first_mn, last_mn
+    ):
+        r"""
+        Sum the Fourier series by partial summation over a tensor-product
+        lattice of the distinct :math:`(s, \theta, \zeta)` values, using
+
+        .. math::
+            \sum_{mn} c_{mn}\cos(m\theta - n\zeta)
+              = \sum_m \left[\cos(m\theta) A_m(\zeta)
+                             + \sin(m\theta) B_m(\zeta)\right],
+
+        with :math:`A_m(\zeta) = \sum_n c_{mn}\cos(n\zeta)` and
+        :math:`B_m(\zeta) = \sum_n c_{mn}\sin(n\zeta)`. This replaces the
+        ``npoints * nmodes`` mode loop with four matrix products, which for the
+        grids used to build an :class:`InterpolatedBoozerField` is one to two
+        orders of magnitude cheaper.
+
+        Returns ``None`` when the point set is not separable enough to pay off
+        (e.g. scattered points), leaving the caller to fall back to
+        :meth:`_sum_harmonics_pointwise`.
+        """
+        npoints = len(inv)
+        nmodes = last_mn - first_mn
+        if npoints < 64 or nmodes == 0:
+            return None
+
+        rect = self._mode_rectangle(first_mn, last_mn)
+        if rect is None:
+            return None
+        m_idx, n_idx, ms, ns_ = rect
+
+        uth, tinv = np.unique(thetas, return_inverse=True)
+        uze, zinv = np.unique(zetas, return_inverse=True)
+        nus, nth, nze = cmn.shape[0], len(uth), len(uze)
+        M, N = len(ms), len(ns_)
+
+        # Only worth it if the lattice of distinct values is small compared to
+        # summing over every mode at every point.
+        lattice = nus * nth * nze
+        cost_lattice = nus * (2 * M * N * nze + 4 * nth * M * nze)
+        cost_pointwise = 4 * npoints * nmodes
+        if lattice > 8 * npoints or cost_lattice > 0.5 * cost_pointwise:
+            return None
+
+        cos_mt = np.cos(np.outer(uth, ms))
+        sin_mt = np.sin(np.outer(uth, ms))
+        angle_z = np.outer(ns_ * self.nfp, uze)
+        cos_nz = np.cos(angle_z)
+        sin_nz = np.sin(angle_z)
+
+        crect = np.zeros((nus, M, N))
+        crect[:, m_idx, n_idx] = cmn
+
+        a_ = crect @ cos_nz  # (nus, M, nze)
+        b_ = crect @ sin_nz
+        if parity == "even":
+            # cos(m theta - n zeta) = cos(m theta) cos(n zeta)
+            #                       + sin(m theta) sin(n zeta)
+            lattice_vals = cos_mt @ a_ + sin_mt @ b_
         else:
-            output += padded_buffer[: len(inv)]
+            # sin(m theta - n zeta) = sin(m theta) cos(n zeta)
+            #                       - cos(m theta) sin(n zeta)
+            lattice_vals = sin_mt @ a_ - cos_mt @ b_
+        return np.ascontiguousarray(lattice_vals[inv, tinv, zinv])
 
-    def iterate_and_invert(self, func):
-        def _f(us, output, inv, start, end, offset):
-            length = len(inv)
-            if length > 1:
-                for im in range(start, end):
-                    output[im, :length] = func(im + offset, us)[inv]
+    def _mode_rectangle(self, first_mn, last_mn):
+        """
+        Index the modes ``[first_mn, last_mn)`` into a dense ``(m, n)``
+        rectangle, which is what makes partial summation possible. Boozer mode
+        tables are rectangular up to a missing half-row at ``m = 0``, so the
+        padding this introduces is negligible. Returns ``None`` if the toroidal
+        mode numbers are not multiples of ``nfp``, or if a mode is repeated, in
+        which case no such rectangle exists.
+        """
+        if not hasattr(self, "_mode_rect_cache"):
+            self._mode_rect_cache = {}
+        key = (first_mn, last_mn)
+        if key not in self._mode_rect_cache:
+            xm = self.xm_b[first_mn:last_mn]
+            xn = self.xn_b[first_mn:last_mn]
+            duplicated = len(np.unique(np.stack([xm, xn], axis=1), axis=0)) != len(xm)
+            if np.any(np.mod(xn, self.nfp) != 0) or duplicated:
+                self._mode_rect_cache[key] = None
             else:
-                for im in range(start, end):
-                    output[im] = func(im + offset, us)[inv]
+                m = np.rint(xm).astype(int)
+                n = np.rint(xn / self.nfp).astype(int)
+                ms = np.arange(m.min(), m.max() + 1)
+                ns_ = np.arange(n.min(), n.max() + 1)
+                self._mode_rect_cache[key] = (m - m.min(), n - n.min(), ms, ns_)
+        return self._mode_rect_cache[key]
 
-        return _f
-
-    def _compute_single_point(self, output, harmonics, inverse_fourier):
+    def _compute_single_point(self, output, coeffs, parity):
         """
         Fast path for single point evaluation - avoids unnecessary allocations
         """
@@ -3129,13 +3043,10 @@ class BoozerRadialInterpolant(BoozerMagneticField):
 
         # Create minimal arrays for single point computation
         us = np.array([s])
-        inv = np.array([0])
 
-        # Allocate minimal buffers
-        chunk_mn = np.zeros((len(self.xm_b), 1))
-
-        # Compute harmonics for the single point
-        harmonics(us, chunk_mn, inv, 0, len(self.xm_b), 0)
+        chunk_mn = align_and_pad(coeffs(us).reshape(-1))
+        xm = align_and_pad(self.xm_b)
+        xn = align_and_pad(self.xn_b)
 
         # Create minimal padded arrays
         padded_thetas = np.array([theta])
@@ -3144,12 +3055,16 @@ class BoozerRadialInterpolant(BoozerMagneticField):
         # Allocate minimal output buffer
         padded_buffer = np.zeros((1, 1))
 
-        # Use the inverse_fourier function properly
+        inverse_fourier = (
+            sopp.inverse_fourier_transform_even
+            if parity == "even"
+            else sopp.inverse_fourier_transform_odd
+        )
         inverse_fourier(
             padded_buffer,
-            chunk_mn,
-            self.xm_b,
-            self.xn_b,
+            chunk_mn.reshape(-1, 1),
+            xm,
+            xn,
             padded_thetas,
             padded_zetas,
             self.ntor,
@@ -3158,7 +3073,7 @@ class BoozerRadialInterpolant(BoozerMagneticField):
         )
 
         # Copy result to output
-        output[0] = padded_buffer[0, 0]
+        output[0] += padded_buffer[0, 0]
         return output
 
 
@@ -3821,11 +3736,9 @@ class ShearAlfvenWavesSuperposition(
 ):
     r"""
     Class representing a superposition of multiple Shear Alfvén Waves (SAWs).
-
-    This class models the superposition of multiple Shear Alfvén waves,
-    combining their scalar
-    potential `Phi`, vector potential `alpha`, and their respective derivatives
-    to represent a more
+    This class models the superposition of :class:`ShearAlfvenHarmonic` instances
+    in the same equilibrium field, combining their scalar potential `Phi`,
+    vector potential `alpha`, and their respective derivatives to represent a more
     complex wave structure in the equilibrium field `B0`.
 
     The superposition of waves is initialized with a base wave, which defines
@@ -3839,9 +3752,9 @@ class ShearAlfvenWavesSuperposition(
 
     Parameters
     ----------
-    SAWs : list of ShearAlfvenWave
-        A list of ShearAlfvenWave objects to be superposed. The first wave in
-        the list is used
+    SAWs : list of ShearAlfvenHarmonic
+        A list of ShearAlfvenHarmonic objects to be superposed. The first wave
+        in the list is used
         as the base wave and defines the reference `B0` field for the
         superposition. All other
         waves in the list must have the same `B0`.
@@ -3851,6 +3764,8 @@ class ShearAlfvenWavesSuperposition(
     TypeError
         If `SAWs` is not a list of `ShearAlfvenWave` objects.
         If the base wave is not provided or if the waves have different `B0` fields.
+    ValueError
+        If any wave is not a `ShearAlfvenHarmonic`.
 
     Examples
     --------

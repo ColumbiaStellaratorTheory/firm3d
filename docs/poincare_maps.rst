@@ -27,7 +27,7 @@ The ``TrappedPoincare`` class computes Poincaré maps for trapped particles that
 
 .. code-block:: python
 
-    from firm3d.field.trajectory_helpers import TrappedPoincare
+    from firm3d.trajectory_helpers import TrappedPoincare
     from firm3d.util.constants import (
         ALPHA_PARTICLE_MASS,
         ALPHA_PARTICLE_CHARGE,
@@ -57,8 +57,7 @@ The ``TrappedPoincare`` class computes Poincaré maps for trapped particles that
         ns_poinc=120,      # number of s initial conditions
         neta_poinc=5,      # number of eta initial conditions
         Nmaps=1000,        # number of return maps
-        reltol=1e-8,       # Relative tolerance
-        abstol=1e-8,       # Absolute tolerance
+        solver_options={"reltol": 1e-8, "abstol": 1e-8},
         tmax=1e-3,
     )
 
@@ -87,7 +86,7 @@ The ``PassingPoincare`` class computes Poincaré maps for passing particles in u
 
 .. code-block:: python
 
-    from firm3d.field.trajectory_helpers import PassingPoincare
+    from firm3d.trajectory_helpers import PassingPoincare
     from firm3d.util.constants import (
         ALPHA_PARTICLE_MASS,
         ALPHA_PARTICLE_CHARGE,
@@ -105,8 +104,7 @@ The ``PassingPoincare`` class computes Poincaré maps for passing particles in u
         ns_poinc=120,      # number of s initial conditions
         ntheta_poinc=1,    # number of theta initial conditions
         Nmaps=1000,        # number of return maps
-        reltol=1e-8,       # Relative tolerance
-        abstol=1e-8,       # Absolute tolerance
+        solver_options={"reltol": 1e-8, "abstol": 1e-8},
     )
 
     # Plot the Poincaré map
@@ -134,7 +132,8 @@ The ``PassingPerturbedPoincare`` class computes Poincaré maps for passing parti
 
 .. code-block:: python
 
-    from firm3d.field.trajectory_helpers import PassingPerturbedPoincare
+    from firm3d.trajectory_helpers import PassingPerturbedPoincare
+    from firm3d.field import ShearAlfvenHarmonic
     from firm3d.util.constants import (
         ALPHA_PARTICLE_MASS,
         ALPHA_PARTICLE_CHARGE,
@@ -144,7 +143,7 @@ The ``PassingPerturbedPoincare`` class computes Poincaré maps for passing parti
     # Create shear Alfvén wave perturbation
     Phihat = -1.50119e3
     saw = ShearAlfvenHarmonic(
-        Phihat, m=1, n=1, omega=136041, phase=0, B0=field
+        Phihat, Phim=1, Phin=1, omega=136041, phase=0, B0=field
     )
 
     # Point for evaluation of Eprime
@@ -164,8 +163,7 @@ The ``PassingPerturbedPoincare`` class computes Poincaré maps for passing parti
         ns_poinc=120,      # number of s initial conditions
         nchi_poinc=1,      # number of chi initial conditions
         Nmaps=1000,        # number of return maps
-        reltol=1e-8,       # Relative tolerance
-        abstol=1e-8,       # Absolute tolerance
+        solver_options={"reltol": 1e-8, "abstol": 1e-8},
     )
 
     # Plot the Poincaré map
@@ -194,7 +192,7 @@ All Poincaré map classes provide methods to access the computed data and create
     s_all, chis_all, etas_all, t_all = poinc.get_poincare_data()
 
     # Get Poincaré map data for passing particles (perturbed)
-    s_all, chis_all, etas_all, vpars_all, t_all = poinc.get_poincare_data()
+    s_all, chis_all, etas_all, vpars_all, t_all, DA_all, DA_times = poinc.get_poincare_data()
 
 **Return Values:**
 
@@ -204,6 +202,7 @@ All Poincaré map classes provide methods to access the computed data and create
 - **etas_all**: List of lists containing mapping angle η at each return (trapped/perturbed)
 - **vpars_all**: List of lists containing parallel velocity v_|| at each return (passing)
 - **t_all**: List of lists containing time at each return
+- **DA_all**, **DA_times** (perturbed passing only): perturbed vector potential parameter :math:`\alpha` and its evaluation times along each trajectory
 
 **Visualization:**
 
@@ -241,23 +240,30 @@ All classes support MPI parallelization for large-scale computations:
     )
 
 **Solver Options:**
-Tune ODE solver parameters for accuracy vs. speed:
+Solver parameters are not passed directly as constructor keyword arguments;
+they are collected in a ``solver_options`` dict, which is forwarded to the
+underlying ``trace_particles_boozer``/``trace_particles_boozer_perturbed``
+call. Tune them for accuracy vs. speed:
 
 .. code-block:: python
 
     # For adaptive solver (default)
     poinc = PassingPoincare(
         field, lam, sign_vpar, mass, charge, Ekin,
-        reltol=1e-8,    # relative tolerance
-        abstol=1e-8,    # absolute tolerance
+        solver_options={
+            "reltol": 1e-8,   # relative tolerance
+            "abstol": 1e-8,   # absolute tolerance
+        },
         # ... other parameters
     )
 
     # For symplectic solver
     poinc = PassingPoincare(
         field, lam, sign_vpar, mass, charge, Ekin,
-        solveSympl=True,  # Enable symplectic solver
-        dt=1e-8,         # Fixed step size
-        roottol=1e-10,   # Root finding tolerance
+        solver_options={
+            "ODE_solver": "symplectic",  # Enable symplectic solver
+            "dt": 1e-8,                  # Fixed step size
+            "roottol": 1e-10,            # Root finding tolerance
+        },
         # ... other parameters
     )

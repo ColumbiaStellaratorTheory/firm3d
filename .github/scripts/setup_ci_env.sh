@@ -22,6 +22,9 @@ module load cudatoolkit python cray-hdf5/1.14.3.7 cray-netcdf/4.9.2.1
 echo "Creating conda environment '$ENV_NAME' from nersc-python..."
 conda create -n "$ENV_NAME" --clone nersc-python -y
 
+echo "Installing Boost headers..."
+conda install -n "$ENV_NAME" -y -c conda-forge libboost-headers
+
 echo ""
 echo "Done. Environment '$ENV_NAME' is ready."
 echo "To activate, run: conda activate $ENV_NAME"

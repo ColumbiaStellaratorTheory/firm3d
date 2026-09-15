@@ -13,7 +13,7 @@ Stop when trajectory reaches a maximum value of normalized toroidal flux (e.g., 
 
 .. code-block:: python
 
-   from firm3d.field.trajectory_helpers import MaxToroidalFluxStoppingCriterion
+   from firm3d.field.tracing import MaxToroidalFluxStoppingCriterion
 
    # Stop when s >= 1.0 (plasma boundary)
    stopping_criteria = [MaxToroidalFluxStoppingCriterion(1.0)]
@@ -25,34 +25,10 @@ Stop when trajectory reaches a minimum value of normalized toroidal flux. When `
 
 .. code-block:: python
 
-   from firm3d.field.trajectory_helpers import MinToroidalFluxStoppingCriterion
+   from firm3d.field.tracing import MinToroidalFluxStoppingCriterion
 
    # Stop when s <= 0.001 (close to magnetic axis)
    stopping_criteria = [MinToroidalFluxStoppingCriterion(0.001)]
-
-ZetaStoppingCriterion
-~~~~~~~~~~~~~~~~~~~~~
-
-Stop when the toroidal angle reaches a given value (modulus :math:`2\pi`).
-
-.. code-block:: python
-
-   from firm3d.field.trajectory_helpers import ZetaStoppingCriterion
-
-   # Stop when zeta reaches pi/2 (mod 2*pi)
-   stopping_criteria = [ZetaStoppingCriterion(np.pi/2)]
-
-VparStoppingCriterion
-~~~~~~~~~~~~~~~~~~~~~
-
-Stop when the parallel velocity reaches a given value. For example, can be used to terminate tracing when a particle mirrors.
-
-.. code-block:: python
-
-   from firm3d.field.trajectory_helpers import VparStoppingCriterion
-
-   # Stop when v_parallel changes sign (mirroring)
-   stopping_criteria = [VparStoppingCriterion(0.0)]
 
 ToroidalTransitStoppingCriterion
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -61,7 +37,7 @@ Stop when the toroidal angle increases by an integer multiple of :math:`2\pi`. U
 
 .. code-block:: python
 
-   from firm3d.field.trajectory_helpers import ToroidalTransitStoppingCriterion
+   from firm3d.field.tracing import ToroidalTransitStoppingCriterion
 
    # Stop after 5 toroidal transits
    stopping_criteria = [ToroidalTransitStoppingCriterion(5)]
@@ -73,7 +49,7 @@ Stop when a number of iterations is reached. This is useful for terminating long
 
 .. code-block:: python
 
-   from firm3d.field.trajectory_helpers import IterationStoppingCriterion
+   from firm3d.field.tracing import IterationStoppingCriterion
 
    # Stop after 10000 integration steps
    stopping_criteria = [IterationStoppingCriterion(10000)]
@@ -85,10 +61,17 @@ Stop when the step size gets too small. When using adaptive timestepping, can av
 
 .. code-block:: python
 
-   from firm3d.field.trajectory_helpers import StepSizeStoppingCriterion
+   from firm3d.field.tracing import StepSizeStoppingCriterion
 
    # Stop when step size < 1e-10
    stopping_criteria = [StepSizeStoppingCriterion(1e-10)]
+
+.. warning::
+   The Python binding for ``StepSizeStoppingCriterion`` currently declares its
+   argument as a C++ ``double`` while the underlying class stores it as an
+   ``int``, so any fractional value (e.g. ``1e-10``) is silently truncated to
+   ``0`` and the criterion never triggers. This is a known bug, tracked
+   separately from this documentation.
 
 Usage Examples
 --------------
@@ -101,27 +84,30 @@ You can combine multiple stopping criteria to create robust integration conditio
 .. code-block:: python
 
    from firm3d.field.tracing import (
+       trace_particles_boozer,
        MaxToroidalFluxStoppingCriterion,
        MinToroidalFluxStoppingCriterion,
-       VparStoppingCriterion,
-       IterationStoppingCriterion
+       IterationStoppingCriterion,
    )
 
    # Combine multiple criteria
    stopping_criteria = [
        MaxToroidalFluxStoppingCriterion(1.0),    # Stop at boundary
        MinToroidalFluxStoppingCriterion(0.001),  # Stop near axis
-       VparStoppingCriterion(0.0),               # Stop at mirror points
        IterationStoppingCriterion(50000)         # Stop after max iterations
    ]
 
-   # Use in tracing
+   # Use in tracing. Stopping on a parallel-velocity crossing (e.g. mirror
+   # points) is not a StoppingCriterion subclass -- pass the target value(s)
+   # via `vpars` and set `vpars_stop=True` instead.
    res_tys, res_hits = trace_particles_boozer(
        field=field,
        stz_inits=points,
-       parallel_speeds=vpars,
+       parallel_speeds=parallel_speeds,
        tmax=1e-3,
-       stopping_criteria=stopping_criteria
+       stopping_criteria=stopping_criteria,
+       vpars=[0.0],       # stop when v_parallel crosses zero (mirroring)
+       vpars_stop=True,
    )
 
 Interpreting Results
@@ -132,11 +118,13 @@ When stopping criteria are hit, the information is returned in the ``res_hits`` 
 - **time**: Time when the criterion was hit
 - **idx**: Index indicating which criterion was hit
 
-  - If ``idx >= 0`` and ``idx < len(zetas)``: the ``zetas[idx]`` plane was hit
-  - If ``len(vpars)+len(zetas)>idx>=len(zetas)``: the ``vpars[idx-len(zetas)]`` plane was hit
-  - If ``idx >= len(vpars)+len(zetas)``: the ``thetas[idx-len(vpars)-len(zetas)]`` plane was hit
+  - If ``idx >= 0`` and ``idx < len(phases)``: the ``phases[idx]`` plane was hit,
+    i.e. ``n_zetas[idx]*zeta + m_thetas[idx]*theta - omegas[idx]*t`` crossed
+    ``phases[idx]``
+  - If ``len(vpars)+len(phases) > idx >= len(phases)``: the
+    ``vpars[idx-len(phases)]`` value was crossed
   - If ``idx < 0``: ``stopping_criteria[int(-idx)-1]`` was hit
-- **state**: The state vector ``[t, s, theta, zeta, v_parallel]``
+- **state**: The state vector ``[s, theta, zeta, v_parallel]``
 
 .. code-block:: python
 

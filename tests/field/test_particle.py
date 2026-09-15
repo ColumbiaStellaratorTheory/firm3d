@@ -13,6 +13,7 @@ from firm3d.field.boozermagneticfield import (
 from firm3d.field.tracing import (
     MaxToroidalFluxStoppingCriterion,
     MinToroidalFluxStoppingCriterion,
+    StepSizeStoppingCriterion,
     ToroidalTransitStoppingCriterion,
     trace_particles_boozer,
 )
@@ -697,6 +698,56 @@ class BoozerGuidingCenterTracingTesting(unittest.TestCase):
             for i in range(Nparticles):
                 assert np.all(gc_tys[i][0:-1, 1] > 0.4)
                 assert np.all(gc_tys[i][0:-1, 1] < 0.6)
+
+    def test_step_size_stopping_criterion(self):
+        """
+        Regression test for a bug where the pybind11 binding for
+        StepSizeStoppingCriterion accepted a Python float but the
+        underlying C++ class stored it as an int, silently truncating any
+        fractional threshold (e.g. the documented example, 1e-10) to 0.
+        Since the actual adaptive/symplectic step size is always a tiny
+        fraction of a second, `dt < 0` is never true, so the criterion
+        never triggered.
+
+        Using a threshold (0.5) many orders of magnitude larger than any
+        realistic step size makes the correct behavior unambiguous: if the
+        threshold is stored correctly, the criterion should be satisfied
+        on (near) the very first step, terminating the trajectory far
+        short of `tmax`. Under the old truncation bug, the threshold
+        becomes 0 and the trajectory runs all the way to `tmax` instead.
+        """
+        etabar = 1.2 / 1.2
+        B0 = 1.0
+        G0 = 1.1
+        psi0 = 0.8
+        iota0 = 1.0
+        bsh = BoozerAnalytic(etabar, B0, 4, G0, psi0, iota0)
+
+        m = PROTON_MASS
+        q = ELEMENTARY_CHARGE
+        tmax = 1e-4
+        Ekin = 100000.0 * ONE_EV
+        vpar = np.sqrt(2 * Ekin / m)
+
+        stz_inits = np.array([[0.5, 0.0, 0.0]])
+        vpar_inits = np.array([vpar])
+
+        gc_tys, _ = trace_particles_boozer(
+            bsh,
+            stz_inits,
+            vpar_inits,
+            tmax=tmax,
+            mass=m,
+            charge=q,
+            Ekin=Ekin,
+            mode="gc_vac",
+            stopping_criteria=[StepSizeStoppingCriterion(0.5)],
+            tol=1e-10,
+            forget_exact_path=False,
+        )
+
+        final_time = gc_tys[0][-1, 0]
+        self.assertLess(final_time, tmax / 10)
 
     def test_compute_resonances(self):
         """

@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <iomanip>
 #include <boost/math/tools/roots.hpp>
+#include <boost/math/tools/toms748_solve.hpp>
 #include <boost/numeric/odeint.hpp>
 
 using std::shared_ptr;

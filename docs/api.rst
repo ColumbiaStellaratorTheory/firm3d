@@ -19,7 +19,12 @@ Magnetic Field Classes
 Trajectory Integration
 ----------------------
 
-.. automodule:: firm3d.field.trajectory_helpers
+.. automodule:: firm3d.field.tracing
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: firm3d.trajectory_helpers
    :members:
    :undoc-members:
    :show-inheritance:
@@ -27,11 +32,10 @@ Trajectory Integration
 Stopping Criteria
 -----------------
 
-# Note: This module may not exist yet in the current codebase
-# .. automodule:: firm3d.field.stopping_criteria
-#    :members:
-#    :undoc-members:
-#    :show-inheritance:
+Stopping criteria (``MaxToroidalFluxStoppingCriterion``,
+``MinToroidalFluxStoppingCriterion``, ``ToroidalTransitStoppingCriterion``,
+``IterationStoppingCriterion``, ``StepSizeStoppingCriterion``) are defined in
+``firm3d.field.tracing`` and documented above.
 
 Shear Alfvén Wave Classes
 -------------------------
@@ -95,7 +99,7 @@ Class Hierarchy
 .. inheritance-diagram:: firm3d.field.boozermagneticfield
    :parts: 1
 
-.. inheritance-diagram:: firm3d.field.trajectory_helpers
+.. inheritance-diagram:: firm3d.trajectory_helpers
    :parts: 1
 
 # .. inheritance-diagram:: firm3d.field.stopping_criteria
@@ -132,8 +136,6 @@ Class Hierarchy
 #    # firm3d.field.stopping_criteria.StoppingCriterion
 #    # firm3d.field.stopping_criteria.MaxToroidalFluxStoppingCriterion
 #    # firm3d.field.stopping_criteria.MinToroidalFluxStoppingCriterion
-#    # firm3d.field.stopping_criteria.ZetaStoppingCriterion
-#    # firm3d.field.stopping_criteria.VparStoppingCriterion
 #    # firm3d.field.stopping_criteria.ToroidalTransitStoppingCriterion
 #    # firm3d.field.stopping_criteria.IterationStoppingCriterion
 #    # firm3d.field.stopping_criteria.StepSizeStoppingCriterion

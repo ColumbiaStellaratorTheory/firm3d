@@ -14,7 +14,7 @@ if(CMAKE_CUDA_COMPILER)
     set(CUDA_TARGETS  src/firm3dpp/cuda_kernel.cu src/firm3dpp/cuda_wrapper.cpp)
     message(STATUS "CUDA found. GPU bindings will be compiled.")
 else()
-    set(CUDA_TARGETS) 
+    set(CUDA_TARGETS)
     message(STATUS "CUDA not found. GPU bindings will be skipped.")
 endif()
 
@@ -56,7 +56,7 @@ if(GIT_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
     option(GIT_SUBMODULE "Check submodules during build" ON)
     if(GIT_SUBMODULE)
         message(STATUS "Submodule update")
-        execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init --recursive
+        execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init
                         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
                         RESULT_VARIABLE GIT_SUBMOD_RESULT)
         if(NOT GIT_SUBMOD_RESULT EQUAL "0")
@@ -132,7 +132,86 @@ else()
     set(USE_MPI FALSE)
 endif()
 
-find_package(Boost 1.76.0)
+set(BOOST_MINIMUM_VERSION 1.76.0)
+set(_boost_user_include_dir "${Boost_INCLUDE_DIR}")
+
+# Preferred route: an install that ships BoostConfig.cmake.
+find_package(Boost ${BOOST_MINIMUM_VERSION} QUIET)
+if(Boost_FOUND AND NOT Boost_INCLUDE_DIRS)
+    message(STATUS "find_package(Boost) provided no include dirs. Searching for headers instead.")
+    set(Boost_FOUND FALSE)
+elseif(Boost_FOUND)
+    message(STATUS "Boost located by find_package.")
+endif()
+
+# CMake deprecated FindBoost in 3.30 (CMP0167) and is retiring it, after which
+# the call above only succeeds in CONFIG mode against an install that ships
+# BoostConfig.cmake. Header-only installs (conda, pip, some system packages)
+# ship no such config, and where FindBoost still runs it may see nothing but a
+# too-old system Boost. Either way the download below would be triggered on
+# every fresh configure, so locate the headers directly instead.
+if(NOT Boost_FOUND)
+    unset(Boost_INCLUDE_DIR CACHE)
+    set(_boost_hints)
+    if(_boost_user_include_dir)
+        list(APPEND _boost_hints "${_boost_user_include_dir}")
+    endif()
+    foreach(_boost_root "${BOOST_ROOT}" "${BOOSTROOT}" "$ENV{BOOST_ROOT}"
+                        "$ENV{BOOSTROOT}" "$ENV{CONDA_PREFIX}")
+        if(_boost_root)
+            list(APPEND _boost_hints "${_boost_root}/include" "${_boost_root}")
+        endif()
+    endforeach()
+    if(Python_EXECUTABLE)
+        get_filename_component(_python_prefix "${Python_EXECUTABLE}" DIRECTORY)
+        get_filename_component(_python_prefix "${_python_prefix}" DIRECTORY)
+        list(APPEND _boost_hints "${_python_prefix}/include")
+    endif()
+
+    find_path(Boost_INCLUDE_DIR
+        NAMES boost/version.hpp
+        HINTS ${_boost_hints}
+        PATHS /usr/local/include /usr/include /opt/local/include /opt/homebrew/include
+        DOC "Directory holding the Boost header tree (the parent of boost/)")
+
+    set(_boost_version_string)
+    if(Boost_INCLUDE_DIR AND EXISTS "${Boost_INCLUDE_DIR}/boost/version.hpp")
+        file(STRINGS "${Boost_INCLUDE_DIR}/boost/version.hpp" _boost_version_line
+             REGEX "^#define[ \t]+BOOST_VERSION[ \t]+[0-9]+")
+        if(_boost_version_line MATCHES "BOOST_VERSION[ \t]+([0-9]+)")
+            # BOOST_VERSION is encoded as major * 100000 + minor * 100 + patch.
+            math(EXPR _boost_major "${CMAKE_MATCH_1} / 100000")
+            math(EXPR _boost_minor "${CMAKE_MATCH_1} / 100 % 1000")
+            math(EXPR _boost_patch "${CMAKE_MATCH_1} % 100")
+            set(_boost_version_string "${_boost_major}.${_boost_minor}.${_boost_patch}")
+        endif()
+    endif()
+
+    # Minimal installs sometimes ship a partial tree, so check that the headers
+    # firm3d actually includes are present before trusting the discovery.
+    set(_boost_missing_headers)
+    foreach(_header boost/format.hpp boost/math/tools/roots.hpp boost/numeric/odeint.hpp)
+        if(NOT EXISTS "${Boost_INCLUDE_DIR}/${_header}")
+            list(APPEND _boost_missing_headers "${_header}")
+        endif()
+    endforeach()
+
+    if(NOT Boost_INCLUDE_DIR OR NOT EXISTS "${Boost_INCLUDE_DIR}/boost/version.hpp")
+        message(STATUS "No Boost headers found in BOOST_ROOT, CMAKE_PREFIX_PATH, the Python prefix or the system paths.")
+    elseif(NOT _boost_version_string)
+        message(STATUS "Could not read a Boost version from ${Boost_INCLUDE_DIR}/boost/version.hpp.")
+    elseif(_boost_version_string VERSION_LESS ${BOOST_MINIMUM_VERSION})
+        message(STATUS "Boost ${_boost_version_string} in ${Boost_INCLUDE_DIR} is older than the required ${BOOST_MINIMUM_VERSION}.")
+    elseif(_boost_missing_headers)
+        message(STATUS "Boost headers in ${Boost_INCLUDE_DIR} are incomplete, missing ${_boost_missing_headers}.")
+    else()
+        set(Boost_FOUND TRUE)
+        set(Boost_VERSION_STRING ${_boost_version_string})
+        set(Boost_INCLUDE_DIRS ${Boost_INCLUDE_DIR})
+        message(STATUS "Boost located by header search (find_package found no usable package).")
+    endif()
+endif()
+
 if(Boost_FOUND)
     message(STATUS "Boost version is ${Boost_VERSION_STRING}")
     message(STATUS "Boost include dirs are ${Boost_INCLUDE_DIRS}")

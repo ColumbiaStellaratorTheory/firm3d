@@ -9,7 +9,7 @@ Overview
 An important attribute of ``BoozerMagneticField`` classes is ``field_type``, which can be:
 
 - ``vac`` (vacuum field)
-- ``no_k`` (does not retain the radial covariant component)
+- ``nok`` (does not retain the radial covariant component)
 - Empty string (no assumptions made)
 
 By default, the ``field_type`` will determine the ``mode`` used for guiding center tracing: ``gc_vac``, ``gc_noK``, or ``gc``.
@@ -29,9 +29,9 @@ The covariant components of equilibrium field are:
 
 .. math::
 
-   G(s) = G_0 + \sqrt{2s\psi_0/\overline{B}} G_1
+   G(s) = G_0 + s G_1
 
-   I(s) = I_0 + \sqrt{2s\psi_0/\overline{B}} I_1
+   I(s) = I_0 + s I_1
 
    K(s,\theta,\zeta) = \sqrt{2s\psi_0/\overline{B}} K_1 \sin(\theta - N \zeta)
 
@@ -39,9 +39,9 @@ And the rotational transform is:
 
 .. math::
 
-   \iota(s) = \iota_0
+   \iota(s) = \iota_0 + s \iota_1
 
-While formally :math:`I_0 = I_1 = G_1 = K_1 = 0`, these terms have been included in order to test the guiding center equations at finite beta.
+While formally :math:`I_0 = I_1 = G_1 = K_1 = \iota_1 = 0`, these terms have been included in order to test the guiding center equations at finite beta.
 
 Usage Example
 ~~~~~~~~~~~~~
@@ -52,18 +52,19 @@ Usage Example
 
    # Create an analytic Boozer field
    field = BoozerAnalytic(
+       etabar=0.1,
        B0=1.0,
-       eta_bar=0.1,
        N=3,
-       B0z=0.01,
-       m=2,
-       n=1,
        G0=1.0,
-       G1=0.0,
+       psi0=0.1,
+       iota0=0.5,
        I0=0.0,
+       G1=0.0,
        I1=0.0,
        K1=0.0,
-       iota0=0.5
+       B0z=[0.01],
+       m=[2],
+       n=[1],
    )
 
 BoozerRadialInterpolant
@@ -73,7 +74,7 @@ The magnetic field can be computed at any point in Boozer coordinates using radi
 
 If given a ``VMEC`` output file, performs a Boozer coordinate transformation using ``booz_xform``. If given a ``booz_xform`` output file, the Boozer transformation must be performed with all surfaces on the VMEC half grid, and with ``phip``, ``chi``, ``pres``, and ``phi`` saved in the file.
 
-Field evaluations are parallelized over the number of Fourier harmonics over CPUs, given the communicator ``comm``. In addition, the evaluations are parallelized over threads with OpenMP. Because the guiding center tracing routines are also parallelized over CPUs with MPI, we don't recommend passing ``comm`` to ``BoozerRadialInterpolant`` if it is being passed to a tracing routine.
+The one-time setup (computing Fourier coefficients of ``K`` and building splines) is parallelized over evaluation-grid points across CPUs, given the communicator ``comm``, with the resulting splines then broadcast to all ranks. Field evaluations themselves are parallelized over points with OpenMP. Because the guiding center tracing routines are also parallelized over CPUs with MPI, we don't recommend passing ``comm`` to ``BoozerRadialInterpolant`` if it is being passed to a tracing routine.
 
 .. note::
    For most use cases, it is recommended to use ``InterpolatedBoozerField.from_booz_xform()`` instead of creating a ``BoozerRadialInterpolant``. The ``from_booz_xform()`` method provides a more convenient interface (through the ``BoozerSplineField`` class) and is the preferred approach in most examples.
@@ -117,7 +118,7 @@ Key features:
 
 - Interpolates on the VMEC grid with user-specified angular resolution
 - Supports quasisymmetry enforcement through ``helicity_M`` and ``helicity_N`` parameters
-- Can enforce vacuum field assumptions or exclude the K component
+- Can enforce vacuum field assumptions or exclude the K component; note that ``no_K`` defaults to ``True`` (unlike ``BoozerRadialInterpolant``, where it defaults to ``False``), so the K component is excluded unless ``no_K=False`` is passed explicitly
 - Supports parallel computation via MPI communicator
 
 Usage Example
@@ -175,7 +176,7 @@ InterpolatedBoozerField
 
 This field interpolates a magnetic field on a regular grid in :math:`(s,\theta,\zeta)`. This resulting interpolant can then be evaluated very quickly inside the tracing loop.
 
-The recommended way to create an ``InterpolatedBoozerField`` from a ``booz_xform`` output file is using the ``from_booz_xform`` class method, which automatically handles the Boozer coordinate transformation and interpolation setup.
+The recommended way to create an ``InterpolatedBoozerField`` from a ``booz_xform`` output file is using the ``from_booz_xform`` class method, which automatically handles the Boozer coordinate transformation and interpolation setup. Note that ``from_booz_xform`` also defaults to ``no_K=True``, excluding the K component unless ``no_K=False`` is passed explicitly.
 
 Usage Example (Recommended)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -244,7 +245,7 @@ All magnetic field classes provide methods to evaluate the field at given points
    field.set_points(points)
 
    # Now evaluate field quantities
-   B = field.B()  # magnetic field magnitude
+   B = field.modB()  # magnetic field magnitude
    G = field.G()  # G component
    I = field.I()  # I component
    K = field.K()  # K component
@@ -252,4 +253,4 @@ All magnetic field classes provide methods to evaluate the field at given points
    # For single point evaluation
    single_point = np.array([[0.5, 0.0, 0.0]])  # shape (1, 3)
    field.set_points(single_point)
-   B_single = field.B()[0]  # get first (and only) value
+   B_single = field.modB()[0]  # get first (and only) value

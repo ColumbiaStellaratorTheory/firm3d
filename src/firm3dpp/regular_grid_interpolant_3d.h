@@ -1,8 +1,7 @@
 #pragma once
 
 #include "simdhelpers.h"
-#include <unordered_map>
-#include <map>  
+#include <map>
 #include <algorithm>
 #include <functional>
 #include <iostream>
@@ -102,12 +101,18 @@ class RegularGridInterpolant3D {
         // location of the mesh nodes in [xmin, xmax], [ymin, ymax], and [zmin, zmax]. superset of xmesh, ymesh, zmesh
         // has size nx*degree + 1, ny*degree + 1, and nz*degree + 1 respectively
         Vec xdof, ydof, zdof;
-        // subset of the tensor product of the dof locations. if none of the dofs are skipped, these all have size
-        // (nx*degree + 1) * (ny*degree + 1) * (nz*degree + 1), but now they have size dofs_to_keep
-        Vec xdoftensor_reduced, ydoftensor_reduced, zdoftensor_reduced;
 
-        Vec vals; // contains the values of the function to be interpolated at the dofs, of size dofs_to_keep * value_size
-        std::unordered_map<int, AlignedPaddedVec> all_local_vals_map; // maps each cell to an array of size (degree+1)**3 * padded_value_size
+        // dof-ordered function values, of size dofs_to_keep * value_size.
+        // Transient: freed once the per-cell storage below is built from it,
+        // rebuilt on demand by get_interpolant_data().
+        Vec vals;
+        // Evaluation storage: one contiguous block of (degree+1)^3 * value_size
+        // values per kept cell (dofs in idx_dof_local order, values contiguous
+        // per dof). cell_offsets[cell] is the block's offset, or -1 for skipped
+        // cells; it is sized nx*ny*nz from construction and evaluate_inplace()
+        // keeps cell indices in range, so lookups index it directly.
+        Vec local_vals_flat;
+        std::vector<int64_t> cell_offsets;
         std::vector<bool> skip_cell; // whether to skip each cell or not
         // since we are skipping some dofs, we need mappings into the list of
         // reduced dofs, e.g. if we skip dofs 3, then reduced to full would
@@ -115,35 +120,49 @@ class RegularGridInterpolant3D {
         std::vector<uint32_t> reduced_to_full_map, full_to_reduced_map;
 
         uint32_t cells_to_skip, cells_to_keep, dofs_to_skip, dofs_to_keep; // which cells and dofs we skip and keep
-        int local_vals_size;
-        Vec pkxs, pkys, pkzs;
+        int local_vals_size; // length of each cell's block in local_vals_flat
 
-        static const int simdcount = xsimd::simd_type<double>::size; // vector width for simd instructions
-        int padded_value_size; // smallest multiple of simdcount that is larger than value_size
+        static const int MAX_NODES = 16; // upper bound on degree+1, so basis function values fit in stack buffers
 
-        inline int idx_dof(int i, int j, int k){
+        inline int idx_dof(int i, int j, int k) const {
             int degree = rule.degree;
             return i*(ny*degree+1)*(nz*degree+1) + j*(nz*degree+1) + k;
         }
 
-        inline int idx_cell(int i, int j, int k){
+        inline int idx_cell(int i, int j, int k) const {
             return i*ny*nz + j*nz + k;
         }
 
-        inline int idx_mesh(int i, int j, int k){
+        inline int idx_mesh(int i, int j, int k) const {
             return i*(ny+1)*(nz+1) + j*(nz+1) + k;
         }
 
-        inline int idx_dof_local(int i, int j, int k){
+        inline int idx_dof_local(int i, int j, int k) const {
             int degree = rule.degree;
             return i*(degree+1)*(degree+1) + j*(degree+1) + k;
         }
 
-        int locate_unsafe(double x, double y, double z);
         void evaluate_inplace(double x, double y, double z, double* res);
-        void evaluate_inplace(double x, double *res);
         void evaluate_local(double x, double y, double z, int cell_idx, double *res);
-        void evaluate_local(double x, int cell_idx, double *res);
+        void build_local_vals(); // build local_vals_flat/cell_offsets from vals, then free vals
+        Vec reconstruct_vals() const; // rebuild the dof-ordered vals array from local_vals_flat
+
+        // Fill xsub/ysub/zsub (each of size last-first) with the coordinates
+        // of the reduced dofs [first, last). Computed on the fly from the 1d
+        // dof arrays rather than stored: the full tensor-product coordinate
+        // arrays would triple the interpolant's persistent memory footprint.
+        void dof_coords(uint32_t first, uint32_t last, Vec& xsub, Vec& ysub, Vec& zsub) const {
+            int degree = rule.degree;
+            int nyd = ny*degree+1, nzd = nz*degree+1;
+            for (uint32_t idx = first; idx < last; ++idx) {
+                uint32_t full = reduced_to_full_map[idx];
+                uint32_t i = full / (nyd*nzd);
+                uint32_t rem = full % (nyd*nzd);
+                xsub[idx-first] = xdof[i];
+                ysub[idx-first] = ydof[rem / nzd];
+                zsub[idx-first] = zdof[rem % nzd];
+            }
+        }
 
     public:
 
@@ -155,9 +174,8 @@ class RegularGridInterpolant3D {
             value_size(value_size), out_of_bounds_ok(out_of_bounds_ok)
         {
             int degree = rule.degree;
-            pkxs = Vec(degree+1, 0.);
-            pkys = Vec(degree+1, 0.);
-            pkzs = Vec(degree+1, 0.);
+            if(degree + 1 > MAX_NODES)
+                throw std::invalid_argument("Interpolation degree too large: at most degree 15 is supported");
             hx = (xmax-xmin)/nx;
             hy = (ymax-ymin)/ny;
             hz = (zmax-zmin)/nz;
@@ -228,20 +246,6 @@ class RegularGridInterpolant3D {
                 }
             }
             uint32_t n =  (nx*degree+1)*(ny*degree+1)*(nz*degree+1);
-            // turn these into a tensor product grid
-            Vec xdoftensor(n, 0.);
-            Vec ydoftensor(n, 0.);
-            Vec zdoftensor(n, 0.);
-            for (int i = 0; i <= nx*degree; ++i) {
-                for (int j = 0; j <= ny*degree; ++j) {
-                    for (int k = 0; k <= nz*degree; ++k) {
-                        uint32_t offset = idx_dof(i, j, k);
-                        xdoftensor[offset] = xdof[i];
-                        ydoftensor[offset] = ydof[j];
-                        zdoftensor[offset] = zdof[k];
-                    }
-                }
-            }
             // We need to figure out which of these dofs we keep, and which
             // to discard.  To do this, we loop over the cells, and for each
             // cell that shouldn't be skipped, we mark all dofs in that cell.
@@ -282,21 +286,10 @@ class RegularGridInterpolant3D {
                 }
             }
 
-            // build the reduced list of interpolation points
-            xdoftensor_reduced = Vec(dofs_to_keep, 0.);
-            ydoftensor_reduced = Vec(dofs_to_keep, 0.);
-            zdoftensor_reduced = Vec(dofs_to_keep, 0.);
-            for (long i = 0; i < dofs_to_keep; ++i) {
-                xdoftensor_reduced[i] = xdoftensor[reduced_to_full_map[i]];
-                ydoftensor_reduced[i] = ydoftensor[reduced_to_full_map[i]];
-                zdoftensor_reduced[i] = zdoftensor[reduced_to_full_map[i]];
-            }
-            vals = Vec(dofs_to_keep * value_size, 0.);
-
-            // round up value_size to nearest multiple of simdcount
-            padded_value_size = (value_size + simdcount) - (value_size % simdcount);
-            int nnodes = (nx*degree+1)*(ny*degree+1)*(nz*degree+1);
-            local_vals_size = (degree+1)*(degree+1)*(degree+1)*padded_value_size;
+            // each cell's block holds (degree+1)^3 dofs with value_size
+            // values per dof; the scalar kernels need no padding or alignment
+            local_vals_size = (degree+1)*(degree+1)*(degree+1)*value_size;
+            cell_offsets.assign((size_t)nx*ny*nz, -1);
         }
         RegularGridInterpolant3D(InterpolationRule rule, RangeTriplet xrange, RangeTriplet yrange, RangeTriplet zrange, int value_size, bool out_of_bounds_ok) :
             RegularGridInterpolant3D(rule, xrange, yrange, zrange, value_size, out_of_bounds_ok, [](Vec x, Vec y, Vec z){ return std::vector<bool>(x.size(), false); })
@@ -309,14 +302,14 @@ class RegularGridInterpolant3D {
 
         Vec evaluate(double x, double y, double z); // evaluate the interpolant at one location
         void evaluate_batch(Array& xyz, Array& fxyz); // evluate the interpolant at multiple locations
-        void evaluate_batch_1D(Array &xyz, Array &fxyz);
 
         std::pair<double, double> estimate_error(std::function<Vec(Vec, Vec, Vec)> &f, int samples);
-        
+
         // Serialization for InterpolatedBoozerField save/load.
         // get_interpolant_data(): exports vals array and grid params for JSON.
-        // set_interpolant_data(): restores vals and rebuilds all_local_vals_map
-        //                         (the cell-indexed lookup table for evaluation).
+        // set_interpolant_data(): restores vals and rebuilds the per-cell
+        //                         storage (local_vals_flat/cell_offsets) used
+        //                         for evaluation.
         std::map<std::string, std::vector<double>> get_interpolant_data() const;
         void set_interpolant_data(const std::map<std::string, std::vector<double>>& data);
 };

@@ -10,7 +10,10 @@ If ``axis=0``, the trajectory will be integrated in standard Boozer coordinates 
 
 .. code-block:: python
 
-   from firm3d.field.trajectory_helpers import MinToroidalFluxStoppingCriterion
+   from firm3d.field.tracing import (
+       MinToroidalFluxStoppingCriterion,
+       MaxToroidalFluxStoppingCriterion,
+   )
 
    # Use standard Boozer coordinates
    res_tys, res_hits = trace_particles_boozer(
@@ -25,7 +28,7 @@ If ``axis=0``, the trajectory will be integrated in standard Boozer coordinates 
 Pseudo-Cartesian Coordinates (axis=1)
 -------------------------------------
 
-If ``axis=1``, the trajectory will be integrated in the pseudo-Cartesian coordinates :math:`(\sqrt{s}\cos(\theta),\sqrt{s}\sin(\theta),\zeta)`, but all trajectory information will be saved in the standard Boozer coordinates :math:`(s,\theta,\zeta)`. This option prevents particles from passing to :math:`s < 0`. Because the equations of motion are mapped from :math:`(s,\theta,\zeta)` to :math:`(\sqrt{s}\cos(\theta),\sqrt{s},\sin(\theta),\zeta)`, a division by :math:`\sqrt{s}` is performed. Thus this option may be ill-behaved near the axis.
+If ``axis=1``, the trajectory will be integrated in the pseudo-Cartesian coordinates :math:`(\sqrt{s}\cos(\theta),\sqrt{s}\sin(\theta),\zeta)`, but all trajectory information will be saved in the standard Boozer coordinates :math:`(s,\theta,\zeta)`. This option prevents particles from passing to :math:`s < 0`. Because the equations of motion are mapped from :math:`(s,\theta,\zeta)` to :math:`(\sqrt{s}\cos(\theta),\sqrt{s}\sin(\theta),\zeta)`, a division by :math:`\sqrt{s}` is performed. Thus this option may be ill-behaved near the axis.
 
 .. code-block:: python
 

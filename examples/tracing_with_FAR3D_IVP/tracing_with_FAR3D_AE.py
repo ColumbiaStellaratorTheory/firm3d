@@ -23,8 +23,8 @@ from firm3d.util.constants import (
 from firm3d.util.functions import in_github_actions, proc0_print, setup_logging, sigmav
 from firm3d.util.mpi import comm_size, comm_world, verbose
 
-resolution = 5  # Resolution for field interpolation
-nParticles = 5  # Number of particles to trace
+resolution = 10 if in_github_actions else 48  # Resolution for field interpolation
+nParticles = 50 if in_github_actions else 5000  # Number of particles to trace
 reltol = 1e-4 if in_github_actions else 1e-8  # Relative tolerance for the ODE solver
 abstol = 1e-4 if in_github_actions else 1e-8  # Absolute tolerance for the ODE solver
 order = 3  # Order for radial interpolation
