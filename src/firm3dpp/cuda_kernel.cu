@@ -563,7 +563,9 @@ __device__ void calc_derivs<RHS::GC_BoozerNoKSAW>(double* derivs, int deriv_id, 
                       + dmodBdpsi*G*fak1)/denom;
         derivs[(6*deriv_id + 0)*PARTICLES_PER_BLOCK + threadIdx.x] = sdot*cos(theta) - s * sin(theta) * tdot;
         derivs[(6*deriv_id + 1)*PARTICLES_PER_BLOCK + threadIdx.x] = sdot*sin(theta) + s*cos(theta)*tdot;
-        derivs[(6*deriv_id + 2)*PARTICLES_PER_BLOCK + threadIdx.x] = v_par*modB/G;
+        double zetadot = (-I*(dmodBdpsi*mass_d*mu_val + dphidpsi*charge_d) + modB*charge_d*v_par*(1 + dalphadpsi*I + alpha*dIdpsi) \
+                      + mass_d*v_par*v_par/modB * (modB*dIdpsi - dmodBdpsi*I))/denom;
+        derivs[(6*deriv_id + 2)*PARTICLES_PER_BLOCK + threadIdx.x] = zetadot;
         derivs[(6*deriv_id + 3)*PARTICLES_PER_BLOCK + threadIdx.x] = (modB*charge_d/mass_d * ( -mass_d*mu_val * (dmodBdzeta*(1 + dalphadpsi*I + alpha*dIdpsi) \
                       + dmodBdpsi*(dalphadtheta*G - dalphadzeta*I) + dmodBdtheta*(iota - alpha*dGdpsi - dalphadpsi*G)) \
                       - charge_d*(alphadot*(G + I*(iota - alpha*dGdpsi) + alpha*G*dIdpsi) \
@@ -912,7 +914,7 @@ __global__ void particle_trace_kernel(double* out, double* init_pos, double* qua
         for(int i=0; i<4; ++i){
             state[i*PARTICLES_PER_BLOCK + threadIdx.x] = init_pos[4*idx + i];
         }
-        dt[threadIdx.x] = dt_in[threadIdx.x]; // copy input dt
+        dt[threadIdx.x] = dt_in[idx]; // copy input dt
     }
     __syncthreads();
 
@@ -1004,16 +1006,18 @@ vector<double> gpu_tracing(py::array_t<double> quad_pts, py::array_t<double> x1_
     gpuErrchk(cudaMemcpyToSymbol(nparticles_d, &nparticles, sizeof(int)));
 
     double init_pos[4*nparticles];
-    // load initial conditions
+    // load initial conditions; Boozer (s, theta) -> (s cos theta, s sin theta)
+    // without modifying the caller's array
+    constexpr bool boozer = map_rhs_to_coord<id>() == CoordSys::Boozer;
     for(int i=0; i<nparticles; ++i){
         int start = 3*i;
 
         double s = loc_init_arr[start];
         double theta = loc_init_arr[start+1];
-        
-        for(int j=0; j<3; j++){
-            init_pos[4*i + j] = loc_init_arr[start + j];
-        }
+
+        init_pos[4*i] = boozer ? s*cos(theta) : s;
+        init_pos[4*i + 1] = boozer ? s*sin(theta) : theta;
+        init_pos[4*i + 2] = loc_init_arr[start + 2];
         init_pos[4*i + 3] = vtang_arr[i];
     }
    
@@ -1069,16 +1073,6 @@ extern "C" vector<double> boozer_gpu_tracing(py::array_t<double> quad_pts, py::a
         py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> stz_init, double m, double q, double vtotal, py::array_t<double> vtang, 
         double tmax, double tol, py::array_t<double> dt_in, double psi0, int nparticles, bool vacuum=false){
 
-    //  read data in from python
-    double* stz_init_arr = create_array(stz_init);
-    
-    for(int i=0; i<nparticles; ++i){
-        double s = stz_init_arr[3*i];
-        double theta = stz_init_arr[3*i+1];
-
-        stz_init_arr[3*i] = s*cos(theta);
-        stz_init_arr[3*i+1] = s*sin(theta);
-    }
     gpuErrchk(cudaMemcpyToSymbol(psi0_d, &psi0, sizeof(double)));
 
     std::vector<double> results;
@@ -1105,7 +1099,6 @@ extern "C" vector<double> boozer_saw_gpu_tracing(py::array_t<double> quad_pts, p
         py::array_t<double> stz_init, double m, double q, double vtotal, py::array_t<double> vtang, double tmax, double tol, py::array_t<double> dt_in, double psi0, int nparticles){
 
     //  read data in from python
-    double* stz_init_arr = create_array(stz_init);
     double* saw_srange_arr = create_array(saw_srange);
     int* saw_m_arr = create_array(saw_m);
     int* saw_n_arr = create_array(saw_n);
@@ -1123,13 +1116,6 @@ extern "C" vector<double> boozer_saw_gpu_tracing(py::array_t<double> quad_pts, p
     gpuErrchk( cudaMalloc((void**)&saw_phihats_d, saw_phihats.size() * sizeof(double)) );
     gpuErrchk( cudaMemcpy(saw_phihats_d, saw_phihats_arr, saw_phihats.size() * sizeof(double), cudaMemcpyHostToDevice) );
     
-    for(int i=0; i<nparticles; ++i){
-        double s = stz_init_arr[3*i];
-        double theta = stz_init_arr[3*i+1];
-
-        stz_init_arr[3*i] = s*cos(theta);
-        stz_init_arr[3*i+1] = s*sin(theta);
-    }
     // copy saw s_range to constant memory
     double saw_srange_ext[4];
     for(int i=0; i<3; ++i){
@@ -1162,7 +1148,6 @@ extern "C" vector<double> boozer_saw_nok_gpu_tracing(py::array_t<double> quad_pt
         py::array_t<double> stz_init, double m, double q, double vtotal, py::array_t<double> vtang, double tmax, double tol, py::array_t<double> dt_in, double psi0, int nparticles){
 
     //  read data in from python
-    double* stz_init_arr = create_array(stz_init);
     double* saw_srange_arr = create_array(saw_srange);
     int* saw_m_arr = create_array(saw_m);
     int* saw_n_arr = create_array(saw_n);
@@ -1180,13 +1165,6 @@ extern "C" vector<double> boozer_saw_nok_gpu_tracing(py::array_t<double> quad_pt
     cudaMalloc((void**)&saw_phihats_d, saw_phihats.size() * sizeof(double));
     cudaMemcpy(saw_phihats_d, saw_phihats_arr, saw_phihats.size() * sizeof(double), cudaMemcpyHostToDevice);
     
-    for(int i=0; i<nparticles; ++i){
-        double s = stz_init_arr[3*i];
-        double theta = stz_init_arr[3*i+1];
-
-        stz_init_arr[3*i] = s*cos(theta);
-        stz_init_arr[3*i+1] = s*sin(theta);
-    }
     // copy saw s_range to constant memory
     double saw_srange_ext[4];
     for(int i=0; i<3; ++i){
@@ -1329,29 +1307,18 @@ extern "C" py::array_t<double> test_gpu_interpolation(py::array_t<double> quad_p
     double* x1_range_arr = create_array(x1_range);
     double* x2_range_arr = create_array(x2_range);
     double* x3_range_arr = create_array(x3_range);
-    double* loc_arr = create_array(loc);
-    
-    // map input data
-    // Cartesian Coordinates
-    if(rhs == "cartesian_vacuum"){
-        for(int i=0; i<n_points; ++i){
-            double x = loc_arr[3*i] * cos(loc_arr[3*i + 1]);
-            double y = loc_arr[3*i] * sin(loc_arr[3*i + 1]);
-            
-            loc_arr[3*i] = x;
-            loc_arr[3*i+1] = y;
-        }
-    }
+    double* loc_in = create_array(loc);
 
-    // Boozer Coordinates
-    if((rhs == "boozer_vacuum") || (rhs == "boozer_saw_vacuum") || (rhs == "boozer")) {
-        for(int i=0; i<n_points; ++i){
-            double x1 = loc_arr[3*i] * cos(loc_arr[3*i + 1]);
-            double x2 = loc_arr[3*i] * sin(loc_arr[3*i + 1]);
-            
-            loc_arr[3*i] = x1;
-            loc_arr[3*i+1] = x2;
-        }
+    // map (r, phi) or (s, theta) to the polar state used by the kernel,
+    // without modifying the caller's array
+    std::vector<double> loc_vec(loc_in, loc_in + loc.size());
+    double* loc_arr = loc_vec.data();
+    for(int i=0; i<n_points; ++i){
+        double x1 = loc_arr[3*i] * cos(loc_arr[3*i + 1]);
+        double x2 = loc_arr[3*i] * sin(loc_arr[3*i + 1]);
+
+        loc_arr[3*i] = x1;
+        loc_arr[3*i+1] = x2;
     }
 
     int n;
