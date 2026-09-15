@@ -806,7 +806,7 @@ class TrappedPoincare:
 
         self.helicity_M = helicity_M
         self.helicity_N = helicity_N
-        if (self.helicity_M is None) and (self.helicity_N is None) and chaos_detection:
+        if (self.helicity_M is None or self.helicity_N is None) and chaos_detection:
             raise ValueError(
                 "helicity_M and helicity_N must be provided for chaos detection."
             )
