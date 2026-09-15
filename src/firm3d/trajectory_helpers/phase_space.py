@@ -1032,7 +1032,6 @@ class MapPhaseSpace:
             helicity_Np * helicity_M - helicity_N * helicity_Mp
         )
         self.omega = omega
-        self.omegan = self.omega / self.nprime
 
         self.tol = tol
 
