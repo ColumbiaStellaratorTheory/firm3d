@@ -569,6 +569,13 @@ public:
         "ShearAlfvenHarmonics."
       );
     }
+    if (!harmonics.empty() &&
+        harmonic->phihat.get_s_basis() != harmonics[0]->phihat.get_s_basis()) {
+      throw std::invalid_argument(
+        "All harmonics in a ShearAlfvenWavesSuperposition must share the "
+        "same radial grid."
+      );
+    }
     waves.push_back(wave);
     harmonics.push_back(harmonic);
     build_table();
@@ -626,26 +633,15 @@ public:
 
 private:
   std::vector<ShearAlfvenHarmonic*> harmonics;  // non-owning; parallel to waves
-  // Radial profiles of all harmonics on their common s grid, used when every
-  // harmonic has the same grid. Row i holds the n_harmonics values at s_i;
-  // slope rows hold the linear-interpolation slopes of interval i.
-  bool shared_grid = false;
+  // Radial profiles of all harmonics on their common s grid. Row i holds the
+  // n_harmonics values at s_i; slope rows hold the slopes of interval i.
   std::vector<double> table_s;
   std::vector<double> table_phihat;  // n_s x n_harmonics
   std::vector<double> table_slope;   // (n_s - 1) x n_harmonics
   size_t hint = 0;  // interval found by the previous lookup
 
   void build_table() {
-    shared_grid = false;
-    if (harmonics.empty()) {
-      return;
-    }
     const auto& s = harmonics[0]->phihat.get_s_basis();
-    for (const auto* h : harmonics) {
-      if (h->phihat.get_s_basis() != s) {
-        return;
-      }
-    }
     const size_t ns = s.size(), nh = harmonics.size();
     table_s = s;
     table_phihat.assign(ns * nh, 0.);
@@ -660,7 +656,6 @@ private:
       }
     }
     hint = 0;
-    shared_grid = true;
   }
 
   // Interval i with table_s[i] <= s < table_s[i+1] (clamped to the last
@@ -746,21 +741,19 @@ private:
 
       // Radial profile row for this point: values at the left node and the
       // interval slopes (null outside the grid, where the profile is flat).
-      const double* phihat_row = nullptr;
+      const size_t nh = harmonics.size();
+      const double* phihat_row;
       const double* slope_row = nullptr;
       double ds = 0.;
-      if (shared_grid) {
-        const size_t nh = harmonics.size();
-        if (s < table_s.front()) {
-          phihat_row = table_phihat.data();
-        } else if (s > table_s.back()) {
-          phihat_row = table_phihat.data() + (table_s.size() - 1) * nh;
-        } else {
-          const size_t i = interval(s);
-          phihat_row = table_phihat.data() + i * nh;
-          slope_row = table_slope.data() + i * nh;
-          ds = s - table_s[i];
-        }
+      if (s < table_s.front()) {
+        phihat_row = table_phihat.data();
+      } else if (s > table_s.back()) {
+        phihat_row = table_phihat.data() + (table_s.size() - 1) * nh;
+      } else {
+        const size_t i = interval(s);
+        phihat_row = table_phihat.data() + i * nh;
+        slope_row = table_slope.data() + i * nh;
+        ds = s - table_s[i];
       }
 
       double sum_Phi = 0., sum_dPhidpsi = 0., sum_dPhidtheta = 0.,
@@ -768,7 +761,7 @@ private:
              sum_alphadot = 0., sum_dalphadpsi = 0., sum_dalphadtheta = 0.,
              sum_dalphadzeta = 0.;
 
-      for (size_t k = 0; k < harmonics.size(); ++k) {
+      for (size_t k = 0; k < nh; ++k) {
         const auto* h = harmonics[k];
         const double alpha_fac =
             (iota * h->Phim - h->Phin) / (h->omega * denom);
@@ -782,14 +775,8 @@ private:
             h->Phim * theta - h->Phin * zeta + h->omega * time + h->phase;
         const double data_cos = cos(arg);
         const double data_sin = sin(arg);
-        double phihat_s, dphihatds;
-        if (shared_grid) {
-          dphihatds = slope_row ? slope_row[k] : 0.;
-          phihat_s = phihat_row[k] + dphihatds * ds;
-        } else {
-          phihat_s = h->phihat(s);
-          dphihatds = h->phihat.derivative(s);
-        }
+        const double dphihatds = slope_row ? slope_row[k] : 0.;
+        const double phihat_s = phihat_row[k] + dphihatds * ds;
         const double dphihatdpsi = dphihatds / psi0;
 
         const double Phi = phihat_s * data_sin;
