@@ -87,13 +87,13 @@ def min_volumemodB(B0, NFP=None):
 
     Args:
         B0  : The :class:`BoozerMagneticField` instance to evaluate.
-        NFP : Number of field periods. If None, defaults to 1.
+        NFP : Number of field periods. If None, taken from B0.nfp.
 
     Returns:
         min_modB : Approximate minimum value of |B| in the sampled volume.
     """
     if NFP is None:
-        NFP = 1
+        NFP = B0.nfp
 
     s_grid = np.linspace(0, 1, 100)
     theta_grid = np.linspace(0, 2 * np.pi, 100, endpoint=False)
