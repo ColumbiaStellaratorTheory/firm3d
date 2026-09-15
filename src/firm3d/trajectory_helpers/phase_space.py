@@ -1641,22 +1641,32 @@ class MapPhaseSpace:
 
         mu_pm = mu / self.mass
 
-        vp_temp = _solve_vpar_perturbed(
-            self.B0,
-            self.saw,
-            points,
-            self.helicity_M,
-            self.helicity_N,
-            self.helicity_Np,
-            self.helicity_Mp,
-            self.mass,
-            self.nprime,
-            self.omega,
-            self.charge,
-            self.Eprime,
-            mu_pm,
-            sign_arrs,
-        )
+        if self.Eprime_slice:
+            vp_temp = _solve_vpar_perturbed(
+                self.B0,
+                self.saw,
+                points,
+                self.helicity_M,
+                self.helicity_N,
+                self.helicity_Np,
+                self.helicity_Mp,
+                self.mass,
+                self.nprime,
+                self.omega,
+                self.charge,
+                self.Eprime,
+                mu_pm,
+                sign_arrs,
+            )
+        else:
+            vp_temp = _solve_vpar_energy(
+                self.B0,
+                points,
+                self.mass,
+                self.Ekin,
+                mu,
+                self.sign,
+            )
 
         mask = ~np.isnan(vp_temp)
         points = points[mask]
