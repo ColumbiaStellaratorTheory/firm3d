@@ -135,8 +135,8 @@ class PassingPoincare:
         self.charge = charge
         self.Ekin = Ekin
         if s_init is not None and thetas_init is not None:
-            s = s_init
-            thetas = thetas_init
+            s_flat = s_init
+            thetas_flat = thetas_init
         else:
             if ns_poinc is None:
                 ns_poinc = 120
@@ -144,9 +144,9 @@ class PassingPoincare:
                 ntheta_poinc = 2
             s = np.linspace(0, 1, ns_poinc + 1, endpoint=False)[1::]
             thetas = np.linspace(0, 2 * np.pi, ntheta_poinc)
-        s, thetas = np.meshgrid(s, thetas)
-        s_flat = s.flatten()
-        thetas_flat = thetas.flatten()
+            s, thetas = np.meshgrid(s, thetas)
+            s_flat = s.flatten()
+            thetas_flat = thetas.flatten()
         self.Nmaps = Nmaps
         self.comm = comm
         self.tmax = tmax
