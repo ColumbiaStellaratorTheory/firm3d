@@ -1268,7 +1268,6 @@ class MapPhaseSpace:
             dt_save=self.min_timestep,
             tol=self.tol,
             stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
-            mode="gc_noK",
             **self.solver_options,
         )
 
@@ -1340,7 +1339,6 @@ class MapPhaseSpace:
                 reltol=1e-9,
                 stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
                 dt_save=self.min_timestep,
-                mode="gc_noK",
                 ODE_solver="dormand_prince",
                 **self.solver_options,
             )

@@ -277,7 +277,6 @@ class WBAPerturbedParticles:
                     reltol=self.tol,
                     dt_save=self.min_timestep,
                     stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
-                    mode="gc_noK",
                     ODE_solver="dormand_prince",
                     **self.solver_options,
                 )
@@ -736,7 +735,6 @@ class WBAParticles:
                     reltol=self.tol,
                     dt_save=self.min_timestep,
                     stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
-                    mode="gc_noK",
                     ODE_solver="dormand_prince",
                     **self.solver_options,
                 )
