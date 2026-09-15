@@ -549,7 +549,7 @@ def _solve_vpar_energy(B0, point, mass, Ekin, mu, sgn):
 
     energy_par = Ekin - mu * modB
     vpar = sgn * np.sqrt(np.maximum(2 * energy_par / mass, 0))
-    vpar = np.where(energy_par > 0, vpar, np.nan)
+    vpar = np.where(energy_par >= 0, vpar, np.nan)
     return vpar[0] if scalar_input else vpar
 
 

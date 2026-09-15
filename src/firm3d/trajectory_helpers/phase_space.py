@@ -329,23 +329,24 @@ class MapEquilibrium:
                 comm=self.comm,
             )
 
-            self.B0.set_points(points_temp)
-            modB = self.B0.modB()[:, 0]
+            mu = np.full(points_temp.shape[0], mus_flat[particle_index])
 
-            mu = np.ones_like(modB) * mus_flat[particle_index]
-
-            vpar_energy = self.Ekin - (mu * modB)
+            vpar = _solve_vpar_energy(
+                self.B0,
+                points_temp,
+                self.mass,
+                self.Ekin,
+                mu,
+                self.sign,
+            )
 
             # remove unphysical points
-            neg_idx = np.where(vpar_energy < 0)[0]
-            vpar_energy = np.delete(vpar_energy, neg_idx)
+            neg_idx = np.where(np.isnan(vpar))[0]
+            vpar = np.delete(vpar, neg_idx)
             points_temp = np.delete(points_temp, neg_idx, axis=0)
             mu = np.delete(mu, neg_idx, axis=0)
 
-            vpar = self.sign * np.sqrt((2 * vpar_energy) / self.mass)
-            vpar_list = vpar.tolist()
-
-            vpars += vpar_list
+            vpars += vpar.tolist()
             s += list(points_temp[:, 0])
             thetas += list(points_temp[:, 1])
             zetas += list(points_temp[:, 2])
@@ -1190,10 +1191,7 @@ class MapPhaseSpace:
                 comm=self.comm,
             )
 
-            self.B0.set_points(points_temp)
-            modB = self.B0.modB()[:, 0]
-
-            mu = np.ones_like(modB) * mus_flat[particle_index]
+            mu = np.full(points_temp.shape[0], mus_flat[particle_index])
             mu_per_mass = mu / self.mass
 
             if self.Eprime_slice:
