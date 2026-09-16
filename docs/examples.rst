@@ -47,7 +47,7 @@ Passing Map Analysis
 
 **Location**: ``examples/passing_map_perturbed_QA/``, ``examples/passing_map_perturbed_QH/``, and ``examples/passing_map_unperturbed/``
 
-Computes the passing Poincaré map in various configurations. The perturbed examples use the Landreman & Buller 2.5% beta QA and QH configurations with shear Alfvén waves (m = 1, n = 1 for QA; m = 1, n = 2 for QH). The unperturbed example uses the Wistell-A configuration scaled to the size and field strength of ARIES-CS with co-passing alpha particles.
+Computes the passing Poincaré map in various configurations. The perturbed examples use the Landreman & Buller 2.5% beta QA and QH configurations with shear Alfvén waves (m = 1, n = 1 for QA; m = 1, n = 2 for QH). The unperturbed example uses the Wistell-A configuration scaled to the size and field strength of ARIES-CS with co-passing alpha particles, with chaos_detection=True enabled to color the Poincaré map by the Weighted Birkhoff Average digit accuracy.
 
 .. code-block:: bash
 
@@ -65,7 +65,7 @@ Trapped Particle Analysis
 
 **Location**: ``examples/trapped_frequencies/``, ``examples/trapped_map/``, and ``examples/trapped_map_QI/``
 
-Computes trapped particle Poincaré maps and frequencies in various configurations. The trapped_frequencies example uses the Landreman & Buller 2.5% beta QA configuration with non-quasisymmetric modes artificially suppressed. The trapped_map examples use the Landreman & Buller QA configuration and the nfp = 3 vacuum QI configuration of A. Goodman.
+Computes trapped particle Poincaré maps and frequencies in various configurations. The trapped_frequencies example uses the Landreman & Buller 2.5% beta QA configuration with non-quasisymmetric modes artificially suppressed. The trapped_map examples use the Landreman & Buller QA configuration and the nfp = 3 vacuum QI configuration of A. Goodman. The trapped_map example enables chaos_detection=True, coloring the Poincaré map by Weighted Birkhoff Average digit accuracy.
 
 .. code-block:: bash
 
@@ -77,6 +77,25 @@ Computes trapped particle Poincaré maps and frequencies in various configuratio
 
    cd examples/trapped_map_QI/
    python trapped_map_QI.py
+
+Chaos Detection with Weighted Birkhoff Averaging
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Location**: ``examples/WBA_particles/``, ``examples/equilibrium_chaos_map/``, and ``examples/perturbed_chaos_map/``
+
+Computes the Weighted Birkhoff Average (WBA) digit accuracy, a numerical measure of chaos, for guiding-center trajectories, following Duignan & Meiss (2023). WBA_particles traces particles in the Landreman & Buller 2.5% beta QA configuration and reports the fraction of phase space that is chaotic. equilibrium_chaos_map computes a chaos heatmap over the unperturbed QA phase space. perturbed_chaos_map computes the analogous heatmap in the perturbed 2.5% beta QH configuration with a shear Alfvén wave, together with the corresponding Poincaré map (phase_space_map.py) or the heatmap alone (heat_map_alone.py); this example takes about 40 minutes on 128 Perlmutter tasks.
+
+.. code-block:: bash
+
+   cd examples/WBA_particles/
+   python WBA_tracing_boozer.py
+   python WBA_tracing_perturbed.py
+
+   cd examples/equilibrium_chaos_map/
+   python phase_space_map.py
+
+   cd examples/perturbed_chaos_map/
+   python phase_space_map.py
 
 Trajectory Visualization
 ~~~~~~~~~~~~~~~~~~~~~~~~

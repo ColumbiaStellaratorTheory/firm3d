@@ -28,7 +28,7 @@ from firm3d.util.constants import (
     ALPHA_PARTICLE_MASS,
     FUSION_ALPHA_PARTICLE_ENERGY,
 )
-from firm3d.util.functions import proc0_print, setup_logging
+from firm3d.util.functions import proc0_print, setup_logging, sigmav
 from firm3d.util.mpi import comm_size, comm_world
 
 time1 = time.time()
@@ -60,12 +60,6 @@ field = InterpolatedBoozerField(
 nD = lambda s: 1 - s**5
 nT = nD
 T = lambda s: 11.5 * (1 - s)
-
-
-def sigmav(T):
-    if T > 0:
-        return T ** (-2 / 3) * np.exp(-19.94 * T ** (-1 / 3))
-    return 0
 
 
 reactivity = lambda s: nD(s) * nT(s) * sigmav(T(s))

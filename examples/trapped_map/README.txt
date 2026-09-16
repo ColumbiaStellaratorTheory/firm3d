@@ -5,3 +5,8 @@ Landreman, Matt, Stefan Buller, and Michael Drevlak. "Optimization of quasi-symm
 The particle is assumed to mirror at (s,theta,zeta)=(0.5,pi/2,0) with the alpha particle birth energy. 
 
 On macOS (06.17.25), the wallclock time is about 4.2 minutes, running with the command "mpiexec -n 8 python trapped_map.py"
+
+Weighted Birkhoff Averaging is added as a setting with the flag chaos_detection=True to the trapped map and applied to particle momentum to create a numerical 
+metric (Digit Accuracy) of chaos, implemented as described in:
+
+N. Duignan and J. D. Meiss. "Distinguishing between regular and chaotic orbits of flows by the weighted birkhoff average." Physical Nonlinear Phenomena. (2023): 449:133749.

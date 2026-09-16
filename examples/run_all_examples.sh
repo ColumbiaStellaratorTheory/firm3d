@@ -1,18 +1,20 @@
 #!/bin/bash
 #SBATCH --nodes=1
-#SBATCH --time=3:00:00
+#SBATCH --time=4:00:00
 #SBATCH --constraint=cpu
 #SBATCH --qos=premium
 #SBATCH --account=m4680 # Change to your account number
 
 module load python cray-hdf5/1.14.3.1 cray-netcdf/4.9.0.13
 conda activate firm3d # Change to the name of your environment
+srun -n 128 -c 1 --chdir=equilibrium_chaos_map python -u phase_space_map.py
 srun -n 128 -c 1 --chdir=fusion_distribution python -u fusion_distribution.py
 srun -n 128 -c 1 --chdir=fusion_distribution_perturbed python -u fusion_distribution_perturbed.py
 srun -n 128 -c 1 --chdir=passing_frequencies python -u passing_frequencies.py
 srun -n 128 -c 1 --chdir=passing_map_perturbed_QA python -u passing_map_perturbed.py
 srun -n 128 -c 1 --chdir=passing_map_perturbed_QH python -u passing_map_perturbed.py
 srun -n 128 -c 1 --chdir=passing_map_unperturbed python -u passing_map.py
+srun -n 128 -c 1 --chdir=perturbed_chaos_map python -u phase_space_map.py
 srun -n 128 -c 1 --chdir=plot_trajectory python -u plot_trajectory.py
 srun -n 32  -c 1 --chdir=resolution_scan python -u resolution_scan.py
 srun -n 128 -c 1 --chdir=tracing_with_AE python -u tracing_with_AE.py
@@ -21,3 +23,5 @@ srun -n 128 -c 1 --chdir=trapped_map python -u trapped_map.py
 srun -n 128 -c 1 --chdir=trapped_map_QI python -u trapped_map_QI.py
 srun -n 128 -c 1 --chdir=uniform_surf_distribution python -u uniform_surf_distribution.py
 srun -n 128 -c 1 --chdir=uniform_vol_distribution python -u uniform_vol_distribution.py
+srun -n 128 -c 1 --chdir=WBA_particles python -u WBA_tracing_boozer.py
+srun -n 128 -c 1 --chdir=WBA_particles python -u WBA_tracing_perturbed.py

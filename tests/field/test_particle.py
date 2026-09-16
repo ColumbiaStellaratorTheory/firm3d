@@ -15,10 +15,12 @@ from firm3d.field.tracing import (
     MinToroidalFluxStoppingCriterion,
     StepSizeStoppingCriterion,
     ToroidalTransitStoppingCriterion,
+    trace_particles_boozer,
+)
+from firm3d.trajectory_helpers import (
     compute_poloidal_transits,
     compute_resonances,
     compute_toroidal_transits,
-    trace_particles_boozer,
 )
 from firm3d.util.constants import ELEMENTARY_CHARGE, ONE_EV, PROTON_MASS
 

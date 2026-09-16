@@ -6,7 +6,7 @@ from firm3d.field.boozermagneticfield import (
     InterpolatedBoozerField,
     ShearAlfvenHarmonic,
 )
-from firm3d.field.trajectory_helpers import PassingPerturbedPoincare
+from firm3d.trajectory_helpers import PassingPerturbedPoincare
 from firm3d.util.constants import (
     ALPHA_PARTICLE_CHARGE,
     ALPHA_PARTICLE_MASS,

@@ -3,7 +3,7 @@ import time
 from firm3d.field.boozermagneticfield import (
     InterpolatedBoozerField,
 )
-from firm3d.field.trajectory_helpers import PassingPoincare
+from firm3d.trajectory_helpers import PassingPoincare
 from firm3d.util.constants import (
     ALPHA_PARTICLE_CHARGE,
     ALPHA_PARTICLE_MASS,
@@ -56,7 +56,10 @@ poinc = PassingPoincare(
     ntheta_poinc=ntheta_poinc,
     Nmaps=Nmaps,
     comm=comm_world,
+    helicity_N=1 * field.nfp,
+    helicity_M=1,
     solver_options={"reltol": tol, "abstol": tol},
+    chaos_detection=True,
 )
 
 if verbose and not in_github_actions:
