@@ -48,6 +48,15 @@ def trace_particles_boozer_gpu(
     nparticles = stz_inits.shape[0]
     dt_in = _dt_in(dt, nparticles)
 
+    # kernel state is (s cos theta, s sin theta, zeta, v_par); convert on a copy
+    stz_inits = stz_inits.copy()
+    s = stz_inits[:, 0]
+    theta = stz_inits[:, 1]
+    x1 = s * np.cos(theta)
+    x2 = s * np.sin(theta)
+    stz_inits[:, 0] = x1
+    stz_inits[:, 1] = x2
+
     if isinstance(field, ShearAlfvenWavesSuperposition):
         B0 = field.B0
         srange, trange, zrange, quad_info, maxJ = boozer_saw_interpolant(
@@ -146,6 +155,14 @@ def trace_particles_boozer_gpu(
         )
 
     last_time = np.reshape(last_time, (nparticles, 6))
+
+    x1 = last_time[:, 1]
+    x2 = last_time[:, 2]
+    s = np.sqrt(x1**2 + x2**2)
+    theta = np.arctan2(x2, x1)
+    last_time[:, 1] = s
+    last_time[:, 2] = theta
+
     return last_time
 
 

@@ -1006,18 +1006,13 @@ vector<double> gpu_tracing(py::array_t<double> quad_pts, py::array_t<double> x1_
     gpuErrchk(cudaMemcpyToSymbol(nparticles_d, &nparticles, sizeof(int)));
 
     double init_pos[4*nparticles];
-    // load initial conditions; Boozer (s, theta) -> (s cos theta, s sin theta)
-    // without modifying the caller's array
-    constexpr bool boozer = map_rhs_to_coord<id>() == CoordSys::Boozer;
+    // load initial conditions
     for(int i=0; i<nparticles; ++i){
         int start = 3*i;
 
-        double s = loc_init_arr[start];
-        double theta = loc_init_arr[start+1];
-
-        init_pos[4*i] = boozer ? s*cos(theta) : s;
-        init_pos[4*i + 1] = boozer ? s*sin(theta) : theta;
-        init_pos[4*i + 2] = loc_init_arr[start + 2];
+        for(int j=0; j<3; j++){
+            init_pos[4*i + j] = loc_init_arr[start + j];
+        }
         init_pos[4*i + 3] = vtang_arr[i];
     }
    
@@ -1082,14 +1077,6 @@ extern "C" vector<double> boozer_gpu_tracing(py::array_t<double> quad_pts, py::a
         results = gpu_tracing<RHS::GC_Boozer>(quad_pts, srange, trange, zrange, stz_init, m, q, vtotal, vtang, tmax, tol, dt_in, nparticles);
     }
 
-    for(int i=0; i<nparticles; ++i){
-        double x1 = results[6*i+1];
-        double x2 = results[6*i+2];
-
-        results[6*i+1] = sqrt(x1*x1 + x2*x2);
-        results[6*i+2] = atan2(x2, x1);
-    }
-
     return results;
 }
 
@@ -1132,14 +1119,6 @@ extern "C" vector<double> boozer_saw_gpu_tracing(py::array_t<double> quad_pts, p
     gpuErrchk( cudaFree(saw_n_d) );
     gpuErrchk( cudaFree(saw_phihats_d) );
 
-    for(int i=0; i<nparticles; ++i){
-        double x1 = results[6*i+1];
-        double x2 = results[6*i+2];
-
-        results[6*i+1] = sqrt(x1*x1 + x2*x2);
-        results[6*i+2] = atan2(x2, x1);
-    }
-
     return results;
 }
 
@@ -1180,14 +1159,6 @@ extern "C" vector<double> boozer_saw_nok_gpu_tracing(py::array_t<double> quad_pt
     gpuErrchk( cudaFree(saw_m_d) );
     gpuErrchk( cudaFree(saw_n_d) );
     gpuErrchk( cudaFree(saw_phihats_d) );
-
-    for(int i=0; i<nparticles; ++i){
-        double x1 = results[6*i+1];
-        double x2 = results[6*i+2];
-
-        results[6*i+1] = sqrt(x1*x1 + x2*x2);
-        results[6*i+2] = atan2(x2, x1);
-    }
 
     return results;
 }
