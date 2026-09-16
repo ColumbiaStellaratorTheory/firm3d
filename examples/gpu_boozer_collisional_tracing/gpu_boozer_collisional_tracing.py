@@ -1,14 +1,12 @@
-#!/usr/bin/env python
-
-
 import numpy as np
 import pandas as pd
 
-from firm3d.catapult.tracing import trace_particles_boozer_gpu
+from firm3d.catapult.tracing import trace_particles_boozer_with_collisions_gpu
 from firm3d.field.boozermagneticfield import (
     BoozerRadialInterpolant,
     InterpolatedBoozerField,
 )
+from firm3d.field.collisions import ThermalBackground
 from firm3d.field.tracing_helpers import (
     initialize_position_profile,
     initialize_velocity_uniform,
@@ -16,7 +14,10 @@ from firm3d.field.tracing_helpers import (
 from firm3d.util.constants import (
     ALPHA_PARTICLE_CHARGE,
     ALPHA_PARTICLE_MASS,
+    ELECTRON_MASS,
+    ELEMENTARY_CHARGE,
     FUSION_ALPHA_PARTICLE_ENERGY,
+    PROTON_MASS,
 )
 from firm3d.util.functions import in_github_actions
 from firm3d.util.mpi import comm_world
@@ -24,10 +25,12 @@ from firm3d.util.mpi import comm_world
 resolution = 5 if in_github_actions else 15  # Resolution for field interpolation
 nparticles = 100 if in_github_actions else 1000  # Number of particles to trace
 tol = 1e-4 if in_github_actions else 1e-8  # Tolerance for ODE solver
+tmax = 2e-1
 
-### CREATE A FIELD FOR TRACING
-boozmn_filename = "../inputs/boozmn_aten_rescaled.nc"
-bri = BoozerRadialInterpolant(boozmn_filename, 3, comm=comm_world, enforce_vacuum=True)
+wout_filename = "../inputs/wout_aten_rescaled.nc"
+bri = BoozerRadialInterpolant(
+    wout_filename, 3, comm=comm_world, enforce_vacuum=True, write_boozmn=False
+)
 
 field = InterpolatedBoozerField(
     bri,
@@ -66,12 +69,40 @@ charge = ALPHA_PARTICLE_CHARGE
 v0 = np.sqrt(2 * Ekin / mass)
 vpar_inits = initialize_velocity_uniform(v0, nparticles)
 
+# Background plasma the alphas collide with: a 50/50 DT fuel mix and the
+# electrons that neutralize it, on the same profiles that set the birth
+# distribution above.  Temperature is in eV at this interface, while T(s)
+# above is in keV.
+n_ref = 1e20  # m^-3
+ne = lambda s: n_ref * nD(s)
+Te = lambda s: 1e3 * T(s)
 
-tmax = 1e-5
-last_time = trace_particles_boozer_gpu(
-    bri,
+backgrounds = [
+    ThermalBackground(
+        n_profile=lambda s: 0.5 * ne(s),
+        T_profile=Te,
+        mass=2 * PROTON_MASS,
+        charge=ELEMENTARY_CHARGE,
+    ),
+    ThermalBackground(
+        n_profile=lambda s: 0.5 * ne(s),
+        T_profile=Te,
+        mass=3 * PROTON_MASS,
+        charge=ELEMENTARY_CHARGE,
+    ),
+    ThermalBackground(
+        n_profile=ne,
+        T_profile=Te,
+        mass=ELECTRON_MASS,
+        charge=-ELEMENTARY_CHARGE,
+    ),
+]
+
+last_time = trace_particles_boozer_with_collisions_gpu(
+    field,
     stz_inits,
     vpar_inits,
+    backgrounds=backgrounds,
     tmax=tmax,
     mass=mass,
     charge=charge,
@@ -80,7 +111,11 @@ last_time = trace_particles_boozer_gpu(
     ns=resolution,
     ntheta=resolution,
     nzeta=resolution,
+    rng_seed=0,
 )
+# The collisional output has seven columns rather than six: the total speed
+# is reported before the final step size, because collisions change it and
+# it is no longer recoverable from the launch energy.
 particle_data = pd.DataFrame(
     {
         "s_start": stz_inits[:, 0],
@@ -91,14 +126,21 @@ particle_data = pd.DataFrame(
         "t_end": last_time[:, 2],
         "z_end": last_time[:, 3],
         "vpar_end": last_time[:, 4],
+        "v_end": last_time[:, 5],
         "last_time": last_time[:, 0],
-        "dt_end": last_time[:, 5],
+        "dt_end": last_time[:, 6],
     }
 )
 particle_data.to_csv("./particle_data.csv")
 
+t_end = last_time[:, 0]
+v_end = last_time[:, 5]
+lost = t_end < tmax
 
-did_leave = [t < tmax for t in particle_data["last_time"]]
-loss_frac = sum(did_leave) / len(did_leave)
+particle_loss = lost.sum() / nparticles
+energy_loss = np.sum((v_end[lost] / v0) ** 2) / nparticles
+
 print(f"Number of particles= {nparticles}")
-print(f"Loss fraction: {loss_frac:.3f}")
+print(f"Particle loss fraction: {particle_loss:.3f}")
+print(f"Energy loss fraction: {energy_loss:.3f}")
+print(f"Mean energy fraction of confined: {np.mean((v_end[~lost] / v0) ** 2):.4f}")

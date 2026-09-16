@@ -53,9 +53,9 @@ points = initialize_position_uniform_surf(field, nParticles, 0.3, comm=comm_worl
 Ekin = FUSION_ALPHA_PARTICLE_ENERGY
 mass = ALPHA_PARTICLE_MASS
 charge = ALPHA_PARTICLE_CHARGE
-# Initialize uniformly distributed parallel velocities
-vpar0 = np.sqrt(2 * Ekin / mass)
-vpar_init = initialize_velocity_uniform(vpar0, nParticles, comm=comm_world)
+# Isotropic pitch angle: v_par/v drawn uniformly in [-1, 1] at fixed birth energy
+v0 = np.sqrt(2 * Ekin / mass)
+vpar_init = initialize_velocity_uniform(v0, nParticles, comm=comm_world)
 
 ## Trace alpha particles in Boozer coordinates until they hit the s = 1 surface
 res_tys, res_zeta_hits = trace_particles_boozer(

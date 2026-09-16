@@ -29,6 +29,22 @@ Trajectory Integration
    :undoc-members:
    :show-inheritance:
 
+Coulomb Collisions
+------------------
+
+.. automodule:: firm3d.field.collisions
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+GPU Tracing
+-----------
+
+.. automodule:: firm3d.catapult.tracing
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Stopping Criteria
 -----------------
 

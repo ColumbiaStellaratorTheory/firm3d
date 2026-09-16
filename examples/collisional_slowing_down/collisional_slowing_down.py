@@ -4,34 +4,39 @@ import numpy as np
 
 from firm3d.field.boozermagneticfield import (
     InterpolatedBoozerField,
-    ShearAlfvenWavesSuperposition,
+)
+from firm3d.field.collisions import (
+    ThermalBackground,
+    trace_particles_boozer_with_collisions,
 )
 from firm3d.field.tracing import (
     MaxToroidalFluxStoppingCriterion,
-    trace_particles_boozer_perturbed,
 )
 from firm3d.field.tracing_helpers import (
     initialize_position_profile,
     initialize_velocity_uniform,
 )
-from firm3d.saw.ae3d import AE3DEigenvector
 from firm3d.util.constants import (
     ALPHA_PARTICLE_CHARGE,
     ALPHA_PARTICLE_MASS,
+    ELECTRON_MASS,
+    ELEMENTARY_CHARGE,
     FUSION_ALPHA_PARTICLE_ENERGY,
+    PROTON_MASS,
 )
 from firm3d.util.functions import in_github_actions, proc0_print, setup_logging
-from firm3d.util.mpi import comm_size, comm_world, verbose
+from firm3d.util.mpi import comm_size, comm_world
+
+time1 = time.time()
 
 resolution = 10 if in_github_actions else 48  # Resolution for field interpolation
-nParticles = 50 if in_github_actions else 5000  # Number of particles to trace
+nParticles = 50 if in_github_actions else 1000  # Number of particles to trace
 reltol = 1e-4 if in_github_actions else 1e-8  # Relative tolerance for the ODE solver
 abstol = 1e-4 if in_github_actions else 1e-8  # Absolute tolerance for the ODE solver
 order = 3  # Order for radial interpolation
 degree = 3  # Degree for 3d interpolation
-boozmn_filename = "../inputs/boozmn_beta2.5_QA.nc"
-saw_filename = "ae.npy"
-tmax = 1e-4 if in_github_actions else 1e-2  # Time for integration
+wout_filename = "../inputs/wout_aten_rescaled.nc"
+tmax = 1e-4 if in_github_actions else 2e-1  # Time for integration
 ns_interp = resolution
 ntheta_interp = resolution
 nzeta_interp = resolution
@@ -41,21 +46,17 @@ setup_logging(f"stdout_{nParticles}_{resolution}_{comm_size}.txt")
 
 ## Setup field interpolation
 field = InterpolatedBoozerField.from_booz_xform(
-    boozmn_filename,
+    wout_filename,
     degree=order,
     ns=ns_interp,
     ntheta=ntheta_interp,
     nzeta=nzeta_interp,
     comm=comm_world,
-)
-
-saw = ShearAlfvenWavesSuperposition.from_ae3d(
-    eigenvector=AE3DEigenvector.load_from_numpy(
-        filename=saw_filename,
-    ),
-    B0=field,
-    max_dB_normal_by_B0=5e-3,
-    minor_radius_meters=1.7,
+    write_boozmn=False,
+    # Vacuum guiding-center equations, matching the GPU collisional examples.
+    # from_booz_xform otherwise defaults to the no-K equations, which the GPU
+    # collisional entry points do not accept and which give different orbits.
+    enforce_vacuum=True,
 )
 
 # Define fusion birth distribution
@@ -86,44 +87,62 @@ charge = ALPHA_PARTICLE_CHARGE
 v0 = np.sqrt(2 * Ekin / mass)
 vpar_init = initialize_velocity_uniform(v0, nParticles, comm=comm_world)
 
-field.set_points(points)
-mu_init = (v0**2 - vpar_init**2) / (2 * field.modB()[:, 0])
+n_ref = 1e20  # m^-3
+ne = lambda s: n_ref * nD(s)
+Te = lambda s: 1e3 * T(s)  # eV
+
+deuterium = ThermalBackground(
+    n_profile=lambda s: 0.5 * ne(s),
+    T_profile=Te,
+    mass=2 * PROTON_MASS,
+    charge=ELEMENTARY_CHARGE,
+)
+tritium = ThermalBackground(
+    n_profile=lambda s: 0.5 * ne(s),
+    T_profile=Te,
+    mass=3 * PROTON_MASS,
+    charge=ELEMENTARY_CHARGE,
+)
+electrons = ThermalBackground(
+    n_profile=ne,
+    T_profile=Te,
+    mass=ELECTRON_MASS,
+    charge=-ELEMENTARY_CHARGE,
+)
 
 time1 = time.time()
-
-## Trace alpha particles in Boozer coordinates until they hit the s = 1 surface
-res_tys, res_zeta_hits = trace_particles_boozer_perturbed(
-    saw,
+## Trace alpha particles in Boozer coordinates, with collisions, until they
+## hit the s = 1 surface.
+res_tys, res_zeta_hits = trace_particles_boozer_with_collisions(
+    field,
     points,
     vpar_init,
-    mu_init,
+    backgrounds=[deuterium, tritium, electrons],
+    tmax=tmax,
     mass=mass,
     charge=charge,
     comm=comm_world,
+    Ekin=Ekin,
     stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
-    forget_exact_path=True,
     abstol=abstol,
     reltol=reltol,
-    tmax=tmax,
+    DP_hmin=1e-10,
+    rng_seed=0,
 )
 
 time2 = time.time()
 proc0_print("Elapsed time for tracing = ", time2 - time1)
 
-## Post-process results to obtain lost particles
-if verbose and not in_github_actions:
-    from firm3d.field.trajectory_helpers import compute_loss_fraction
+t_end = np.array([traj[-1, 0] for traj in res_tys])
+v_end = np.array([traj[-1, 5] for traj in res_tys])
+lost = np.array([len(hits) > 0 for hits in res_zeta_hits])
 
-    times, loss_frac = compute_loss_fraction(res_tys, tmin=1e-5, tmax=tmax)
-    import matplotlib
+particle_loss = lost.sum() / nParticles
+energy_loss = np.sum((v_end[lost] / v0) ** 2) / nParticles
 
-    matplotlib.use("Agg")  # Don't use interactive backend
-    import matplotlib.pyplot as plt
-
-    plt.figure()
-    plt.loglog(times, loss_frac)
-    plt.xlim([1e-5, tmax])
-    plt.ylim([1e-3, 1])
-    plt.xlabel("Time [s]")
-    plt.ylabel("Fraction of lost particles")
-    plt.savefig("loss_fraction.png")
+proc0_print(f"Number of particles = {nParticles}")
+proc0_print(f"Particle loss fraction: {particle_loss:.3f}")
+proc0_print(f"Energy loss fraction: {energy_loss:.3f}")
+proc0_print(
+    f"Mean energy fraction of confined alphas: {np.mean((v_end[~lost] / v0) ** 2):.3f}"
+)

@@ -7,6 +7,7 @@
 
 module load python cray-hdf5/1.14.3.1 cray-netcdf/4.9.0.13
 conda activate firm3d # Change to the name of your environment
+srun -n 128 -c 1 --chdir=collisional_slowing_down python -u collisional_slowing_down.py
 srun -n 128 -c 1 --chdir=fusion_distribution python -u fusion_distribution.py
 srun -n 128 -c 1 --chdir=fusion_distribution_perturbed python -u fusion_distribution_perturbed.py
 srun -n 128 -c 1 --chdir=passing_frequencies python -u passing_frequencies.py

@@ -12,28 +12,38 @@ using std::vector;
 
 #ifdef USE_CUDA
 extern "C" vector<double> cartesian_gpu_tracing(py::array_t<double> quad_pts, py::array_t<double> rrange,
-        py::array_t<double> phirange, py::array_t<double> zrange, py::array_t<double> xyz_init, double m, double q, double vtotal, py::array_t<double> vtang, 
+        py::array_t<double> phirange, py::array_t<double> zrange, py::array_t<double> xyz_init, double m, double q, double vtotal, py::array_t<double> vtang,
         double tmax, double tol, py::array_t<double> dt_in, int nparticles);
 
 extern "C" vector<double> boozer_gpu_tracing(py::array_t<double> quad_pts, py::array_t<double> srange,
-    py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> stz_init, double m, double q, double vtotal, py::array_t<double> vtang, 
+    py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> stz_init, double m, double q, double vtotal, py::array_t<double> vtang,
     double tmax, double tol, py::array_t<double> dt_in, double psi0, int nparticles, bool vacuum=false);
 
-extern "C" vector<double> boozer_saw_gpu_tracing(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, 
+extern "C" vector<double> boozer_collision_gpu_tracing(py::array_t<double> quad_pts, py::array_t<double> srange,
+    py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> stz_init, double m, double q, double vtotal, py::array_t<double> vtang,
+    double tmax, double tol, py::array_t<double> dt_in, double psi0, int nparticles,
+    const vector<ThermalBackground>& backgrounds, bool vacuum=false, unsigned long long rng_seed=0);
+
+extern "C" vector<double> cartesian_collision_gpu_tracing(py::array_t<double> quad_pts, py::array_t<double> rrange,
+    py::array_t<double> phirange, py::array_t<double> zrange, py::array_t<double> xyz_init, double m, double q, double vtotal, py::array_t<double> vtang,
+    double tmax, double tol, py::array_t<double> dt_in, int nparticles,
+    const vector<ThermalBackground>& backgrounds, unsigned long long rng_seed=0);
+
+extern "C" vector<double> boozer_saw_gpu_tracing(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange,
         double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<double> saw_phihats, int saw_nharmonics,
         py::array_t<double> stz_init, double m, double q, double vtotal, py::array_t<double> vtang, double tmax, double tol, py::array_t<double> dt_in, double psi0, int nparticles);
 
-extern "C" vector<double> boozer_saw_nok_gpu_tracing(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, 
+extern "C" vector<double> boozer_saw_nok_gpu_tracing(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange,
         double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<double> saw_phihats, int saw_nharmonics,
         py::array_t<double> stz_init, double m, double q, double vtotal, py::array_t<double> vtang, double tmax, double tol, py::array_t<double> dt_in, double psi0, int nparticles);
 
 extern "C" py::array_t<double> test_gpu_interpolation(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> loc, std::string coordinates, int n_points);
 extern "C" py::array_t<double> test_derivatives_cartesian(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> loc, py::array_t<double> vpar, double v_total, double m, double q,  int n_points);
 extern "C" py::array_t<double> test_derivatives_boozer(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> loc, py::array_t<double> vpar, double v_total, double m, double q,  double psi0, int n_points, bool vacuum = false);
-extern "C" py::array_t<double> test_derivatives_saw(py::array_t<double> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, 
+extern "C" py::array_t<double> test_derivatives_saw(py::array_t<double> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range,
         double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<double> saw_phihats, int saw_nharmonics,
         py::array_t<double> loc, py::array_t<double> vpar, py::array_t<double> time, double v_total, double m, double q,  double psi0, int n_points);
-extern "C" py::array_t<double> test_derivatives_saw_nok(py::array_t<double> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, 
+extern "C" py::array_t<double> test_derivatives_saw_nok(py::array_t<double> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range,
         double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<double> saw_phihats, int saw_nharmonics,
         py::array_t<double> loc, py::array_t<double> vpar, py::array_t<double> time, double v_total, double m, double q,  double psi0, int n_points);
 
@@ -42,16 +52,16 @@ extern "C" vector<double> test_timestep_cartesian(py::array_t<double> quad_pts, 
         double tol, int nparticles);
 
 extern "C" vector<double> test_timestep_boozer(py::array_t<double> quad_pts, py::array_t<double> srange,
-        py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> stz_init, double m, double q, double vtotal, py::array_t<double> vtang, 
+        py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> stz_init, double m, double q, double vtotal, py::array_t<double> vtang,
         double tol, double psi0, int nparticles, bool vacuum);
-        
-extern "C" vector<double> test_timestep_saw(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, 
+
+extern "C" vector<double> test_timestep_saw(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange,
         double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<double> saw_phihats, int saw_nharmonics,
         py::array_t<double> stz_init, double m, double q, double vtotal, py::array_t<double> vtang, py::array_t<double> time,
         double tol, double psi0, int nparticles);
 
 
-extern "C" vector<double> test_timestep_saw_nok(py::array_t<double> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, 
+extern "C" vector<double> test_timestep_saw_nok(py::array_t<double> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range,
         double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<double> saw_phihats, int saw_nharmonics,
         py::array_t<double> loc_init, double m, double q, double v_total, py::array_t<double> vtang, py::array_t<double> time,
         double tol, double psi0, int nparticles);
@@ -69,6 +79,104 @@ void init_tracing(py::module_ &m){
         .def(py::init<int>());
     py::class_<StepSizeStoppingCriterion, shared_ptr<StepSizeStoppingCriterion>, StoppingCriterion>(m, "StepSizeStoppingCriterion", py::module_local())
         .def(py::init<double>());
+
+    m.attr("COLL_MAX_SPECIES") = py::int_(COLL_MAX_SPECIES);
+
+    py::class_<ThermalBackground>(m, "ThermalBackground")
+        .def(py::init<>())
+        .def_readwrite("s_grid",     &ThermalBackground::s_grid)
+        .def_readwrite("n_grid",     &ThermalBackground::n_grid)
+        .def_readwrite("T_grid",     &ThermalBackground::T_grid)
+        .def_readwrite("mass",       &ThermalBackground::mass)
+        .def_readwrite("charge",     &ThermalBackground::charge);
+
+    py::class_<CollisionCoefficients>(m, "CollisionCoefficients")
+        .def_readonly("D_par",     &CollisionCoefficients::D_par)
+        .def_readonly("dD_par_dv", &CollisionCoefficients::dD_par_dv)
+        .def_readonly("nu_D",      &CollisionCoefficients::nu_D)
+        .def_readonly("K",         &CollisionCoefficients::K)
+        .def_readonly("v_cutoff",  &CollisionCoefficients::v_cutoff);
+
+    m.def("chandrasekhar_G", &chandrasekhar_G, py::arg("x"));
+    m.def("chandrasekhar_G_deriv", &chandrasekhar_G_deriv, py::arg("x"));
+
+    m.def("milstein_collision_step",
+        [](double v, double xi, const CollisionCoefficients& coef,
+           double h, double dW_v, double dW_xi) {
+            milstein_collision_step(v, xi, coef, h, dW_v, dW_xi);
+            return py::make_tuple(v, xi);
+        },
+        py::arg("v"),
+        py::arg("xi"),
+        py::arg("coef"),
+        py::arg("h"),
+        py::arg("dW_v"),
+        py::arg("dW_xi")
+    );
+
+    m.def("compute_collision_coefficients", &compute_collision_coefficients,
+        py::arg("v"),
+        py::arg("s"),
+        py::arg("m_a"),
+        py::arg("q_a"),
+        py::arg("backgrounds")
+    );
+
+    m.def("min_coulomb_log", &min_coulomb_log,
+        py::arg("v"),
+        py::arg("s"),
+        py::arg("m_a"),
+        py::arg("q_a"),
+        py::arg("backgrounds")
+    );
+
+    m.def("collision_substeps", &collision_substeps,
+        py::arg("v"),
+        py::arg("coef"),
+        py::arg("h")
+    );
+
+    m.def("particle_guiding_center_boozer_collision_tracing",
+        &particle_guiding_center_boozer_collision_tracing,
+        py::arg("field"),
+        py::arg("stz_init"),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("vtotal"),
+        py::arg("vtang"),
+        py::arg("tmax"),
+        py::arg("backgrounds"),
+        py::arg("vacuum"),
+        py::arg("noK"),
+        py::arg("stopping_criteria")=vector<shared_ptr<StoppingCriterion>>{},
+        py::arg("axis")=2,
+        py::arg("abstol")=1e-9,
+        py::arg("reltol")=1e-9,
+        py::arg("ode_solver")="dormand_prince",
+        py::arg("DP_hmin")=0.0,
+        py::arg("rng_seed")=uint64_t(0)
+    );
+
+    m.def("particle_guiding_center_boozer_perturbed_collision_tracing",
+        &particle_guiding_center_boozer_perturbed_collision_tracing,
+        py::arg("perturbed_field"),
+        py::arg("stz_init"),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("vtang"),
+        py::arg("mu_init"),
+        py::arg("tmax"),
+        py::arg("backgrounds"),
+        py::arg("vacuum"),
+        py::arg("noK"),
+        py::arg("stopping_criteria")=vector<shared_ptr<StoppingCriterion>>{},
+        py::arg("axis")=2,
+        py::arg("abstol")=1e-9,
+        py::arg("reltol")=1e-9,
+        py::arg("ode_solver")="dormand_prince",
+        py::arg("DP_hmin")=0.0,
+        py::arg("rng_seed")=uint64_t(0)
+    );
 
     m.def("particle_guiding_center_boozer_tracing", &particle_guiding_center_boozer_tracing,
         py::arg("field"),
@@ -145,7 +253,7 @@ void init_tracing(py::module_ &m){
         py::arg("nparticles")
         );
 
-    
+
     m.def("boozer_gpu_tracing", &boozer_gpu_tracing,
         py::arg("quad_pts"),
         py::arg("srange"),
@@ -164,6 +272,44 @@ void init_tracing(py::module_ &m){
         py::arg("vacuum") = false
         );
 
+
+    m.def("boozer_collision_gpu_tracing", &boozer_collision_gpu_tracing,
+        py::arg("quad_pts"),
+        py::arg("srange"),
+        py::arg("trange"),
+        py::arg("zrange"),
+        py::arg("stz_init"),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("vtotal"),
+        py::arg("vtang"),
+        py::arg("tmax"),
+        py::arg("tol"),
+        py::arg("dt_in"),
+        py::arg("psi0"),
+        py::arg("nparticles"),
+        py::arg("backgrounds"),
+        py::arg("vacuum"),
+        py::arg("rng_seed")=(unsigned long long)0
+    );
+
+    m.def("cartesian_collision_gpu_tracing", &cartesian_collision_gpu_tracing,
+        py::arg("quad_pts"),
+        py::arg("rrange"),
+        py::arg("phirange"),
+        py::arg("zrange"),
+        py::arg("xyz_init"),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("vtotal"),
+        py::arg("vtang"),
+        py::arg("tmax"),
+        py::arg("tol"),
+        py::arg("dt_in"),
+        py::arg("nparticles"),
+        py::arg("backgrounds"),
+        py::arg("rng_seed")=(unsigned long long)0
+    );
 
     m.def("boozer_saw_gpu_tracing", &boozer_saw_gpu_tracing,
         py::arg("quad_pts"),
@@ -301,7 +447,7 @@ void init_tracing(py::module_ &m){
         py::arg("vtang"),
         py::arg("vacuum")
         );
-    
+
     m.def("simsopt_derivs_saw", &simsopt_derivs_saw,
         py::arg("perturbed_field"),
         py::arg("loc"),
@@ -310,7 +456,7 @@ void init_tracing(py::module_ &m){
         py::arg("vtotal"),
         py::arg("vtang"),
         py::arg("time"),
-        py::arg("rhs")    
+        py::arg("rhs")
         );
 
 

@@ -74,8 +74,8 @@ points = initialize_position_profile(field, nParticles, reactivity, comm=comm_wo
 Ekin = FUSION_ALPHA_PARTICLE_ENERGY
 mass = ALPHA_PARTICLE_MASS
 charge = ALPHA_PARTICLE_CHARGE
-vpar0 = np.sqrt(2 * Ekin / mass)
-vpar_init = initialize_velocity_uniform(vpar0, nParticles, comm=comm_world)
+v0 = np.sqrt(2 * Ekin / mass)
+vpar_init = initialize_velocity_uniform(v0, nParticles, comm=comm_world)
 
 # --- Trace with original field ---
 res_tys_orig, _ = trace_particles_boozer(

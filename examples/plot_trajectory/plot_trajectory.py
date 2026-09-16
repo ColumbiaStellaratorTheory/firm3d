@@ -53,7 +53,6 @@ mass = ALPHA_PARTICLE_MASS
 charge = ALPHA_PARTICLE_CHARGE
 # Initialize single trapped particle on s = 0.5 surface with random theta and
 # zeta, and zero parallel velocity
-vpar0 = np.sqrt(2 * Ekin / mass)
 vpar_init = [0]
 points = np.zeros((1, 3))
 points[0, 0] = 0.5  # s = 0.5 surface

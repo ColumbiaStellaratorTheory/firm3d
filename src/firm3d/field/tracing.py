@@ -7,6 +7,7 @@ import firm3dpp as sopp
 from .._core.types import RealArray
 from .._core.util import parallel_loop_bounds
 from ..field.boozermagneticfield import BoozerMagneticField, ShearAlfvenWave
+from ..field.tracing_helpers import _validate_parallel_speeds
 from ..util.constants import (
     ALPHA_PARTICLE_CHARGE,
     ALPHA_PARTICLE_MASS,
@@ -217,6 +218,7 @@ def trace_particles_boozer_perturbed(
     nparticles = stz_inits.shape[0]
     assert stz_inits.shape[0] == len(parallel_speeds)
     assert len(mus) == len(parallel_speeds)
+
     speed_par = parallel_speeds
     m = mass
     if Ekin is None:
@@ -418,10 +420,10 @@ def trace_particles_boozer(
             `ODE_solver` is "symplectic". If None, defaults to `tol`.
         predictor_step: provide better initial guess for the next time step
             using predictor steps. Defaults to True if `ODE_solver` is "symplectic".
-        DP_hmin: Minimal timestep to enforce during numerical integration with adaptive
-            timestep. If the adaptice time step gets below DP_hmin, the stepper
-            completes step with DP_hmin timestep. Default is 0.0. Only used if
-            `ODE_solver` is "dormand_prince".
+        DP_hmin: Minimal timestep, in seconds, to enforce during numerical
+            integration with adaptive timestep. If the adaptive time step gets
+            below DP_hmin, the stepper completes the step with DP_hmin anyway.
+            Default is 0.0. Only used if `ODE_solver` is "dormand_prince".
     Returns: 2 element tuple containing
         - ``res_tys``:
             A list of numpy arrays (one for each particle) describing the
@@ -505,6 +507,7 @@ def trace_particles_boozer(
         Ekin = Ekin * np.ones((len(parallel_speeds),))
     # Ekin = 0.5 * m * v^2 <=> v = sqrt(2*Ekin/m)
     speed_total = np.sqrt(2 * Ekin / m)
+    _validate_parallel_speeds(speed_par, speed_total)
 
     if mode is not None:
         mode = mode.lower()
