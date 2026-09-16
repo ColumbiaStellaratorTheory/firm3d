@@ -28,17 +28,40 @@ def trace_particles_boozer_gpu(
 ):
     """
     Trace particles in Boozer coordinates using CATAPULT
+
+    Tracing runs in single or double precision according to the dtype of
+    stz_inits (float32 or float64); parallel_speeds, dt, and mu must share
+    that dtype.
+
     field: a magnetic field object representing the field in Boozer coordinates
-    stz_inits: initial conditions for particles in (s, theta, zeta) coordinates
+    stz_inits: initial conditions for particles, shape (nparticles, 3), in
+        (s, theta, zeta) coordinates if in_boozer is True, else in the
+        pseudo-Cartesian coordinates (x1, x2, zeta) that CATAPULT integrates
+        in, with x1 = s cos(theta) and x2 = s sin(theta)
     parallel_speeds: initial parallel speeds of the particles
-    tmax: maximum time to trace particles
+    tmax: maximum time to trace particles, either a scalar applied to every
+        particle or a per-particle array of shape (nparticles,)
     mass: mass of each particle
     charge: charge of each particle
     vtotal: total velocity of each particle
     tol: tolerance for the ODE solver
-    dt: the initial time step size for the solver (optional)
-    mu: the initial magnetic moment for the solver (optional)
-    in_boozer: if True, the initial conditions are in Boozer coordinates, else in pseudo-Cartesian coordinates
+    dt: the initial time step size for the solver (optional; chosen from the
+        maximum stable step size if not given)
+    mu: the magnetic moment of each particle (optional; computed from the
+        initial conditions if not given)
+    in_boozer: if True, the initial conditions are in Boozer coordinates, else
+        in pseudo-Cartesian coordinates; the result is returned in the same
+        coordinates
+
+    Returns:
+        An array of shape (nparticles, 7) whose columns are
+        (t, s, theta, zeta, vpar, dt, mu) if in_boozer is True, else
+        (t, x1, x2, zeta, vpar, dt, mu). t is the time at which tracing
+        stopped, so a particle is lost if t < tmax. zeta is returned wrapped
+        to [0, 2 pi), unlike the CPU tracer, which returns it unwrapped.
+        Columns 1-4 can be used as the initial conditions of a follow-on
+        call, and the dt and mu columns fed back in through the dt and mu
+        arguments, to continue tracing.
     """
     nparticles = stz_inits.shape[0]
 
@@ -194,16 +217,29 @@ def trace_particles_cartesian_gpu(
 ):
     """
     Trace particles in Cartesian coordinates using CATAPULT
+
     field: a magnetic field object representing the field in Cartesian coordinates
     surface_classifier: a simsopt surface classifier object for detecting a surface
-    xyz_inits: initial conditions for particles in (x, y, z) coordinates
+    xyz_inits: initial conditions for particles, shape (nparticles, 3), in
+        (x, y, z) coordinates; must be float64
     parallel_speeds: initial parallel speeds of the particles
-    tmax: maximum time to trace particles
+    tmax: maximum time to trace particles, either a scalar applied to every
+        particle or a per-particle array of shape (nparticles,)
     mass: mass of each particle
     charge: charge of each particle
     vtotal: total velocity of each particle
     tol: tolerance for the ODE solver
-    dt: the initial time step size for the solver (optional)
+    dt: the initial time step size for the solver (optional; chosen from the
+        maximum stable step size if not given)
+    mu: the magnetic moment of each particle (optional; computed from the
+        initial conditions if not given)
+
+    Returns:
+        An array of shape (nparticles, 7) whose columns are
+        (t, x, y, z, vpar, dt, mu). t is the time at which tracing stopped,
+        so a particle is lost if t < tmax. Columns 1-4 can be used as the
+        initial conditions of a follow-on call, and the dt and mu columns fed
+        back in through the dt and mu arguments, to continue tracing.
     """
 
     nparticles = xyz_inits.shape[0]
