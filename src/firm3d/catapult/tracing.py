@@ -1,4 +1,10 @@
-__all__ = ["trace_particles_boozer_gpu", "trace_particles_cartesian_gpu"]
+__all__ = [
+    "trace_particles_boozer_gpu",
+    "trace_particles_cartesian_gpu",
+    "save_trajectories_boozer_gpu",
+    "save_trajectories_cartesian_gpu",
+]
+
 import numpy as np
 
 import firm3dpp
@@ -376,3 +382,199 @@ def trace_particles_boozer_gpu_trajectories(
             break
 
     return trajectories
+
+
+def _save_trajectories(trace_chunk, inits, parallel_speeds, tmax, dt_save):
+    """
+    Trace particles in chunks of dt_save, recording the state at the end of
+    each chunk. This is the field-type-independent trajectory-saving loop
+    shared by save_trajectories_boozer_gpu and save_trajectories_cartesian_gpu.
+
+    trace_chunk(inits, parallel_speeds, tmax, dt, mu) must trace the given
+    particles from t=0 for up to tmax (per particle) and return an
+    (nparticles, 7) array (t, x1, x2, x3, vpar, dt, mu); the wrappers in this
+    module do that once their interpolant is prebuilt.
+
+    Between chunks the returned dt and mu are fed back in, so the chunked
+    integration reproduces a single uninterrupted trace. Lost particles are
+    dropped from later chunks, with their original index remembered so the
+    returned list lines up with the input.
+    """
+    nparticles = inits.shape[0]
+    dtype = inits.dtype
+    trajectories = [[] for _ in range(nparticles)]
+    ids = np.arange(nparticles)
+    current_time = np.zeros(nparticles)
+    dt = np.full(nparticles, -1.0, dtype=dtype)
+    mu = np.full(nparticles, -1.0, dtype=dtype)
+
+    # ceil of the ratio, but tolerant of float rounding in an exact multiple
+    # (1e-3 / 1e-6 evaluates to 1000.0000000000001, which must give 1000 chunks)
+    nsteps = max(int(np.ceil((tmax / dt_save) * (1 - 1e-12))), 1)
+    for step in range(nsteps):
+        # each particle advances to the end of this chunk; the tracer starts
+        # every call at t=0, so pass the remaining time for this chunk
+        chunk_end = min((step + 1) * dt_save, tmax)
+        local_tmax = np.maximum(chunk_end - current_time, 0.0)
+
+        step_data = trace_chunk(inits, parallel_speeds, local_tmax, dt, mu)
+        step_data[:, 0] += current_time
+        current_time = step_data[:, 0]
+
+        for i, idx in enumerate(ids):
+            trajectories[idx].append(step_data[i, :])
+
+        # a particle whose chunk ended early was lost
+        keep = current_time >= 0.999 * chunk_end
+        inits = np.ascontiguousarray(step_data[keep, 1:4], dtype=dtype)
+        parallel_speeds = np.ascontiguousarray(step_data[keep, 4], dtype=dtype)
+        dt = np.ascontiguousarray(step_data[keep, 5], dtype=dtype)
+        mu = np.ascontiguousarray(step_data[keep, 6], dtype=dtype)
+        ids = ids[keep]
+        current_time = current_time[keep]
+        if ids.size == 0:
+            break
+
+    return [np.array(traj) for traj in trajectories]
+
+
+def save_trajectories_boozer_gpu(
+    field,
+    stz_inits,
+    parallel_speeds,
+    tmax,
+    dt_save,
+    mass,
+    charge,
+    vtotal,
+    tol,
+    ns,
+    ntheta,
+    nzeta,
+):
+    """
+    Trace particles in Boozer coordinates using CATAPULT, saving the
+    trajectory of each particle every dt_save.
+
+    Arguments are as for trace_particles_boozer_gpu, plus dt_save, the
+    interval at which to record the state. The interpolant is built once and
+    reused for every chunk. Precision follows the dtype of stz_inits.
+
+    Returns:
+        A list with one entry per particle: an array of shape (nsaved, 7)
+        whose rows are (t, s, theta, zeta, vpar, dt, mu) at successive
+        multiples of dt_save (the final row is the last saved state, so a
+        lost particle has fewer rows). zeta is wrapped to [0, 2 pi).
+    """
+    if isinstance(field, ShearAlfvenWavesSuperposition):
+        raise ValueError(
+            "save_trajectories_boozer_gpu supports equilibrium fields only"
+        )
+    if field.field_type not in ["vac", ""]:
+        raise ValueError(
+            f"Unsupported field type {field.field_type} for Boozer tracing, "
+            "expected 'vac' or ''"
+        )
+    dtype = stz_inits.dtype
+    vacuum = field.field_type == "vac"
+    srange, trange, zrange, quad_info, _ = boozer_interpolant(
+        field, field.nfp, ns, ntheta, nzeta, vacuum=vacuum
+    )
+    quad_info = quad_info.astype(dtype)
+    psi0 = field.psi0
+    # the loop works in the pseudo-Cartesian coordinates CATAPULT integrates
+    # in, so a chunk's output feeds the next chunk's input directly
+    s = stz_inits[:, 0]
+    theta = stz_inits[:, 1]
+    inits = np.ascontiguousarray(
+        np.column_stack((s * np.cos(theta), s * np.sin(theta), stz_inits[:, 2])),
+        dtype=dtype,
+    )
+    parallel_speeds = np.ascontiguousarray(parallel_speeds, dtype=dtype)
+
+    def trace_chunk(inits, parallel_speeds, local_tmax, dt, mu):
+        n = inits.shape[0]
+        out = firm3dpp.boozer_gpu_tracing(
+            quad_pts=quad_info,
+            srange=srange,
+            trange=trange,
+            zrange=zrange,
+            stz_init=inits,
+            m=mass,
+            q=charge,
+            vtotal=vtotal,
+            vtang=parallel_speeds,
+            tmax=np.asarray(local_tmax, dtype=np.float64),
+            tol=tol,
+            dt_in=dt,
+            mu_in=mu,
+            psi0=psi0,
+            nparticles=n,
+            vacuum=vacuum,
+        )
+        return np.asarray(out, dtype=dtype).reshape(n, 7)
+
+    trajectories = _save_trajectories(
+        trace_chunk, inits, parallel_speeds, tmax, dt_save
+    )
+    for traj in trajectories:
+        x1 = traj[:, 1].copy()
+        x2 = traj[:, 2].copy()
+        traj[:, 1] = np.hypot(x1, x2)
+        traj[:, 2] = np.arctan2(x2, x1)
+    return trajectories
+
+
+def save_trajectories_cartesian_gpu(
+    field,
+    surface_classifier,
+    xyz_inits,
+    parallel_speeds,
+    tmax,
+    dt_save,
+    mass,
+    charge,
+    vtotal,
+    tol,
+):
+    """
+    Trace particles in Cartesian coordinates using CATAPULT, saving the
+    trajectory of each particle every dt_save.
+
+    Arguments are as for trace_particles_cartesian_gpu, plus dt_save, the
+    interval at which to record the state. The interpolant is built once and
+    reused for every chunk.
+
+    Returns:
+        A list with one entry per particle: an array of shape (nsaved, 7)
+        whose rows are (t, x, y, z, vpar, dt, mu) at successive multiples of
+        dt_save (a lost particle has fewer rows).
+    """
+    dtype = xyz_inits.dtype
+    r_range, phi_range, z_range, quad_info = cartesian_interpolant(
+        field, surface_classifier, dtype=dtype
+    )
+    inits = np.ascontiguousarray(xyz_inits, dtype=dtype)
+    parallel_speeds = np.ascontiguousarray(parallel_speeds, dtype=dtype)
+
+    def trace_chunk(inits, parallel_speeds, local_tmax, dt, mu):
+        n = inits.shape[0]
+        out = firm3dpp.cartesian_gpu_tracing(
+            quad_pts=quad_info,
+            rrange=r_range,
+            phirange=phi_range,
+            zrange=z_range,
+            xyz_init=inits,
+            m=mass,
+            q=charge,
+            vtotal=vtotal,
+            vtang=parallel_speeds,
+            tmax=np.asarray(local_tmax, dtype=np.float64),
+            tol=tol,
+            dt_in=dt,
+            mu_in=mu,
+            nparticles=n,
+        )
+        return np.asarray(out, dtype=dtype).reshape(n, 7)
+
+    return _save_trajectories(trace_chunk, inits, parallel_speeds, tmax, dt_save)
