@@ -20,7 +20,7 @@ from firm3d.util.constants import (
     ALPHA_PARTICLE_MASS,
     FUSION_ALPHA_PARTICLE_ENERGY,
 )
-from firm3d.util.functions import in_github_actions, proc0_print, setup_logging
+from firm3d.util.functions import in_github_actions, proc0_print, setup_logging, sigmav
 from firm3d.util.mpi import comm_size, comm_world, verbose
 
 resolution = 10 if in_github_actions else 48  # Resolution for field interpolation
@@ -67,13 +67,6 @@ T = lambda s: 11.5 * (1 - s)  # Temperature in keV
 
 
 # D-T cross-section
-def sigmav(T):
-    if T > 0:
-        return T ** (-2 / 3) * np.exp(-19.94 * T ** (-1 / 3))
-    else:
-        return 0
-
-
 # Reactivity profile
 reactivity = lambda s: nD(s) * nT(s) * sigmav(T(s))
 

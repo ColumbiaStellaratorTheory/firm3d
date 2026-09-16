@@ -2,7 +2,11 @@ import numpy as np
 
 from ..util.mpi import verbose
 
-__all__ = ["plot_trajectory_poloidal", "plot_trajectory_overhead_cyl"]
+__all__ = [
+    "plot_trajectory_poloidal",
+    "plot_trajectory_overhead_cyl",
+    "plot_resonance_lines",
+]
 
 
 def plot_trajectory_poloidal(res_ty, helicity_M=1, helicity_N=0, ax=None):
@@ -63,6 +67,122 @@ def plot_trajectory_poloidal(res_ty, helicity_M=1, helicity_N=0, ax=None):
     return ax
 
 
+def plot_resonance_lines(
+    ax,
+    harmonics,
+    mode_numbers,
+    trapped_boundary_fit,
+    trapped_boundary_fit_pitch,
+    harmonic_cmap,
+    norm,
+    possible_linestyles,
+    max_ell,
+    min_crossing_points=2,
+    poly_degree=2,
+    n_fit_points=100,
+):
+    r"""
+    Fit and plot resonance lines accumulated by
+    :func:`firm3d.trajectory_helpers.accumulate_resonance_crossings` onto a
+    phase-space heatmap axis, as a function of pitch angle.
+
+    For each (harmonic, ell) pair, resonance crossing points are fit with a
+    polynomial in pitch angle and drawn up to the first point where the fit
+    crosses the trapped-passing boundary (beyond which the resonance line
+    would lie in the trapped region).
+
+    Args:
+        ax : Matplotlib axis to plot the resonance lines on (e.g. the
+             heatmap axis).
+        harmonics : Dict of the form {h: {ell: [[pitch_angles, radii], ...]}}
+                    as populated by accumulate_resonance_crossings.
+        mode_numbers : Dict {h: (Phim_h, Phin_h)} of poloidal/toroidal mode
+                       numbers, used for legend labels.
+        trapped_boundary_fit : Callable mapping an array of pitch angles to
+                                the fitted trapped-passing boundary radial
+                                location at each pitch angle (e.g.
+                                heat_map.trapped_boundary_fit).
+        trapped_boundary_fit_pitch : Array of pitch-angle values over which
+                                     trapped_boundary_fit was originally fit
+                                     (e.g. heat_map.trapped_boundary_fit_pitch).
+                                     Used to exclude resonance lines starting
+                                     outside the fit's valid domain.
+        harmonic_cmap : Colormap used to color lines by harmonic index.
+        norm : Normalization instance mapping harmonic index h to [0, 1] for
+               harmonic_cmap.
+        possible_linestyles : List of line styles indexed by ell + max_ell.
+        max_ell : Maximum |ell| present in harmonics.
+        min_crossing_points : Minimum number of (pitch, radius) points needed
+                              to fit a resonance line (default: 2).
+        poly_degree : Degree of the polynomial fit (default: 2).
+        n_fit_points : Number of points to evaluate the fit at (default: 100).
+
+    Returns:
+        labels_lines : List of Line2D handles, one per (h, ell) pair, for the
+                       first crossing line of each.
+        labels_text : List of label strings corresponding to labels_lines.
+    """
+    labels_lines = []
+    labels_text = []
+    for h in harmonics:
+        Phim_h, Phin_h = mode_numbers[h]
+
+        for ell in harmonics[h]:
+            for crossing_line_index, crossing_line in enumerate(harmonics[h][ell]):
+                resonance_peta = np.asarray(crossing_line[1])
+                resonance_pitch = np.asarray(crossing_line[0])
+
+                if len(crossing_line[1]) < min_crossing_points:
+                    continue  # skip if not enough points to fit a curve
+
+                # smooth resonance lines with a polynomial fit
+                coeffs = np.polyfit(resonance_pitch, resonance_peta, poly_degree)
+                poly = np.poly1d(coeffs)
+                pa_fit = np.linspace(
+                    min(resonance_pitch), max(resonance_pitch), n_fit_points
+                )
+                s_fit = poly(pa_fit)
+
+                color = harmonic_cmap(norm(h))
+
+                # fit a curve to the resonance points to plot on the heatmap
+                trapped_passing_fit = trapped_boundary_fit(pa_fit)
+
+                # ignore resonance lines which start near the trapped-passing
+                # boundary, in the region where the fit is inaccurate due to
+                # numerical noise
+                if np.abs(trapped_boundary_fit_pitch[0]) < np.abs(resonance_pitch[0]):
+                    continue
+
+                diff = trapped_passing_fit - s_fit
+                sign_changes = np.where(np.sign(diff[:-1]) != np.sign(diff[1:]))[0]
+
+                # don't repeat label if resonance line crosses multiple times
+                if crossing_line_index == 0:
+                    label = rf"m,n={Phim_h},{Phin_h} $\ell$={ell}"
+                else:
+                    label = None
+
+                stop_index = len(pa_fit) if len(sign_changes) == 0 else sign_changes[0]
+
+                if stop_index == 0:
+                    continue  # skip if resonance line is entirely in trapped region
+                (line,) = ax.plot(
+                    pa_fit[:stop_index],
+                    s_fit[:stop_index],
+                    linewidth=5,
+                    linestyle=possible_linestyles[ell + max_ell],
+                    label=label,
+                    color=color,
+                )
+
+                if crossing_line_index == 0:
+                    labels_lines.append(line)
+                    labels_text.append(label)
+
+    return labels_lines, labels_text
+
+
 def plot_trajectory_overhead_cyl(res_ty, field, ax=None):
     r"""
     Given the trajectory of a single particle in Boozer coordinates, plot
@@ -83,7 +203,7 @@ def plot_trajectory_overhead_cyl(res_ty, field, ax=None):
     Returns:
         ax : The matplotlib Axes object containing the plot.
     """
-    from ..field.trajectory_helpers import compute_trajectory_cylindrical
+    from ..trajectory_helpers import compute_trajectory_cylindrical
 
     R, phi, Z = compute_trajectory_cylindrical(res_ty, field)
 

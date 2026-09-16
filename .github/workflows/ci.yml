@@ -107,6 +107,7 @@ jobs:
 
     - name: Run examples
       run: |
+        (cd examples/equilibrium_chaos_map && python phase_space_map.py)
         (cd examples/fusion_distribution && python fusion_distribution.py)
         (cd examples/fusion_distribution_perturbed && python fusion_distribution_perturbed.py)
         (cd examples/uniform_surf_distribution && python uniform_surf_distribution.py)
@@ -114,8 +115,8 @@ jobs:
         (cd examples/plot_trajectory && python plot_trajectory.py)
         (cd examples/orbit_classification && python fusion_distribution_classification.py)
         (cd examples/passing_map_unperturbed && python passing_map.py)
+        (cd examples/perturbed_chaos_map && python heat_map_alone.py)
         (cd examples/passing_map_perturbed_QA && python passing_map_perturbed.py)
-        (cd examples/passing_map_perturbed_QA_WBA && python passing_map_perturbed.py)
         (cd examples/passing_map_perturbed_QH && python passing_map_perturbed.py)
         (cd examples/trapped_map && python trapped_map.py)
         (cd examples/trapped_map_QI && python trapped_map_QI.py)
@@ -123,6 +124,7 @@ jobs:
         (cd examples/trapped_frequencies && python trapped_frequencies.py)
         (cd examples/tracing_with_AE && python tracing_with_AE.py)
         (cd examples/tracing_with_FAR3D_IVP && python tracing_with_FAR3D_AE.py)
+        (cd examples/WBA_particles && python WBA_tracing_boozer.py && python WBA_tracing_perturbed.py)
 
   docs:
     name: Build Documentation

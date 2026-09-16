@@ -1,0 +1,30 @@
+#!/bin/bash
+#SBATCH -N 1
+#SBATCH -t 0-00:30:00
+#SBATCH --ntasks-per-node=96
+#SBATCH -A pppl
+#SBATCH -q regular
+#SBATCH --mail-type=begin,end,fail
+#SBATCH --mail-user=
+
+module purge
+module load gcc/8
+module load openmpi/gcc/4.1.0
+module load netcdf/gcc/hdf5-1.10.6/openmpi-4.1.0/4.7.4
+module load hdf5/gcc/openmpi-4.1.0/1.10.6
+module load anaconda3/2021.11
+module load scalapack/openmpi-4.1.0/2.0.2
+module load openblas/0.3.x 
+module load gsl/2.6
+
+export CC=/usr/local/openmpi/4.1.0/gcc/bin/mpicc
+export MPICC=/usr/local/openmpi/4.1.0/gcc/bin/mpicc
+export CXX=/usr/local/openmpi/4.1.0/gcc/bin/mpicxx
+export MPICXX=/usr/local/openmpi/4.1.0/gcc/bin/mpicxx
+export LDFLAGS="-L/usr/local/hdf5/gcc/openmpi-4.1.0/1.10.6/lib64 -lhdf5_hl -lhdf5"
+
+source /usr/licensed/anaconda3/2021.11/etc/profile.d/conda.sh
+conda activate firm3d
+export LD_LIBRARY_PATH=/usr/local/hdf5/gcc/openmpi-4.1.0/1.10.6/lib64:/usr/local/netcdf/gcc/hdf5-1.10.6/openmpi-4.1.0/4.7.4/lib64:$LD_LIBRARY_PATH
+
+srun -n 96 -c 1 --cpu-bind=none python <file_name>.py

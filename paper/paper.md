@@ -94,7 +94,7 @@ The FIRM3D routines and their SIMSOPT precursors have already enabled published 
 
 # AI usage disclosure
 
-Claude Code (Anthropic) was used to assist with portions of the FIRM3D codebase and its readthedocs documentation. All AI-assisted code and documentation changes were reviewed by the maintainers and validated against the project's CPU and GPU continuous-integration test suite before merging. 
+Claude Code (Anthropic) was used to assist with portions of the FIRM3D codebase and its readthedocs documentation. All AI-assisted code and documentation changes were reviewed by the maintainers and validated against the project's CPU and GPU continuous-integration test suite before merging.
 
 # Acknowledgements
 
