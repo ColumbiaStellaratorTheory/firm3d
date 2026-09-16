@@ -180,7 +180,9 @@ def trace_particles_boozer_gpu(
             vtang=parallel_speeds.copy(),
             tmax=tmax,
             tol=tol,
-            dt_in=dt if dt is not None else -np.ones(nparticles).astype(stz_inits.dtype),
+            dt_in=dt
+            if dt is not None
+            else -np.ones(nparticles).astype(stz_inits.dtype),
             mu_in=mu
             if mu is not None
             else -np.ones(nparticles).astype(stz_inits.dtype),
