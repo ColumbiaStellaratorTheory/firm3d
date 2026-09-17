@@ -1034,15 +1034,33 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
         block_t[threadIdx.x] = t[idx]; // copy input t
         block_tmax[threadIdx.x] = tmax[idx]; // copy input tmax
         block_dtmax[threadIdx.x] = dtmax[idx]; // copy input dtmax
+
+        // write out initial state if tmax is 0
+        if(block_tmax[threadIdx.x] == 0.0){
+            out[7*idx] = block_t[threadIdx.x];
+            for(int i=0; i<4; ++i){
+                out[7*idx + i + 1] = state[i*PARTICLES_PER_BLOCK + threadIdx.x];
+            }
+            out[7*idx + 5] = block_dt[threadIdx.x];
+            out[7*idx + 6] = block_mu[threadIdx.x];
+        }
     }
     __syncthreads();
 
     // if there exists a particle which is real and hasn't not reached tmax or left, keep tracing
     while(__syncthreads_count(is_valid_arr[threadIdx.x % PARTICLES_PER_BLOCK] &&
                             !(block_t[threadIdx.x % PARTICLES_PER_BLOCK] >= block_tmax[threadIdx.x % PARTICLES_PER_BLOCK] || has_left[threadIdx.x % PARTICLES_PER_BLOCK])) > 0){
-        if(__syncthreads_count(is_valid_arr[threadIdx.x % PARTICLES_PER_BLOCK] && block_t[threadIdx.x % PARTICLES_PER_BLOCK] == 0.0) > 0){
-            dp5_one_step<T, id, 0>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
-                                symmetry_exploited, state, block_mu, is_valid_arr, args...);
+
+        // create a mask similar to is_valid_arr for particles where mu needs to be computed
+        __shared__ bool needs_stage0[PARTICLES_PER_BLOCK];
+        if(threadIdx.x < PARTICLES_PER_BLOCK){
+            needs_stage0[threadIdx.x] = is_valid_arr[threadIdx.x] && (block_t[threadIdx.x] == 0.0);
+        }
+        __syncthreads();
+
+        if(__syncthreads_count(needs_stage0[threadIdx.x % PARTICLES_PER_BLOCK]) > 0){
+            dp5_one_step<T, id, 0>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals,
+                                    block_t, block_dt, symmetry_exploited, state, block_mu, needs_stage0, args...);
         }
         dp5_one_step<T, id, 1>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
                             symmetry_exploited, state, block_mu, is_valid_arr, args...);

@@ -271,3 +271,108 @@ def trace_particles_cartesian_gpu(
     )
     last_time = np.reshape(last_time, (nparticles, 7))
     return last_time
+
+
+def trace_particles_boozer_gpu_trajectories(
+    field,
+    stz_inits,
+    parallel_speeds,
+    tmax,
+    mass,
+    charge,
+    vtotal,
+    tol,
+    ns,
+    ntheta,
+    nzeta,
+    dt_save,
+):
+
+    n_particles = stz_inits.shape[0]
+    current_time = np.zeros(n_particles)
+    trajectories = [[] for _ in range(n_particles)]
+    dt = -np.ones(n_particles)
+    mu = -np.ones(n_particles)
+
+    # create interpolant data
+    srange, trange, zrange, quad_info, maxJ = boozer_interpolant(
+        field, field.nfp, ns, ntheta, nzeta, vacuum=True
+    )
+    psi0 = field.psi0
+
+    # convert Boozer to pseudo-Cartesian coordinates
+    s = stz_inits[:, 0]
+    theta = stz_inits[:, 1]
+    x1 = s * np.cos(theta)
+    x2 = s * np.sin(theta)
+
+    stz_inits[:, 0] = x1
+    stz_inits[:, 1] = x2
+    stz_inits = np.ascontiguousarray(stz_inits)
+
+    # when we filter particles out for leaving
+    # we need to remember their original index
+    ids = np.arange(n_particles, dtype=int)
+
+    n_steps = int(tmax / dt_save)
+    for step in range(n_steps):
+        # keep track of the tmax we will reach at the end of the loop
+        # each particle needs to advance to step_end_time
+        local_tmax = np.maximum((step + 1) * dt_save - current_time, 0.0)
+
+        # advance particles to step_end_time
+        dt = np.ascontiguousarray(dt)
+        local_tmax = np.ascontiguousarray(local_tmax)
+        mu = np.ascontiguousarray(mu)
+
+        step_data = firm3dpp.boozer_gpu_tracing(
+            quad_pts=quad_info,
+            srange=srange,
+            trange=trange,
+            zrange=zrange,
+            stz_init=stz_inits.copy(),
+            m=mass,
+            q=charge,
+            vtotal=vtotal,
+            vtang=parallel_speeds.copy(),
+            tmax=local_tmax,
+            tol=tol,
+            dt_in=dt,
+            mu_in=mu,
+            psi0=psi0,
+            nparticles=n_particles,
+            vacuum=True,
+        )
+        step_data = np.reshape(step_data, (n_particles, 7))
+
+        dt = step_data[:, 5].copy()
+        mu = step_data[:, 6].copy()
+
+        # compute new current time for each particle
+        step_data[:, 0] += current_time
+        current_time = step_data[:, 0]
+
+        # store data using stored indices
+        for i, idx in enumerate(ids):
+            if local_tmax[i] > 0.0:
+                trajectories[idx].append(step_data[i, :])
+
+        # find lost particles
+        s_end = np.sqrt(step_data[:, 1] ** 2 + step_data[:, 2] ** 2)
+
+        idx_keep = (current_time < tmax) & (s_end < 1.0)
+
+        # remove lost particles
+        stz_inits = step_data[idx_keep, 1:4].copy()
+        parallel_speeds = step_data[idx_keep, 4].copy()
+        ids = ids[idx_keep]
+        current_time = current_time[idx_keep]
+        dt = dt[idx_keep].copy()
+        mu = mu[idx_keep].copy()
+
+        n_particles = stz_inits.shape[0]
+
+        if n_particles == 0:
+            break
+
+    return trajectories

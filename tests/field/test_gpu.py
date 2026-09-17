@@ -47,13 +47,14 @@ from firm3d.util.constants import (
 from firm3d.util.constants import (
     FUSION_ALPHA_PARTICLE_ENERGY as ENERGY,
 )
+from firm3d.catapult.tracing import trace_particles_boozer_gpu_trajectories
 
 HAS_CUDA = hasattr(firm3dpp, "test_gpu_interpolation")
 n_test_pts = 10000
 
 
 def sample_test_points(n_test_pts):
-    np.random.seed(1865)
+    np.random.seed(1)
     # generate test points
     s = np.random.uniform(low=0, high=1.1, size=(n_test_pts, 1))
     t = np.random.uniform(low=0, high=2 * np.pi, size=(n_test_pts, 1))
@@ -565,7 +566,7 @@ class CATAPULTField:
                         x[0],
                         x[1] * np.cos(x[2]),
                         x[1] * np.sin(x[2]),
-                        x[3],
+                        np.fmod(x[3], 2 * np.pi) + 2 * np.pi * (x[3] < 0),
                         x[4],
                     ]
                     for x in cpu_positions
@@ -575,6 +576,7 @@ class CATAPULTField:
 
     def test_timestep(self, stz, vpar, vtotal, time, psi0, tol):
         gpu_final_positions = self.compute_gpu_timestep(stz, vpar, vtotal, time, psi0)
+
         cpu_positions = self.compute_cpu_timesteps(stz, vpar, vtotal, time, psi0)
 
         gpu_error_is_small = np.allclose(
@@ -588,6 +590,90 @@ class CATAPULTField:
             print("stz:", stz[row_idx, :])
             print("cpu:", cpu_positions[row_idx, :])
             print("gpu:", gpu_final_positions[row_idx, :])
+            print("error:", error[row_idx, :])
+
+        return gpu_error_is_small
+
+    def compute_gpu_trajectories(self, stz, vpar, vtotal, tmax, dt_save, psi0):
+
+        if self.field_type == "boozer_vacuum":
+            trajectories = trace_particles_boozer_gpu_trajectories(
+                field=self.field,
+                stz_inits=stz.copy(),
+                parallel_speeds=vpar.copy(),
+                tmax=tmax,
+                dt_save=dt_save,
+                mass=MASS,
+                charge=CHARGE,
+                vtotal=vtotal,
+                tol=1e-9,
+                ns=self.ns,
+                ntheta=self.ntheta,
+                nzeta=self.nzeta,
+            )
+        else:
+            raise NotImplementedError(
+                f"GPU trajectory computation not implemented for \
+            this field type: {self.field_type}"
+            )
+        return trajectories
+
+    def compute_gpu_final_pos(self, stz, vpar, vtotal, tmax, psi0):
+
+        if self.field_type == "boozer_vacuum":
+            s = stz[:, 0]
+            theta = stz[:, 1]
+            x1 = s * np.cos(theta)
+            x2 = s * np.sin(theta)
+            stz[:, 0] = x1
+            stz[:, 1] = x2
+            final_pos = firm3dpp.boozer_gpu_tracing(
+                quad_pts=self.quad_info,
+                srange=self.range0,
+                trange=self.range1,
+                zrange=self.range2,
+                stz_init=stz.copy(),
+                m=MASS,
+                q=CHARGE,
+                vtotal=vtotal,
+                vtang=vpar.copy(),
+                tmax=[tmax] * stz.shape[0],
+                tol=1e-9,
+                psi0=psi0,
+                dt_in=-np.ones(stz.shape[0]),
+                mu_in=-np.ones(stz.shape[0]),
+                nparticles=stz.shape[0],
+                vacuum=True,
+            )
+        else:
+            raise NotImplementedError(
+                f"GPU final position computation not implemented\
+             for this field type: {self.field_type}"
+            )
+        final_pos = np.reshape(final_pos, (stz.shape[0], 7))
+        return final_pos
+
+    def test_trajectory_saving(self, stz, vpar, vtotal, tmax, dt_save, psi0):
+        gpu_trajectories = self.compute_gpu_trajectories(
+            stz, vpar, vtotal, tmax, dt_save, psi0
+        )
+        final_pos_traj = np.array([trajectory[-1] for trajectory in gpu_trajectories])
+
+        gpu_final_pos = self.compute_gpu_final_pos(stz, vpar, vtotal, tmax, psi0)
+
+        gpu_error_is_small = np.allclose(
+            final_pos_traj[:, 0:5], gpu_final_pos[:, 0:5], rtol=1e-9, atol=1e-9
+        )
+        error = np.abs(final_pos_traj[:, 0:5] - gpu_final_pos[:, 0:5]) / (
+            np.abs(gpu_final_pos[:, 0:5]) + 1
+        )
+
+        if not gpu_error_is_small:
+            row_idx = np.unravel_index(np.argmax(error), error.shape)[0]
+            print("stz:", stz[row_idx, :])
+            print("vpar:", vpar[row_idx])
+            print("gpu final pos:", gpu_final_pos[row_idx, :])
+            print("gpu traj final pos:", final_pos_traj[row_idx, :])
             print("error:", error[row_idx, :])
 
         return gpu_error_is_small
@@ -630,6 +716,15 @@ class TestGPUTracingBoozerVacuum(unittest.TestCase):
     def test_timestep(self):
         is_small = self.field.test_timestep(
             self.stz, self.vpar_init, self.VELOCITY, None, self.field.psi0, 1e-8
+        )
+        self.assertTrue(is_small)
+
+    def test_trajectory_saving(self):
+        tmax = 2e-8
+        dt_save = 1e-8
+
+        is_small = self.field.test_trajectory_saving(
+            self.stz, self.vpar_init, self.VELOCITY, tmax, dt_save, self.field.psi0
         )
         self.assertTrue(is_small)
 
@@ -729,6 +824,7 @@ class TestGPUTracingBoozerVacuumSAW(unittest.TestCase):
         self.assertTrue(is_small)
 
 
+@unittest.skipUnless(HAS_CUDA, "CUDA support not available")
 class TestGPUTracingBoozerNoKSAW(unittest.TestCase):
     def setUp(self):
         self.n_metagrid_pts = 15
