@@ -29,8 +29,11 @@ n = 30  # resolution of interpolant
 order = 12  # order of coil curves
 tol = 1e-8
 nparticles = 100 if in_github_actions else 1000  # Number of particles to trace
-tmax = 1e-5  # Tracing time
-dt_save = 1e-7  # Interval at which to save the trajectory
+tmax = 1e-4  # Tracing time
+# Interval at which to save the trajectory. Steps at this tolerance are
+# 0.5-4e-7 s, and a save time inside a step gets no row, so keep dt_save above
+# the step size.
+dt_save = 1e-6
 
 filename = "../inputs/coils.curves_22_7_21"
 wout_filename = "../inputs/wout_aten_rescaled.nc"
@@ -68,8 +71,9 @@ vpar0 = np.sqrt(2 * FUSION_ALPHA_PARTICLE_ENERGY / ALPHA_PARTICLE_MASS)
 vpar_inits = initialize_velocity_uniform(vpar0, nparticles)
 
 ### SAVE TRAJECTORIES
-# Each entry is an (nsaved, 7) array of (t, x, y, z, vpar, dt, mu) sampled
-# every dt_save; lost particles have fewer rows.
+# Each entry is an (nsaved, 7) array of (t, x, y, z, vpar, dt, mu), one row per
+# multiple of dt_save reached, at the first step boundary after it; lost
+# particles have fewer rows.
 trajectories = save_trajectories_cartesian_gpu(
     bsh,
     sc_particle,
@@ -92,8 +96,12 @@ with h5py.File("trajectories.h5", "w") as f:
         f.create_dataset(f"particle_{i:06d}", data=traj)
 
 ### CHECK AGAINST A SINGLE UNINTERRUPTED TRACE
-# Feeding dt and mu back between chunks makes the chunked integration
-# reproduce a single trace, so the final saved states should agree.
+# Feeding dt and mu back between chunks continues the same adaptive step
+# sequence as a single trace, so while steps are error-limited the final
+# states agree to roundoff. When the tolerance is loose enough that steps
+# are capped by the maximum step size, which the kernel sets from the field
+# at the start of each call, the two runs take different steps and differ
+# at the level of the integration error.
 last_time = trace_particles_cartesian_gpu(
     bsh,
     sc_particle,
@@ -108,5 +116,8 @@ last_time = trace_particles_cartesian_gpu(
 final_saved = np.array([traj[-1] for traj in trajectories])
 lost = last_time[:, 0] < 0.999 * tmax
 print(f"Number of particles = {nparticles}, lost = {lost.sum()}")
-max_dx = np.abs(final_saved[:, 1:4] - last_time[:, 1:4]).max()
-print(f"max |x_final(saved) - x_final(single trace)| = {max_dx:.3e}")
+dx = np.linalg.norm(final_saved[:, 1:4] - last_time[:, 1:4], axis=1)
+print(
+    f"|x_final(saved) - x_final(single trace)|: median {np.median(dx):.3e} m, "
+    f"max {dx.max():.3e} m"
+)

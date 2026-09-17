@@ -60,8 +60,9 @@ vpar0 = np.sqrt(2 * Ekin / mass)
 vpar_inits = initialize_velocity_uniform(vpar0, nparticles)
 
 ### SAVE TRAJECTORIES
-# Each entry is an (nsaved, 7) array of (t, s, theta, zeta, vpar, dt, mu)
-# sampled every dt_save; lost particles have fewer rows.
+# Each entry is an (nsaved, 7) array of (t, s, theta, zeta, vpar, dt, mu), one
+# row per multiple of dt_save reached, at the first step boundary after it;
+# lost particles have fewer rows.
 trajectories = save_trajectories_boozer_gpu(
     bri,
     stz_inits,
@@ -86,8 +87,12 @@ with h5py.File("trajectories.h5", "w") as f:
         f.create_dataset(f"particle_{i:06d}", data=traj)
 
 ### CHECK AGAINST A SINGLE UNINTERRUPTED TRACE
-# Feeding dt and mu back between chunks makes the chunked integration
-# reproduce a single trace, so the final saved states should agree.
+# Feeding dt and mu back between chunks continues the same adaptive step
+# sequence as a single trace, so while steps are error-limited the final
+# states agree to roundoff. When the tolerance is loose enough that steps
+# are capped by the maximum step size, which the kernel sets from the field
+# at the start of each call, the two runs take different steps and differ
+# at the level of the integration error.
 last_time = trace_particles_boozer_gpu(
     bri,
     stz_inits,
@@ -104,5 +109,8 @@ last_time = trace_particles_boozer_gpu(
 final_saved = np.array([traj[-1] for traj in trajectories])
 lost = last_time[:, 0] < 0.999 * tmax
 print(f"Number of particles = {nparticles}, lost = {lost.sum()}")
-max_ds = np.abs(final_saved[:, 1] - last_time[:, 1]).max()
-print(f"max |s_final(saved) - s_final(single trace)| = {max_ds:.3e}")
+ds = np.abs(final_saved[:, 1] - last_time[:, 1])
+print(
+    f"|s_final(saved) - s_final(single trace)|: median {np.median(ds):.3e}, "
+    f"max {ds.max():.3e}"
+)

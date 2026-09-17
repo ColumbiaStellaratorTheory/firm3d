@@ -291,7 +291,12 @@ def _save_trajectories(trace_chunk, inits, parallel_speeds, tmax, dt_save):
     module do that once their interpolant is prebuilt.
 
     Between chunks the returned dt and mu are fed back in, so the chunked
-    integration reproduces a single uninterrupted trace. Lost particles are
+    integration continues the same adaptive step sequence as a single
+    uninterrupted trace. The kernel does not shorten a step to land exactly
+    on a save time: it stops at the first step boundary at or after it. Each
+    saved row is therefore the state at that boundary, its time up to one
+    step past the multiple of dt_save it stands for, and a save interval
+    that falls entirely inside one step produces no row. Lost particles are
     dropped from later chunks, with their original index remembered so the
     returned list lines up with the input.
     """
@@ -317,7 +322,10 @@ def _save_trajectories(trace_chunk, inits, parallel_speeds, tmax, dt_save):
         current_time = step_data[:, 0]
 
         for i, idx in enumerate(ids):
-            trajectories[idx].append(step_data[i, :])
+            # a particle that overshot this save time in an earlier chunk was
+            # traced for zero time and has nothing new to record
+            if local_tmax[i] > 0.0:
+                trajectories[idx].append(step_data[i, :])
 
         # a particle whose chunk ended early was lost
         keep = current_time >= 0.999 * chunk_end
@@ -357,9 +365,14 @@ def save_trajectories_boozer_gpu(
 
     Returns:
         A list with one entry per particle: an array of shape (nsaved, 7)
-        whose rows are (t, s, theta, zeta, vpar, dt, mu) at successive
-        multiples of dt_save (the final row is the last saved state, so a
-        lost particle has fewer rows). zeta is wrapped to [0, 2 pi).
+        whose rows are (t, s, theta, zeta, vpar, dt, mu), one for each
+        multiple of dt_save the particle reached. The kernel does not shorten
+        a step to land on a save time, so t is that of the first step
+        boundary at or after the multiple of dt_save, up to one step late,
+        and no row is written for a save time that a single step jumped
+        over; choose dt_save above the step size (at most the quarter
+        transit time (G/|B|) pi/2 / v) for a regular cadence. A lost particle
+        has fewer rows. zeta is wrapped to [0, 2 pi).
     """
     if isinstance(field, ShearAlfvenWavesSuperposition):
         raise ValueError(
@@ -442,8 +455,12 @@ def save_trajectories_cartesian_gpu(
 
     Returns:
         A list with one entry per particle: an array of shape (nsaved, 7)
-        whose rows are (t, x, y, z, vpar, dt, mu) at successive multiples of
-        dt_save (a lost particle has fewer rows).
+        whose rows are (t, x, y, z, vpar, dt, mu), one for each multiple of
+        dt_save the particle reached. As for save_trajectories_boozer_gpu, t
+        is that of the first step boundary at or after the multiple of
+        dt_save (up to one step late, at most the quarter transit time
+        r pi/2 / v), and a save time that a single step jumped over gets no
+        row. A lost particle has fewer rows.
     """
     dtype = xyz_inits.dtype
     r_range, phi_range, z_range, quad_info = cartesian_interpolant(
