@@ -177,23 +177,27 @@ class CATAPULTField:
 
         self.quad_info = quad_info  # record interpolant data
 
-    def compute_gpu_interpolant(self, stz):
-        gpu_interpolation_dbl = firm3dpp.test_gpu_interpolation(
-            self.quad_info,
+    def compute_gpu_interpolant(self, stz, dtype=np.float64):
+        # dtype selects the single or double precision kernel; the interpolant
+        # data and evaluation points must both carry it (noconvert bindings).
+        # test_gpu_interpolation converts (s, theta) to pseudo-Cartesian IN
+        # PLACE in the array it is given, so always pass a copy.
+        gpu_interpolation = firm3dpp.test_gpu_interpolation(
+            self.quad_info.astype(dtype),
             self.range0,
             self.range1,
             self.range2,
-            stz.copy(),
+            np.array(stz, dtype=dtype, order="C"),
             self.field_type,
             stz.shape[0],
         )
-        gpu_interpolation_dbl = gpu_interpolation_dbl.reshape((stz.shape[0], -1))
+        gpu_interpolation = gpu_interpolation.reshape((stz.shape[0], -1))
 
         # remove surface classifier column
         if self.field_type == "cartesian_vacuum":
-            gpu_interpolation_dbl = gpu_interpolation_dbl[:, 0:6]
+            gpu_interpolation = gpu_interpolation[:, 0:6]
 
-        return gpu_interpolation_dbl
+        return gpu_interpolation
 
     def compute_cpu_interpolant(self, stz):
         self.field.set_points(stz)
@@ -263,10 +267,23 @@ class CATAPULTField:
             print("error:", error[row_idx, :])
         return gpu_error_is_small
 
-    def compute_gpu_derivatives(self, stz, vpar, vtotal, time=None):
+    def compute_gpu_derivatives(self, stz, vpar, vtotal, time=None, dtype=np.float64):
+        # dtype selects the single or double precision kernel; every T-typed
+        # array (interpolant data, positions, vpar, time, SAW phihats) must
+        # carry it, since the bindings are noconvert
+        quad_info = self.quad_info.astype(dtype)
+        # np.array (not ascontiguousarray) so a float64 call never aliases the
+        # caller's array: the derivative kernels convert positions in place
+        stz = np.array(stz, dtype=dtype, order="C")
+        vpar = np.ascontiguousarray(vpar, dtype=dtype)
+        if time is not None:
+            time = np.ascontiguousarray(time, dtype=dtype)
+        saw_phihats = (
+            self.saw_phihats.astype(dtype) if hasattr(self, "saw_phihats") else None
+        )
         if self.field_type == "boozer_vacuum" or self.field_type == "boozer":
             gpu_derivs_dbl = firm3dpp.test_derivatives_boozer(
-                self.quad_info,
+                quad_info,
                 self.range0,
                 self.range1,
                 self.range2,
@@ -281,7 +298,7 @@ class CATAPULTField:
             )
         elif self.field_type == "boozer_saw_vacuum":
             gpu_derivs_dbl = firm3dpp.test_derivatives_saw(
-                self.quad_info,
+                quad_info,
                 self.range0,
                 self.range1,
                 self.range2,
@@ -289,7 +306,7 @@ class CATAPULTField:
                 self.saw_srange,
                 self.saw_m,
                 self.saw_n,
-                self.saw_phihats,
+                saw_phihats,
                 self.saw_nharmonics,
                 stz,
                 vpar,
@@ -302,7 +319,7 @@ class CATAPULTField:
             )
         elif self.field_type == "boozer_saw_nok":
             gpu_derivs_dbl = firm3dpp.test_derivatives_saw_nok(
-                self.quad_info,
+                quad_info,
                 self.range0,
                 self.range1,
                 self.range2,
@@ -310,7 +327,7 @@ class CATAPULTField:
                 self.saw_srange,
                 self.saw_m,
                 self.saw_n,
-                self.saw_phihats,
+                saw_phihats,
                 self.saw_nharmonics,
                 stz,
                 vpar,
@@ -323,7 +340,7 @@ class CATAPULTField:
             )
         elif self.field_type == "cartesian_vacuum":
             gpu_derivs_dbl = firm3dpp.test_derivatives_cartesian(
-                self.quad_info,
+                quad_info,
                 self.range0,
                 self.range1,
                 self.range2,
@@ -401,6 +418,42 @@ class CATAPULTField:
             print("rel error:", error[row_idx, :])
 
         return gpu_error_is_small
+
+    def test_precision(self, stz, vpar, vtotal, time=None, tol=1e-3):
+        """Single vs double precision kernels, column-scale normalized so
+        sign-changing components do not inflate the relative error at their
+        zero crossings. Measured on A100/CUDA 12.9: interpolant 2e-6 to 1e-5,
+        derivatives 4e-6 across all RHS paths, against float32 eps 1.2e-7."""
+        ok = True
+        for name, f64, f32 in (
+            (
+                "interpolant",
+                self.compute_gpu_interpolant(stz),
+                self.compute_gpu_interpolant(stz, dtype=np.float32),
+            ),
+            (
+                "derivatives",
+                self.compute_gpu_derivatives(stz, vpar, vtotal, time=time),
+                self.compute_gpu_derivatives(
+                    stz, vpar, vtotal, time=time, dtype=np.float32
+                ),
+            ),
+        ):
+            # a float64 result here means the float32 inputs were silently
+            # upcast by a double-only binding, which is what this guards
+            if f32.dtype != np.float32:
+                print(f"{name}: float32 call returned {f32.dtype}, bindings upcast")
+                ok = False
+            scale = np.max(np.abs(f64), axis=0) + 1e-16
+            error = np.abs(f64 - f32) / scale
+            print(f"max error in {name} precision comparison: {error.max()}")
+            if error.max() > tol:
+                row_idx = np.unravel_index(np.argmax(error), error.shape)[0]
+                print("stz:", stz[row_idx, :])
+                print("f64:", f64[row_idx, :])
+                print("f32:", f32[row_idx, :])
+                ok = False
+        return ok
 
     def compute_gpu_timestep(self, stz, vpar, vtotal, time, psi0):
         if self.field_type == "boozer_vacuum" or self.field_type == "boozer":
@@ -713,6 +766,11 @@ class TestGPUTracingBoozerVacuum(unittest.TestCase):
         )
         self.assertTrue(is_small)
 
+    def test_precision(self):
+        self.assertTrue(
+            self.field.test_precision(self.stz, self.vpar_init, self.VELOCITY)
+        )
+
     def test_timestep(self):
         is_small = self.field.test_timestep(
             self.stz, self.vpar_init, self.VELOCITY, None, self.field.psi0, 1e-8
@@ -762,6 +820,11 @@ class TestGPUTracingBoozerFiniteBeta(unittest.TestCase):
             self.stz, self.vpar_init, self.VELOCITY, 1e-8
         )
         self.assertTrue(is_small)
+
+    def test_precision(self):
+        self.assertTrue(
+            self.field.test_precision(self.stz, self.vpar_init, self.VELOCITY)
+        )
 
     def test_timestep(self):
         is_small = self.field.test_timestep(
@@ -817,6 +880,13 @@ class TestGPUTracingBoozerVacuumSAW(unittest.TestCase):
         )
         self.assertTrue(is_small)
 
+    def test_precision(self):
+        self.assertTrue(
+            self.field.test_precision(
+                self.stz, self.vpar_init, self.VELOCITY, time=self.time
+            )
+        )
+
     def test_timestep(self):
         is_small = self.field.test_timestep(
             self.stz, self.vpar_init, self.VELOCITY, self.time, self.field.psi0, 1e-8
@@ -870,6 +940,13 @@ class TestGPUTracingBoozerNoKSAW(unittest.TestCase):
             self.stz, self.vpar_init, self.VELOCITY, 1e-8, self.time
         )
         self.assertTrue(is_small)
+
+    def test_precision(self):
+        self.assertTrue(
+            self.field.test_precision(
+                self.stz, self.vpar_init, self.VELOCITY, time=self.time
+            )
+        )
 
     def test_timestep(self):
         is_small = self.field.test_timestep(
@@ -960,6 +1037,11 @@ class TestGPUTracingCartesian(unittest.TestCase):
         vpar_init = np.random.uniform(-VELOCITY, VELOCITY, (n_test_pts,))
         is_small = self.field.test_derivatives(self.stz, vpar_init, VELOCITY, tol=1e-8)
         self.assertTrue(is_small)
+
+    def test_precision(self):
+        VELOCITY = np.sqrt(2 * ENERGY / MASS)
+        vpar_init = np.random.uniform(-VELOCITY, VELOCITY, (n_test_pts,))
+        self.assertTrue(self.field.test_precision(self.stz, vpar_init, VELOCITY))
 
     def test_timestep(self):
         VELOCITY = np.sqrt(2 * ENERGY / MASS)
