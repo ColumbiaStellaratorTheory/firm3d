@@ -58,8 +58,10 @@ If you prefer to install manually or need to customize the installation:
       pip install -e .
 
    The GPU bindings are built automatically when a complete CUDA toolkit
-   (``nvcc`` and ``cuda_runtime.h``) is found. To build without them even
-   when CUDA is installed:
+   (``nvcc`` and ``cuda_runtime.h``) is found and usable by the C++ compiler.
+   A distribution toolkit with headers in ``/usr/include`` is not visible to
+   conda's compilers; build with the system compilers (``CC=gcc CXX=g++``) to
+   enable it. To build without the GPU bindings even when CUDA is installed:
 
    .. code-block:: bash
 
