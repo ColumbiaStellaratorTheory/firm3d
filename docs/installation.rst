@@ -57,6 +57,14 @@ If you prefer to install manually or need to customize the installation:
       python setup.py build_ext --inplace
       pip install -e .
 
+   The GPU bindings are built automatically when a complete CUDA toolkit
+   (``nvcc`` and ``cuda_runtime.h``) is found. To build without them even
+   when CUDA is installed:
+
+   .. code-block:: bash
+
+      CMAKE_ARGS="-DUSE_CUDA=OFF" pip install -e .
+
 3. **Verify Installation**:
 
    .. code-block:: python

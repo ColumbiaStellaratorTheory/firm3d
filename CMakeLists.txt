@@ -2,20 +2,33 @@ cmake_minimum_required(VERSION 3.15)
 set(CMAKE_CXX_COMPILER_WORKS 1)
 project(firm3dpp)
 
-include(CheckLanguage)
-check_language(CUDA)
+# GPU bindings (optional). Built only when USE_CUDA is ON and a complete
+# toolkit is found (nvcc and the runtime headers). A bare nvcc on PATH without
+# cuda_runtime.h is skipped rather than failing the build.
+option(USE_CUDA "Build the GPU bindings when a CUDA toolkit is available" ON)
 
-if(CMAKE_CUDA_COMPILER)
+set(CUDA_TARGETS)
+if(USE_CUDA)
+    find_package(CUDAToolkit QUIET)
+    if(CUDAToolkit_FOUND)
+        include(CheckLanguage)
+        check_language(CUDA)
+    endif()
+endif()
+
+if(USE_CUDA AND CMAKE_CUDA_COMPILER)
     enable_language(CUDA)
-    find_package(CUDAToolkit)
     add_definitions(-DUSE_CUDA)
 
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -arch=native")
     set(CUDA_TARGETS  src/firm3dpp/cuda_kernel.cu src/firm3dpp/cuda_wrapper.cpp)
-    message(STATUS "CUDA found. GPU bindings will be compiled.")
+    message(STATUS "CUDA ${CUDAToolkit_VERSION} found in ${CUDAToolkit_LIBRARY_ROOT}. GPU bindings will be compiled.")
+elseif(NOT USE_CUDA)
+    message(STATUS "USE_CUDA=OFF. GPU bindings will be skipped.")
+elseif(CUDAToolkit_FOUND)
+    message(STATUS "CUDA toolkit found but nvcc is unusable. GPU bindings will be skipped.")
 else()
-    set(CUDA_TARGETS)
-    message(STATUS "CUDA not found. GPU bindings will be skipped.")
+    message(STATUS "CUDA toolkit not found. GPU bindings will be skipped.")
 endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -302,6 +315,13 @@ endif()
 if(USE_MPI AND MPI_CXX_FOUND)
     target_link_libraries(${PROJECT_NAME} PRIVATE MPI::MPI_CXX)
     message(STATUS "Linking MPI libraries for parallel interpolation support")
+endif()
+
+# cuda_wrapper.cpp is host-compiled and includes cuda_runtime.h, so the host
+# compiler needs the toolkit include dir. The runtime library itself is
+# linked implicitly by the CUDA language support (cudart_static).
+if(CUDA_TARGETS)
+    target_include_directories(${PROJECT_NAME} PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
 endif()
 
 IF (GSL_FOUND)
