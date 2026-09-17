@@ -21,12 +21,16 @@ echo "Adding conda-forge channel..."
 conda config --add channels conda-forge
 check_success "Failed to add conda-forge channel"
 
-echo "Enter the name for the new conda environment (e.g., firm3d):"
+echo "Enter the name or full path for the new conda environment (e.g., firm3d or $SCRATCH/envs/firm3d):"
 read -p "Your input: " env_name
-# Add validation for env_name if needed
+# A path (contains a slash) is a conda prefix; anything else is an env name.
+case "$env_name" in
+    */*) env_flag=(--prefix "$env_name") ;;
+    *)   env_flag=(--name "$env_name") ;;
+esac
 
 echo "Creating conda environment: $env_name"
-conda create -n "$env_name" --clone nersc-python
+conda create "${env_flag[@]}" --clone nersc-python
 check_success "Failed to create conda environment $env_name"
 
 echo "Activating conda environment: $env_name"
