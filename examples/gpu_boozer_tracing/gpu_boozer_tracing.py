@@ -3,7 +3,6 @@
 
 import numpy as np
 import pandas as pd
-import time
 
 from firm3d.catapult.tracing import trace_particles_boozer_gpu
 from firm3d.field.boozermagneticfield import (
@@ -62,65 +61,63 @@ charge = ALPHA_PARTICLE_CHARGE
 vpar0 = np.sqrt(2 * Ekin / mass)
 vpar_inits = initialize_velocity_uniform(vpar0, nparticles, seed=1)
 
+tmax = 1e-4
+# trace in double precision
+last_time_dbl = trace_particles_boozer_gpu(
+    bri,
+    stz_inits,
+    vpar_inits,
+    tmax=tmax,
+    mass=mass,
+    charge=charge,
+    vtotal=vpar0,
+    tol=tol,
+    ns=resolution,
+    ntheta=resolution,
+    nzeta=resolution,
+)
 
-for tmax in [1e-4, 1e-3, 1e-2, 5e-2]:
-    start = time.time()
-    last_time_dbl = trace_particles_boozer_gpu(
-        bri,
-        stz_inits,
-        vpar_inits,
-        tmax=tmax,
-        mass=mass,
-        charge=charge,
-        vtotal=vpar0,
-        tol=tol,
-        ns=resolution,
-        ntheta=resolution,
-        nzeta=resolution,
-    )
-    dbl_time = time.time() - start
+# trace in single precision
+last_time_flt = trace_particles_boozer_gpu(
+    bri,
+    stz_inits.astype(np.float32),
+    vpar_inits.astype(np.float32),
+    tmax=tmax,
+    mass=mass,
+    charge=charge,
+    vtotal=vpar0,
+    tol=tol,
+    ns=resolution,
+    ntheta=resolution,
+    nzeta=resolution,
+)
 
-    start = time.time()
-    last_time_flt = trace_particles_boozer_gpu(
-        bri,
-        stz_inits.astype(np.float32),
-        vpar_inits.astype(np.float32),
-        tmax=tmax,
-        mass=mass,
-        charge=charge,
-        vtotal=vpar0,
-        tol=tol,
-        ns=resolution,
-        ntheta=resolution,
-        nzeta=resolution,
-    )
-    flt_time = time.time() - start
-    particle_data = pd.DataFrame(
-        {
-            "s_start": stz_inits[:, 0],
-            "t_start": stz_inits[:, 1],
-            "z_start": stz_inits[:, 2],
-            "vpar_start": vpar_inits,
-            "s_end_dbl": last_time_dbl[:, 1],
-            "t_end_dbl": last_time_dbl[:, 2],
-            "z_end_dbl": last_time_dbl[:, 3],
-            "vpar_end_dbl": last_time_dbl[:, 4],
-            "last_time_dbl": last_time_dbl[:, 0],
-            "dt_end_dbl": last_time_dbl[:, 5],
-            "s_end_flt": last_time_flt[:, 1],
-            "t_end_flt": last_time_flt[:, 2],
-            "z_end_flt": last_time_flt[:, 3],
-            "vpar_end_flt": last_time_flt[:, 4],
-            "last_time_flt": last_time_flt[:, 0],
-            "dt_end_flt": last_time_flt[:, 5],
-        }
-    )
-    # particle_data.to_csv("./particle_data.csv")
-    print(f"tmax= {tmax}")
-    print(f"Number of particles= {nparticles}")
-    did_leave = [t < tmax for t in particle_data["last_time_flt"]]
-    loss_frac = sum(did_leave) / len(did_leave)
-    print(f"Flt. Loss fraction: {loss_frac:.3f} (time: {flt_time:.3f} )")
-    did_leave = [t < tmax for t in particle_data["last_time_dbl"]]
-    loss_frac = sum(did_leave) / len(did_leave)
-    print(f"Dbl. Loss fraction: {loss_frac:.3f} (time: {dbl_time:.3f} )")
+particle_data = pd.DataFrame(
+    {
+        "s_start": stz_inits[:, 0],
+        "t_start": stz_inits[:, 1],
+        "z_start": stz_inits[:, 2],
+        "vpar_start": vpar_inits,
+        "s_end_dbl": last_time_dbl[:, 1],
+        "t_end_dbl": last_time_dbl[:, 2],
+        "z_end_dbl": last_time_dbl[:, 3],
+        "vpar_end_dbl": last_time_dbl[:, 4],
+        "last_time_dbl": last_time_dbl[:, 0],
+        "dt_end_dbl": last_time_dbl[:, 5],
+        "s_end_flt": last_time_flt[:, 1],
+        "t_end_flt": last_time_flt[:, 2],
+        "z_end_flt": last_time_flt[:, 3],
+        "vpar_end_flt": last_time_flt[:, 4],
+        "last_time_flt": last_time_flt[:, 0],
+        "dt_end_flt": last_time_flt[:, 5],
+    }
+)
+# particle_data.to_csv("./particle_data.csv")
+print(f"tmax= {tmax}")
+print(f"Number of particles= {nparticles}")
+did_leave = [t < tmax for t in particle_data["last_time_flt"]]
+loss_frac = sum(did_leave) / len(did_leave)
+print(f"Flt. Loss fraction: {loss_frac:.3f}")
+did_leave = [t < tmax for t in particle_data["last_time_dbl"]]
+loss_frac = sum(did_leave) / len(did_leave)
+print(f"Dbl. Loss fraction: {loss_frac:.3f}")
