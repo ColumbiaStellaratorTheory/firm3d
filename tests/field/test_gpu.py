@@ -24,6 +24,7 @@ try:
 except Exception:
     HAS_SIMSOPT = False
     InterpolatedField = type(None)
+from firm3d.catapult.tracing import trace_particles_boozer_gpu
 from firm3d.catapult.utils import (
     boozer_interpolant,
     boozer_saw_interpolant,
@@ -53,8 +54,13 @@ from firm3d.util.constants import (
 HAS_CUDA = hasattr(firm3dpp, "test_gpu_interpolation")
 
 
-def get_field(boozmn_filename, n_metagrid_pts, vacuum):
-    bri = BoozerRadialInterpolant(boozmn_filename, 3, enforce_vacuum=vacuum)
+def get_field(boozmn_filename, n_metagrid_pts, field_type):
+    bri = BoozerRadialInterpolant(
+        boozmn_filename,
+        3,
+        enforce_vacuum=field_type == "vac",
+        no_K=field_type == "nok",
+    )
     nfp = bri.nfp
     degree = 3
     field = InterpolatedBoozerField(
@@ -704,8 +710,7 @@ class TestGPUTracing(unittest.TestCase):
 
         ### Vacuum case
         boozmn_filename = "examples/inputs/boozmn_aten_rescaled_low_res.nc"
-        vacuum = True
-        bri, field, nfp = get_field(boozmn_filename, n_metagrid_pts, vacuum)
+        bri, field, nfp = get_field(boozmn_filename, n_metagrid_pts, "vac")
 
         n_test_pts = 10000
         stz = sample_test_points(n_test_pts)
@@ -731,10 +736,9 @@ class TestGPUTracing(unittest.TestCase):
     def test_boozer_finite_beta(self):
         n_metagrid_pts = 15
 
-        ### Vacuum case
+        ### Finite-beta case
         boozmn_filename = "examples/inputs/boozmn_aten_rescaled_low_res.nc"
-        vacuum = False
-        bri, field, nfp = get_field(boozmn_filename, n_metagrid_pts, vacuum)
+        bri, field, nfp = get_field(boozmn_filename, n_metagrid_pts, "")
 
         n_test_pts = 10000
         stz = sample_test_points(n_test_pts)
@@ -757,13 +761,51 @@ class TestGPUTracing(unittest.TestCase):
         is_small = test_timestep(field, nfp, stz, vpar_init, VELOCITY, field.psi0, tol)
         self.assertTrue(is_small)
 
+    def test_boozer_inputs_unmodified(self):
+        # the host wrappers must not overwrite stz_inits with the polar state
+        boozmn_filename = "examples/inputs/boozmn_ariescs_low_res.nc"
+        bri, field, nfp = get_field(boozmn_filename, 5, "nok")
+        saw = ShearAlfvenWavesSuperposition.from_ae3d(
+            eigenvector=AE3DEigenvector.load_from_numpy(
+                filename="./examples/tracing_with_AE/ae.npy",
+            ),
+            B0=field,
+            max_dB_normal_by_B0=0.0,
+            minor_radius_meters=1.7,
+        )
+        np.random.seed(2)
+        n = 64
+        stz = np.ascontiguousarray(
+            np.column_stack(
+                (
+                    np.random.uniform(0.1, 0.6, n),
+                    np.random.uniform(0, 2 * np.pi, n),
+                    np.random.uniform(0, 2 * np.pi, n),
+                )
+            )
+        )
+        stz_ref = stz.copy()
+        VELOCITY = np.sqrt(2 * ENERGY / MASS)
+        vpar = np.random.uniform(-VELOCITY, VELOCITY, n)
+        args = (vpar, 1e-5, MASS, CHARGE, VELOCITY, 1e-8, 5, 5, 5)
+
+        first = trace_particles_boozer_gpu(saw, stz, *args)
+        self.assertTrue(np.array_equal(stz, stz_ref))
+        second = trace_particles_boozer_gpu(saw, stz, *args)
+        self.assertTrue(np.array_equal(first, second))
+
+        field.field_type = ""
+        first = trace_particles_boozer_gpu(field, stz, *args)
+        self.assertTrue(np.array_equal(stz, stz_ref))
+        second = trace_particles_boozer_gpu(field, stz, *args)
+        self.assertTrue(np.array_equal(first, second))
+
     def test_boozer_vacuum_saw(self):
         n_metagrid_pts = 15
 
         ### Vacuum case
         boozmn_filename = "examples/inputs/boozmn_aten_rescaled_low_res.nc"
-        vacuum = True
-        bri, field, nfp = get_field(boozmn_filename, n_metagrid_pts, vacuum)
+        bri, field, nfp = get_field(boozmn_filename, n_metagrid_pts, "vac")
 
         ### set up SAW
         saw_filename = "./examples/tracing_with_AE/ae.npy"
@@ -819,10 +861,9 @@ class TestGPUTracing(unittest.TestCase):
     def test_boozer_nok_saw(self):
         n_metagrid_pts = 15
 
-        ### Vacuum case
-        boozmn_filename = "examples/inputs/boozmn_aten_rescaled_low_res.nc"
-        vacuum = True
-        bri, field, nfp = get_field(boozmn_filename, n_metagrid_pts, vacuum)
+        ### Finite-beta case, K = 0
+        boozmn_filename = "examples/inputs/boozmn_ariescs_low_res.nc"
+        bri, field, nfp = get_field(boozmn_filename, n_metagrid_pts, "nok")
 
         ### set up SAW
         saw_filename = "./examples/tracing_with_AE/ae.npy"
