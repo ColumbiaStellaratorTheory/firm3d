@@ -16,7 +16,7 @@ module load openmpi/gcc/4.1.0
 module load netcdf/gcc/hdf5-1.10.6/openmpi-4.1.0/4.7.4
 module load hdf5/gcc/openmpi-4.1.0/1.10.6
 module load scalapack/openmpi-4.1.0/2.0.2
-module load openblas/0.3.x 
+module load openblas/0.3.x
 module load gsl/2.6
 
 # --- Show compilers for sanity ---
@@ -34,9 +34,14 @@ echo "Adding conda-forge channel..."
 conda config --add channels conda-forge
 check_success "Failed to add conda-forge channel"
 
-echo "Enter the name for the new conda environment (e.g., firm3d):"
-read -p "Your input; " env_name
-conda create -n "$env_name" -y python=3.9 --no-default-packages
+echo "Enter the name or full path for the new conda environment (e.g., firm3d or /scratch/gpfs/$USER/envs/firm3d):"
+read -p "Your input: " env_name
+# A path (contains a slash) is a conda prefix; anything else is an env name.
+case "$env_name" in
+    */*) env_flag=(--prefix "$env_name") ;;
+    *)   env_flag=(--name "$env_name") ;;
+esac
+conda create "${env_flag[@]}" -y python=3.9 --no-default-packages
 
 conda activate "$env_name"
 check_success "Failed to activate conda environment $env_name"

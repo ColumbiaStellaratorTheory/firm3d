@@ -25,11 +25,16 @@ module load cudatoolkit python cray-hdf5/1.14.3.7 cray-netcdf/4.9.2.1
 
 type conda >/dev/null 2>&1 || { echo "conda not found. Please load the python module first."; exit 1; }
 
-echo "Enter the name for the new conda environment (e.g., firm3d-simsopt):"
-read -r -p "Environment name: " env_name
+echo "Enter the name or full path for the new conda environment (e.g., firm3d-simsopt or $SCRATCH/envs/firm3d-simsopt):"
+read -r -p "Environment name or path: " env_name
+# A path (contains a slash) is a conda prefix; anything else is an env name.
+case "$env_name" in
+    */*) env_flag=(--prefix "$env_name") ;;
+    *)   env_flag=(--name "$env_name") ;;
+esac
 
 echo "Creating conda environment '$env_name' from nersc-python..."
-conda create -n "$env_name" --clone nersc-python -y
+conda create "${env_flag[@]}" --clone nersc-python -y
 check_success "Failed to create conda environment"
 
 CONDA_BASE=$(conda info --base)
