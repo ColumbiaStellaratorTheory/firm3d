@@ -13,7 +13,7 @@ from firm3d.saw.ae3d import AE3DEigenvector
 from firm3d.util.constants import ALPHA_PARTICLE_CHARGE as CHARGE
 from firm3d.util.constants import ALPHA_PARTICLE_MASS as MASS
 from firm3d.util.constants import FUSION_ALPHA_PARTICLE_ENERGY as ENERGY
-from firm3d.util.functions import in_github_actions
+from firm3d.util.functions import in_github_actions, sigmav
 
 np.random.seed(1800)
 
@@ -60,15 +60,6 @@ saw = ShearAlfvenWavesSuperposition.from_ae3d(
 nD = lambda s: 1 - s**5  # Normalized density
 nT = nD
 T = lambda s: 11.5 * (1 - s)  # Temperature in keV
-
-
-# D-T cross-section
-def sigmav(T):
-    if T > 0:
-        return T ** (-2 / 3) * np.exp(-19.94 * T ** (-1 / 3))
-    else:
-        return 0
-
 
 # Reactivity profile
 reactivity = lambda s: nD(s) * nT(s) * sigmav(T(s))

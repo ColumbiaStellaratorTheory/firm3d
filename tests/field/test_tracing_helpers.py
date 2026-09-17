@@ -26,6 +26,7 @@ from firm3d.field.tracing_helpers import (
     initialize_position_uniform_surf,
     initialize_position_uniform_vol,
 )
+from firm3d.util.functions import sigmav
 
 TEST_DIR = (Path(__file__).parent / ".." / "test_files").resolve()
 filename_mhd = str(TEST_DIR / "boozmn_n3are_R7.75B5.7.nc")
@@ -107,10 +108,7 @@ class TracingHelpersTests(unittest.TestCase):
 
 def reactivity(s):
     """D-T reactivity profile of the fusion_distribution examples, T0 = 11.5 keV."""
-    T = 11.5 * (1 - s)
-    if T <= 0:
-        return 0.0
-    return (1 - s**5) ** 2 * T ** (-2 / 3) * np.exp(-19.94 * T ** (-1 / 3))
+    return (1 - s**5) ** 2 * sigmav(11.5 * (1 - s))
 
 
 class SMarginalTests(unittest.TestCase):
