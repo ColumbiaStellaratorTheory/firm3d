@@ -1,12 +1,12 @@
 import numpy as np
 
 from firm3d.catapult.tracing import trace_particles_boozer_gpu
-from firm3d.catapult.utils import boozer_saw_interpolant
 from firm3d.field.boozermagneticfield import (
     BoozerRadialInterpolant,
     InterpolatedBoozerField,
     ShearAlfvenWavesSuperposition,
 )
+from firm3d.field.tracing_helpers import initialize_position_profile
 
 # for SAW wave
 from firm3d.saw.ae3d import AE3DEigenvector
@@ -14,7 +14,6 @@ from firm3d.util.constants import ALPHA_PARTICLE_CHARGE as CHARGE
 from firm3d.util.constants import ALPHA_PARTICLE_MASS as MASS
 from firm3d.util.constants import FUSION_ALPHA_PARTICLE_ENERGY as ENERGY
 from firm3d.util.functions import in_github_actions
-from firm3d.util.sampling import sample_stz
 
 np.random.seed(1800)
 
@@ -55,15 +54,28 @@ saw = ShearAlfvenWavesSuperposition.from_ae3d(
 )
 
 
-# set up interpolant data
-srange, trange, zrange, quad_info, maxJ = boozer_saw_interpolant(
-    field, nfp, n_metagrid_pts, n_metagrid_pts, n_metagrid_pts
-)
+# Define fusion birth distribution
+# Bader, A., et al. "Modeling of energetic particle transport in optimized
+# stellarators." Nuclear Fusion 61.11 (2021): 116060.
+nD = lambda s: 1 - s**5  # Normalized density
+nT = nD
+T = lambda s: 11.5 * (1 - s)  # Temperature in keV
 
-stz_inits = np.vstack([sample_stz(field, maxJ) for i in range(nparticles)])
+
+# D-T cross-section
+def sigmav(T):
+    if T > 0:
+        return T ** (-2 / 3) * np.exp(-19.94 * T ** (-1 / 3))
+    else:
+        return 0
+
+
+# Reactivity profile
+reactivity = lambda s: nD(s) * nT(s) * sigmav(T(s))
+
+stz = initialize_position_profile(field, nparticles, reactivity)
 VELOCITY = np.sqrt(2 * ENERGY / MASS)
 vpar_init = np.random.uniform(-VELOCITY, VELOCITY, (nparticles,))
-stz = np.ascontiguousarray(stz_inits)
 
 tol = 1e-4 if in_github_actions else 1e-9  # Tolerance for ODE solver
 last_time = trace_particles_boozer_gpu(
