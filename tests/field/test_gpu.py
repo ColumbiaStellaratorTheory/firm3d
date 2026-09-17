@@ -47,7 +47,7 @@ from firm3d.util.constants import (
 from firm3d.util.constants import (
     FUSION_ALPHA_PARTICLE_ENERGY as ENERGY,
 )
-from firm3d.catapult.tracing import trace_particles_boozer_gpu_trajectories
+from firm3d.catapult.tracing import save_trajectories_boozer_gpu
 
 HAS_CUDA = hasattr(firm3dpp, "test_gpu_interpolation")
 n_test_pts = 10000
@@ -650,7 +650,7 @@ class CATAPULTField:
     def compute_gpu_trajectories(self, stz, vpar, vtotal, tmax, dt_save, psi0):
 
         if self.field_type == "boozer_vacuum":
-            trajectories = trace_particles_boozer_gpu_trajectories(
+            trajectories = save_trajectories_boozer_gpu(
                 field=self.field,
                 stz_inits=stz.copy(),
                 parallel_speeds=vpar.copy(),
@@ -713,6 +713,11 @@ class CATAPULTField:
         final_pos_traj = np.array([trajectory[-1] for trajectory in gpu_trajectories])
 
         gpu_final_pos = self.compute_gpu_final_pos(stz, vpar, vtotal, tmax, psi0)
+        # save_trajectories_boozer_gpu returns Boozer coordinates, while
+        # boozer_gpu_tracing returns pseudo-Cartesian (x1, x2): compare in Boozer
+        x1, x2 = gpu_final_pos[:, 1].copy(), gpu_final_pos[:, 2].copy()
+        gpu_final_pos[:, 1] = np.hypot(x1, x2)
+        gpu_final_pos[:, 2] = np.arctan2(x2, x1)
 
         gpu_error_is_small = np.allclose(
             final_pos_traj[:, 0:5], gpu_final_pos[:, 0:5], rtol=1e-9, atol=1e-9
