@@ -47,7 +47,15 @@ from firm3d.util.constants import (
 from firm3d.util.constants import (
     FUSION_ALPHA_PARTICLE_ENERGY as ENERGY,
 )
-from firm3d.catapult.tracing import save_trajectories_boozer_gpu
+from firm3d.catapult.field import (
+    CatapultBoozerField,
+    CatapultPerturbedBoozerField,
+)
+from firm3d.catapult.tracing import (
+    save_trajectories_boozer_gpu,
+    trace_particles_boozer_gpu,
+    trace_particles_boozer_perturbed_gpu,
+)
 
 HAS_CUDA = hasattr(firm3dpp, "test_gpu_interpolation")
 n_test_pts = 10000
@@ -791,6 +799,42 @@ class TestGPUTracingBoozerVacuum(unittest.TestCase):
         )
         self.assertTrue(is_small)
 
+    def test_catapult_field(self):
+        # a prebuilt CatapultBoozerField traces exactly as a bare field with
+        # the resolution passed, and its precision replaces casting the inputs
+        field = self.field.field
+        res = self.n_metagrid_pts
+        stz = self.stz[:200]
+        vpar = self.vpar_init[:200]
+        kwargs = {
+            "tmax": 1e-6,
+            "mass": MASS,
+            "charge": CHARGE,
+            "vtotal": self.VELOCITY,
+            "tol": 1e-8,
+        }
+        bare = trace_particles_boozer_gpu(
+            field, stz, vpar, ns=res, ntheta=res, nzeta=res, **kwargs
+        )
+        cfield = CatapultBoozerField(field, res, res, res)
+        np.testing.assert_array_equal(
+            trace_particles_boozer_gpu(cfield, stz, vpar, **kwargs), bare
+        )
+
+        single = CatapultBoozerField(field, res, res, res, precision="single")
+        out = trace_particles_boozer_gpu(single, stz, vpar, **kwargs)
+        self.assertEqual(out.dtype, np.float32)
+        legacy = trace_particles_boozer_gpu(
+            field,
+            stz.astype(np.float32),
+            vpar.astype(np.float32),
+            ns=res,
+            ntheta=res,
+            nzeta=res,
+            **kwargs,
+        )
+        np.testing.assert_array_equal(out, legacy)
+
 
 @unittest.skipUnless(HAS_CUDA, "CUDA support not available")
 class TestGPUTracingBoozerFiniteBeta(unittest.TestCase):
@@ -897,6 +941,24 @@ class TestGPUTracingBoozerVacuumSAW(unittest.TestCase):
             self.stz, self.vpar_init, self.VELOCITY, self.time, self.field.psi0, 1e-8
         )
         self.assertTrue(is_small)
+
+    def test_perturbed_tracer(self):
+        # tracing through a prebuilt CatapultPerturbedBoozerField matches
+        # tracing with the superposition and a resolution, and the given
+        # magnetic moments are the ones the kernel uses
+        res = self.n_metagrid_pts
+        stz = self.stz[:200]
+        vpar = self.vpar_init[:200]
+        self.saw.B0.set_points(stz)
+        mus = (self.VELOCITY**2 - vpar**2) / (2 * self.saw.B0.modB()[:, 0])
+        kwargs = {"tmax": 1e-6, "mass": MASS, "charge": CHARGE, "tol": 1e-8}
+        bare = trace_particles_boozer_perturbed_gpu(
+            self.saw, stz, vpar, mus, ns=res, ntheta=res, nzeta=res, **kwargs
+        )
+        cfield = CatapultPerturbedBoozerField(self.saw, res, res, res)
+        out = trace_particles_boozer_perturbed_gpu(cfield, stz, vpar, mus, **kwargs)
+        np.testing.assert_array_equal(out, bare)
+        np.testing.assert_array_equal(out[:, 6], mus)
 
 
 @unittest.skipUnless(HAS_CUDA, "CUDA support not available")

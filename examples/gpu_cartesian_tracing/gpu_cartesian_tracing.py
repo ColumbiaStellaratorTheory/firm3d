@@ -15,6 +15,7 @@ from simsopt.util.constants import (
     FUSION_ALPHA_PARTICLE_ENERGY,
 )
 
+from firm3d.catapult.field import CatapultCartesianField
 from firm3d.catapult.tracing import trace_particles_cartesian_gpu
 from firm3d.field.tracing_helpers import (
     initialize_velocity_uniform,
@@ -62,9 +63,11 @@ vpar0 = np.sqrt(2 * FUSION_ALPHA_PARTICLE_ENERGY / ALPHA_PARTICLE_MASS)
 vpar_inits = initialize_velocity_uniform(vpar0, nparticles)
 
 tmax = 1e-5
+# tabulate the field and the boundary distance for the GPU once
+field_gpu = CatapultCartesianField(bsh, sc_particle)
 last_time = trace_particles_cartesian_gpu(
-    bsh,
-    sc_particle,
+    field_gpu,
+    None,
     xyz,
     vpar_inits,
     tmax=tmax,

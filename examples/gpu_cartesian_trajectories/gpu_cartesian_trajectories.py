@@ -15,6 +15,7 @@ from simsopt.util.constants import (
     FUSION_ALPHA_PARTICLE_ENERGY,
 )
 
+from firm3d.catapult.field import CatapultCartesianField
 from firm3d.catapult.tracing import (
     save_trajectories_cartesian_gpu,
     trace_particles_cartesian_gpu,
@@ -74,9 +75,13 @@ vpar_inits = initialize_velocity_uniform(vpar0, nparticles)
 # Each entry is an (nsaved, 7) array of (t, x, y, z, vpar, dt, mu), one row per
 # multiple of dt_save reached, at the first step boundary after it; lost
 # particles have fewer rows.
+# tabulate the field and the boundary distance for the GPU once; the saver
+# and the check below share it
+field_gpu = CatapultCartesianField(bsh, sc_particle)
+
 trajectories = save_trajectories_cartesian_gpu(
-    bsh,
-    sc_particle,
+    field_gpu,
+    None,
     xyz_inits,
     vpar_inits,
     tmax=tmax,
@@ -103,8 +108,8 @@ with h5py.File("trajectories.h5", "w") as f:
 # at the start of each call, the two runs take different steps and differ
 # at the level of the integration error.
 last_time = trace_particles_cartesian_gpu(
-    bsh,
-    sc_particle,
+    field_gpu,
+    None,
     xyz_inits,
     vpar_inits,
     tmax=tmax,

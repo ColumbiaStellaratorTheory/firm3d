@@ -2,6 +2,7 @@
 import h5py
 import numpy as np
 
+from firm3d.catapult.field import CatapultBoozerField
 from firm3d.catapult.tracing import (
     save_trajectories_boozer_gpu,
     trace_particles_boozer_gpu,
@@ -63,8 +64,11 @@ vpar_inits = initialize_velocity_uniform(vpar0, nparticles)
 # Each entry is an (nsaved, 7) array of (t, s, theta, zeta, vpar, dt, mu), one
 # row per multiple of dt_save reached, at the first step boundary after it;
 # lost particles have fewer rows.
+# tabulate the field for the GPU once; the saver and the check below share it
+field_gpu = CatapultBoozerField(bri, resolution, resolution, resolution)
+
 trajectories = save_trajectories_boozer_gpu(
-    bri,
+    field_gpu,
     stz_inits,
     vpar_inits,
     tmax=tmax,
@@ -73,9 +77,6 @@ trajectories = save_trajectories_boozer_gpu(
     charge=charge,
     vtotal=vpar0,
     tol=tol,
-    ns=resolution,
-    ntheta=resolution,
-    nzeta=resolution,
 )
 
 with h5py.File("trajectories.h5", "w") as f:
@@ -94,7 +95,7 @@ with h5py.File("trajectories.h5", "w") as f:
 # at the start of each call, the two runs take different steps and differ
 # at the level of the integration error.
 last_time = trace_particles_boozer_gpu(
-    bri,
+    field_gpu,
     stz_inits,
     vpar_inits,
     tmax=tmax,
@@ -102,9 +103,6 @@ last_time = trace_particles_boozer_gpu(
     charge=charge,
     vtotal=vpar0,
     tol=tol,
-    ns=resolution,
-    ntheta=resolution,
-    nzeta=resolution,
 )
 final_saved = np.array([traj[-1] for traj in trajectories])
 lost = last_time[:, 0] < 0.999 * tmax

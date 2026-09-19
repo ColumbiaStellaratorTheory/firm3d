@@ -436,6 +436,11 @@ def trace_particles_boozer(
             If `idx<0`, then `stopping_criteria[int(-idx)-1]` was hit.
             The state vector is `[s, theta, zeta, v_par]`.
     """
+    if isinstance(field, ShearAlfvenWave):
+        raise TypeError(
+            "trace_particles_boozer traces equilibrium fields; use "
+            "trace_particles_boozer_perturbed for a field with shear Alfven waves"
+        )
     if stopping_criteria is None:
         stopping_criteria = []
     if vpars is None:

@@ -4,6 +4,7 @@
 import numpy as np
 import pandas as pd
 
+from firm3d.catapult.field import CatapultBoozerField
 from firm3d.catapult.tracing import trace_particles_boozer_gpu
 from firm3d.field.boozermagneticfield import (
     BoozerRadialInterpolant,
@@ -62,9 +63,16 @@ vpar0 = np.sqrt(2 * Ekin / mass)
 vpar_inits = initialize_velocity_uniform(vpar0, nparticles, seed=1)
 
 tmax = 1e-4
+# The field is tabulated for the GPU once, at the resolution and precision to
+# trace in; the tracing calls then need neither.
+field_dbl = CatapultBoozerField(bri, resolution, resolution, resolution)
+field_flt = CatapultBoozerField(
+    bri, resolution, resolution, resolution, precision="single"
+)
+
 # trace in double precision
 last_time_dbl = trace_particles_boozer_gpu(
-    bri,
+    field_dbl,
     stz_inits,
     vpar_inits,
     tmax=tmax,
@@ -72,24 +80,18 @@ last_time_dbl = trace_particles_boozer_gpu(
     charge=charge,
     vtotal=vpar0,
     tol=tol,
-    ns=resolution,
-    ntheta=resolution,
-    nzeta=resolution,
 )
 
-# trace in single precision
+# trace in single precision: the inputs are cast to the field's precision
 last_time_flt = trace_particles_boozer_gpu(
-    bri,
-    stz_inits.astype(np.float32),
-    vpar_inits.astype(np.float32),
+    field_flt,
+    stz_inits,
+    vpar_inits,
     tmax=tmax,
     mass=mass,
     charge=charge,
     vtotal=vpar0,
     tol=tol,
-    ns=resolution,
-    ntheta=resolution,
-    nzeta=resolution,
 )
 
 particle_data = pd.DataFrame(

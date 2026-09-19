@@ -1,6 +1,7 @@
 import numpy as np
 
-from firm3d.catapult.tracing import trace_particles_boozer_gpu
+from firm3d.catapult.field import CatapultPerturbedBoozerField
+from firm3d.catapult.tracing import trace_particles_boozer_perturbed_gpu
 from firm3d.field.boozermagneticfield import (
     BoozerRadialInterpolant,
     InterpolatedBoozerField,
@@ -65,22 +66,30 @@ T = lambda s: 11.5 * (1 - s)  # Temperature in keV
 reactivity = lambda s: nD(s) * nT(s) * sigmav(T(s))
 
 stz = initialize_position_profile(field, nparticles, reactivity)
+
+# tabulate the perturbed field for the GPU once
+field_gpu = CatapultPerturbedBoozerField(
+    saw, n_metagrid_pts, n_metagrid_pts, n_metagrid_pts
+)
 VELOCITY = np.sqrt(2 * ENERGY / MASS)
 vpar_init = np.random.uniform(-VELOCITY, VELOCITY, (nparticles,))
 
+# The waves do work on the particles, so, as for trace_particles_boozer_perturbed,
+# the magnetic moment is given per particle rather than the energy.
+field.set_points(stz)
+mu_init = (VELOCITY**2 - vpar_init**2) / (2 * field.modB()[:, 0])
+
 tol = 1e-4 if in_github_actions else 1e-9  # Tolerance for ODE solver
-last_time = trace_particles_boozer_gpu(
-    saw,
+last_time = trace_particles_boozer_perturbed_gpu(
+    field_gpu,
     stz,
     vpar_init,
-    [tmax for _ in range(nparticles)],
-    MASS,
-    CHARGE,
-    np.sqrt(2 * ENERGY / MASS),
-    tol,
-    n_metagrid_pts,
-    n_metagrid_pts,
-    n_metagrid_pts,
+    mu_init,
+    tmax=tmax,
+    mass=MASS,
+    charge=CHARGE,
+    Ekin=ENERGY,
+    tol=tol,
 )
 loss_times = last_time[:, 0]
 print("loss times: ", loss_times)
