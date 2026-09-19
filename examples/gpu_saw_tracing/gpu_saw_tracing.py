@@ -80,7 +80,7 @@ field.set_points(stz)
 mu_init = (VELOCITY**2 - vpar_init**2) / (2 * field.modB()[:, 0])
 
 tol = 1e-4 if in_github_actions else 1e-9  # Tolerance for ODE solver
-last_time = trace_particles_boozer_perturbed_gpu(
+res_tys, res_hits = trace_particles_boozer_perturbed_gpu(
     field_gpu,
     stz,
     vpar_init,
@@ -91,6 +91,6 @@ last_time = trace_particles_boozer_perturbed_gpu(
     Ekin=ENERGY,
     tol=tol,
 )
-loss_times = last_time[:, 0]
+loss_times = np.array([traj[-1, 0] for traj in res_tys])
 print("loss times: ", loss_times)
-print("loss frac: ", np.mean(loss_times < tmax))
+print("loss frac: ", np.mean([len(hits) > 0 for hits in res_hits]))

@@ -52,10 +52,13 @@ from firm3d.catapult.field import (
     CatapultPerturbedBoozerField,
 )
 from firm3d.catapult.tracing import (
+    advance_particles_boozer_gpu,
+    advance_particles_boozer_perturbed_gpu,
     save_trajectories_boozer_gpu,
     trace_particles_boozer_gpu,
-    trace_particles_boozer_perturbed_gpu,
 )
+from firm3d.field.tracing import MaxToroidalFluxStoppingCriterion
+from firm3d.trajectory_helpers import compute_loss_fraction
 
 HAS_CUDA = hasattr(firm3dpp, "test_gpu_interpolation")
 n_test_pts = 10000
@@ -813,18 +816,18 @@ class TestGPUTracingBoozerVacuum(unittest.TestCase):
             "vtotal": self.VELOCITY,
             "tol": 1e-8,
         }
-        bare = trace_particles_boozer_gpu(
+        bare = advance_particles_boozer_gpu(
             field, stz, vpar, ns=res, ntheta=res, nzeta=res, **kwargs
         )
         cfield = CatapultBoozerField(field, res, res, res)
         np.testing.assert_array_equal(
-            trace_particles_boozer_gpu(cfield, stz, vpar, **kwargs), bare
+            advance_particles_boozer_gpu(cfield, stz, vpar, **kwargs), bare
         )
 
         single = CatapultBoozerField(field, res, res, res, precision="single")
-        out = trace_particles_boozer_gpu(single, stz, vpar, **kwargs)
+        out = advance_particles_boozer_gpu(single, stz, vpar, **kwargs)
         self.assertEqual(out.dtype, np.float32)
-        legacy = trace_particles_boozer_gpu(
+        legacy = advance_particles_boozer_gpu(
             field,
             stz.astype(np.float32),
             vpar.astype(np.float32),
@@ -834,6 +837,72 @@ class TestGPUTracingBoozerVacuum(unittest.TestCase):
             **kwargs,
         )
         np.testing.assert_array_equal(out, legacy)
+
+    def test_cpu_format(self):
+        # trace_particles_boozer_gpu returns what trace_particles_boozer
+        # does: per particle, (t, s, theta, zeta, vpar) rows from t = 0 to
+        # the final state, and a (t, -1, s, theta, zeta, vpar) hit when lost
+        field = self.field.field
+        res = self.n_metagrid_pts
+        stz = self.stz[:500]
+        vpar = self.vpar_init[:500]
+        tmax = 1e-5
+        kwargs = {
+            "mass": MASS,
+            "charge": CHARGE,
+            "vtotal": self.VELOCITY,
+            "tol": 1e-8,
+            "stopping_criteria": [MaxToroidalFluxStoppingCriterion(1.0)],
+        }
+        cfield = CatapultBoozerField(field, res, res, res)
+        state = advance_particles_boozer_gpu(
+            cfield, stz, vpar, tmax, MASS, CHARGE, self.VELOCITY, 1e-8
+        )
+        lost = state[:, 0] < tmax
+
+        res_tys, res_hits = trace_particles_boozer_gpu(
+            cfield, stz, vpar, tmax, forget_exact_path=True, **kwargs
+        )
+        self.assertEqual(len(res_tys), len(stz))
+        for i in range(len(stz)):
+            self.assertEqual(res_tys[i].shape, (2, 5))
+            self.assertEqual(res_tys[i].dtype, np.float64)
+            np.testing.assert_array_equal(res_tys[i][0], [0, *stz[i], vpar[i]])
+            np.testing.assert_array_equal(res_tys[i][1], state[i, :5])
+            if lost[i]:
+                self.assertEqual(res_hits[i].shape, (1, 6))
+                self.assertEqual(res_hits[i][0, 1], -1)
+                np.testing.assert_array_equal(res_hits[i][0, 2:], state[i, 1:5])
+            else:
+                self.assertEqual(res_hits[i].shape, (0,))
+        self.assertTrue(lost.any() and not lost.all())
+        # and the CPU post-processing takes it as is
+        times, loss_frac = compute_loss_fraction(res_tys, tmin=1e-7, tmax=tmax)
+        self.assertAlmostEqual(loss_frac[-1], lost.mean())
+
+        # with trajectories: the same initial row, rows at successive save
+        # times, and the same final state
+        dt_save = 2e-6
+        res_tys, res_hits = trace_particles_boozer_gpu(
+            cfield, stz, vpar, tmax, dt_save=dt_save, **kwargs
+        )
+        for i in range(len(stz)):
+            t = res_tys[i][:, 0]
+            self.assertEqual(t[0], 0)
+            self.assertTrue(np.all(np.diff(t) > 0))
+            self.assertEqual(res_hits[i].shape, (1, 6) if lost[i] else (0,))
+            if not lost[i]:
+                self.assertGreaterEqual(t[-1], tmax)
+                self.assertEqual(len(t), 1 + round(tmax / dt_save))
+
+        with self.assertRaises(NotImplementedError):
+            trace_particles_boozer_gpu(
+                cfield,
+                stz,
+                vpar,
+                tmax,
+                stopping_criteria=[MaxToroidalFluxStoppingCriterion(0.9)],
+            )
 
 
 @unittest.skipUnless(HAS_CUDA, "CUDA support not available")
@@ -952,11 +1021,11 @@ class TestGPUTracingBoozerVacuumSAW(unittest.TestCase):
         self.saw.B0.set_points(stz)
         mus = (self.VELOCITY**2 - vpar**2) / (2 * self.saw.B0.modB()[:, 0])
         kwargs = {"tmax": 1e-6, "mass": MASS, "charge": CHARGE, "tol": 1e-8}
-        bare = trace_particles_boozer_perturbed_gpu(
+        bare = advance_particles_boozer_perturbed_gpu(
             self.saw, stz, vpar, mus, ns=res, ntheta=res, nzeta=res, **kwargs
         )
         cfield = CatapultPerturbedBoozerField(self.saw, res, res, res)
-        out = trace_particles_boozer_perturbed_gpu(cfield, stz, vpar, mus, **kwargs)
+        out = advance_particles_boozer_perturbed_gpu(cfield, stz, vpar, mus, **kwargs)
         np.testing.assert_array_equal(out, bare)
         np.testing.assert_array_equal(out[:, 6], mus)
 

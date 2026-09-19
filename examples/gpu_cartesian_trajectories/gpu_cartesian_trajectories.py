@@ -18,7 +18,7 @@ from simsopt.util.constants import (
 from firm3d.catapult.field import CatapultCartesianField
 from firm3d.catapult.tracing import (
     save_trajectories_cartesian_gpu,
-    trace_particles_cartesian_gpu,
+    advance_particles_cartesian_gpu,
 )
 from firm3d.field.tracing_helpers import (
     initialize_velocity_uniform,
@@ -107,7 +107,7 @@ with h5py.File("trajectories.h5", "w") as f:
 # are capped by the maximum step size, which the kernel sets from the field
 # at the start of each call, the two runs take different steps and differ
 # at the level of the integration error.
-last_time = trace_particles_cartesian_gpu(
+last_time = advance_particles_cartesian_gpu(
     field_gpu,
     None,
     xyz_inits,

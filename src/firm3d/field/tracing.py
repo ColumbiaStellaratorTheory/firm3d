@@ -603,7 +603,9 @@ class MaxToroidalFluxStoppingCriterion(sopp.MaxToroidalFluxStoppingCriterion):
     where ``s`` is the value of the maximum normalized toroidal flux.
     """
 
-    pass
+    def __init__(self, max_s):
+        super().__init__(max_s)
+        self.max_s = max_s
 
 
 class ToroidalTransitStoppingCriterion(sopp.ToroidalTransitStoppingCriterion):

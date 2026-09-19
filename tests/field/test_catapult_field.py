@@ -14,7 +14,11 @@ from firm3d.field.boozermagneticfield import (
     BoozerRadialInterpolant,
     ShearAlfvenWavesSuperposition,
 )
-from firm3d.field.tracing import trace_particles_boozer
+from firm3d.field.tracing import (
+    MaxToroidalFluxStoppingCriterion,
+    MinToroidalFluxStoppingCriterion,
+    trace_particles_boozer,
+)
 from firm3d.saw.ae3d import AE3DEigenvector
 
 TEST_DIR = (Path(__file__).parent / ".." / "test_files").resolve()
@@ -146,6 +150,42 @@ class TestCatapultPerturbedBoozerField(unittest.TestCase):
         # and the CPU tracers do the same
         with self.assertRaises(TypeError):
             trace_particles_boozer(self.saw, stz, vpar)
+
+    def test_cpu_arguments_checked_first(self):
+        # what the kernels cannot honor is refused before any launch
+        cfield = CatapultBoozerField(self.field, *RESOLUTION)
+        perturbed = CatapultPerturbedBoozerField(self.saw, *RESOLUTION)
+        stz = np.array([[0.5, 0.0, 0.0]])
+        vpar = np.array([1e6])
+        args = (stz, vpar, 1e-6, 1.0, 1.0, 1e6, 1e-8)
+        self.assertEqual(MaxToroidalFluxStoppingCriterion(1.0).max_s, 1.0)
+        for criteria in (
+            [MinToroidalFluxStoppingCriterion(0.1)],
+            [MaxToroidalFluxStoppingCriterion(0.9)],
+            [
+                MaxToroidalFluxStoppingCriterion(1.0),
+                MinToroidalFluxStoppingCriterion(0.1),
+            ],
+        ):
+            with self.assertRaises(NotImplementedError):
+                trace_particles_boozer_gpu(cfield, *args, stopping_criteria=criteria)
+        # trajectories need one tmax for all particles
+        with self.assertRaises(NotImplementedError):
+            trace_particles_boozer_gpu(
+                cfield,
+                np.vstack((stz, stz)),
+                np.tile(vpar, 2),
+                np.array([1e-6, 2e-6]),
+                1.0,
+                1.0,
+                1e6,
+                1e-8,
+            )
+        # and cannot be saved in a perturbed field
+        with self.assertRaises(NotImplementedError):
+            trace_particles_boozer_perturbed_gpu(
+                perturbed, stz, vpar, vpar, forget_exact_path=False
+            )
 
 
 if __name__ == "__main__":

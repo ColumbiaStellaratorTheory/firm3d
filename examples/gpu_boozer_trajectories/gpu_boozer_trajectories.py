@@ -5,7 +5,7 @@ import numpy as np
 from firm3d.catapult.field import CatapultBoozerField
 from firm3d.catapult.tracing import (
     save_trajectories_boozer_gpu,
-    trace_particles_boozer_gpu,
+    advance_particles_boozer_gpu,
 )
 from firm3d.field.boozermagneticfield import (
     BoozerRadialInterpolant,
@@ -94,7 +94,7 @@ with h5py.File("trajectories.h5", "w") as f:
 # are capped by the maximum step size, which the kernel sets from the field
 # at the start of each call, the two runs take different steps and differ
 # at the level of the integration error.
-last_time = trace_particles_boozer_gpu(
+last_time = advance_particles_boozer_gpu(
     field_gpu,
     stz_inits,
     vpar_inits,

@@ -6,6 +6,7 @@ import pandas as pd
 
 from firm3d.catapult.field import CatapultBoozerField
 from firm3d.catapult.tracing import trace_particles_boozer_gpu
+from firm3d.field.tracing import MaxToroidalFluxStoppingCriterion
 from firm3d.field.boozermagneticfield import (
     BoozerRadialInterpolant,
     InterpolatedBoozerField,
@@ -70,8 +71,10 @@ field_flt = CatapultBoozerField(
     bri, resolution, resolution, resolution, precision="single"
 )
 
-# trace in double precision
-last_time_dbl = trace_particles_boozer_gpu(
+# Trace in double precision. As for the CPU tracer, res_tys holds each
+# particle's (t, s, theta, zeta, vpar) rows and res_hits its boundary crossing,
+# so the same post-processing serves both.
+res_tys_dbl, res_hits_dbl = trace_particles_boozer_gpu(
     field_dbl,
     stz_inits,
     vpar_inits,
@@ -80,10 +83,12 @@ last_time_dbl = trace_particles_boozer_gpu(
     charge=charge,
     vtotal=vpar0,
     tol=tol,
+    stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
+    forget_exact_path=True,
 )
 
 # trace in single precision: the inputs are cast to the field's precision
-last_time_flt = trace_particles_boozer_gpu(
+res_tys_flt, res_hits_flt = trace_particles_boozer_gpu(
     field_flt,
     stz_inits,
     vpar_inits,
@@ -92,34 +97,32 @@ last_time_flt = trace_particles_boozer_gpu(
     charge=charge,
     vtotal=vpar0,
     tol=tol,
+    stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
+    forget_exact_path=True,
 )
 
+final_dbl = np.array([traj[-1] for traj in res_tys_dbl])
+final_flt = np.array([traj[-1] for traj in res_tys_flt])
 particle_data = pd.DataFrame(
     {
         "s_start": stz_inits[:, 0],
         "t_start": stz_inits[:, 1],
         "z_start": stz_inits[:, 2],
         "vpar_start": vpar_inits,
-        "s_end_dbl": last_time_dbl[:, 1],
-        "t_end_dbl": last_time_dbl[:, 2],
-        "z_end_dbl": last_time_dbl[:, 3],
-        "vpar_end_dbl": last_time_dbl[:, 4],
-        "last_time_dbl": last_time_dbl[:, 0],
-        "dt_end_dbl": last_time_dbl[:, 5],
-        "s_end_flt": last_time_flt[:, 1],
-        "t_end_flt": last_time_flt[:, 2],
-        "z_end_flt": last_time_flt[:, 3],
-        "vpar_end_flt": last_time_flt[:, 4],
-        "last_time_flt": last_time_flt[:, 0],
-        "dt_end_flt": last_time_flt[:, 5],
+        "last_time_dbl": final_dbl[:, 0],
+        "s_end_dbl": final_dbl[:, 1],
+        "t_end_dbl": final_dbl[:, 2],
+        "z_end_dbl": final_dbl[:, 3],
+        "vpar_end_dbl": final_dbl[:, 4],
+        "last_time_flt": final_flt[:, 0],
+        "s_end_flt": final_flt[:, 1],
+        "t_end_flt": final_flt[:, 2],
+        "z_end_flt": final_flt[:, 3],
+        "vpar_end_flt": final_flt[:, 4],
     }
 )
 # particle_data.to_csv("./particle_data.csv")
 print(f"tmax= {tmax}")
 print(f"Number of particles= {nparticles}")
-did_leave = [t < tmax for t in particle_data["last_time_flt"]]
-loss_frac = sum(did_leave) / len(did_leave)
-print(f"Flt. Loss fraction: {loss_frac:.3f}")
-did_leave = [t < tmax for t in particle_data["last_time_dbl"]]
-loss_frac = sum(did_leave) / len(did_leave)
-print(f"Dbl. Loss fraction: {loss_frac:.3f}")
+print(f"Flt. Loss fraction: {np.mean([len(hits) > 0 for hits in res_hits_flt]):.3f}")
+print(f"Dbl. Loss fraction: {np.mean([len(hits) > 0 for hits in res_hits_dbl]):.3f}")

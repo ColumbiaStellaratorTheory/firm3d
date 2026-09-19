@@ -2,6 +2,9 @@ __all__ = [
     "trace_particles_boozer_gpu",
     "trace_particles_boozer_perturbed_gpu",
     "trace_particles_cartesian_gpu",
+    "advance_particles_boozer_gpu",
+    "advance_particles_boozer_perturbed_gpu",
+    "advance_particles_cartesian_gpu",
     "save_trajectories_boozer_gpu",
     "save_trajectories_cartesian_gpu",
 ]
@@ -14,6 +17,7 @@ from firm3d.catapult.field import (
     CatapultCartesianField,
     CatapultPerturbedBoozerField,
 )
+from firm3d.field.tracing import MaxToroidalFluxStoppingCriterion
 from firm3d.util.constants import ALPHA_PARTICLE_CHARGE, ALPHA_PARTICLE_MASS
 
 
@@ -208,7 +212,7 @@ def _to_boozer(result):
     return result
 
 
-def trace_particles_boozer_gpu(
+def advance_particles_boozer_gpu(
     field,
     stz_inits,
     parallel_speeds,
@@ -225,9 +229,12 @@ def trace_particles_boozer_gpu(
     in_boozer=True,  # if in Boozer coordinates, else in pseudo-Cartesian coordinates
 ):
     """
-    Trace particles in an equilibrium field in Boozer coordinates using
-    CATAPULT. For a field with shear Alfven waves use
-    trace_particles_boozer_perturbed_gpu.
+    Advance particles in an equilibrium field in Boozer coordinates by one
+    CATAPULT launch, returning the full kernel state. This is the call
+    trace_particles_boozer_gpu and save_trajectories_boozer_gpu are built on;
+    use those for the CPU tracers' return format, and this to continue
+    particles from a previous state. For a field with shear Alfven waves use
+    advance_particles_boozer_perturbed_gpu.
 
     field: a CatapultBoozerField, built once at the resolution and precision
         to trace in; or a magnetic field object in Boozer coordinates, in
@@ -290,7 +297,7 @@ def trace_particles_boozer_gpu(
     return _to_boozer(last_time) if in_boozer else last_time
 
 
-def trace_particles_boozer_perturbed_gpu(
+def advance_particles_boozer_perturbed_gpu(
     perturbed_field,
     stz_inits,
     parallel_speeds,
@@ -307,10 +314,12 @@ def trace_particles_boozer_perturbed_gpu(
     in_boozer=True,
 ):
     """
-    Trace particles in a field with shear Alfven waves in Boozer coordinates
-    using CATAPULT. The arguments follow trace_particles_boozer_perturbed:
-    the waves do work on the particles, so the magnetic moment, which they
-    conserve, is given per particle and the energy is not.
+    Advance particles in a field with shear Alfven waves in Boozer coordinates
+    by one CATAPULT launch, returning the full kernel state; the call
+    trace_particles_boozer_perturbed_gpu is built on. The arguments follow
+    trace_particles_boozer_perturbed: the waves do work on the particles, so
+    the magnetic moment, which they conserve, is given per particle and the
+    energy is not.
 
     perturbed_field: a CatapultPerturbedBoozerField, built once at the
         resolution to trace in; or a ShearAlfvenWavesSuperposition, in which
@@ -384,7 +393,7 @@ def trace_particles_boozer_perturbed_gpu(
     return _to_boozer(last_time) if in_boozer else last_time
 
 
-def trace_particles_cartesian_gpu(
+def advance_particles_cartesian_gpu(
     field,
     surface_classifier,
     xyz_inits,
@@ -398,7 +407,9 @@ def trace_particles_cartesian_gpu(
     mu=None,
 ):
     """
-    Trace particles in Cartesian coordinates using CATAPULT
+    Advance particles in Cartesian coordinates by one CATAPULT launch,
+    returning the full kernel state; the call trace_particles_cartesian_gpu
+    and save_trajectories_cartesian_gpu are built on.
 
     field: a CatapultCartesianField, built once; or a magnetic field object
         in Cartesian coordinates, in which case surface_classifier is
@@ -619,3 +630,270 @@ def save_trajectories_cartesian_gpu(
         )
 
     return _save_trajectories(trace_chunk, inits, parallel_speeds, tmax, dt_save)
+
+
+def _check_stopping_criteria(stopping_criteria):
+    """
+    The kernels stop a particle when it leaves s < 1, and nothing else. Accept
+    that criterion, or none, so that a call written for the CPU tracers runs
+    unchanged; refuse anything the kernels cannot honor.
+    """
+    if stopping_criteria is None or len(stopping_criteria) == 0:
+        return
+    if len(stopping_criteria) == 1 and (
+        isinstance(stopping_criteria[0], MaxToroidalFluxStoppingCriterion)
+        and getattr(stopping_criteria[0], "max_s", None) == 1.0
+    ):
+        return
+    raise NotImplementedError(
+        "CATAPULT stops particles at s = 1 only; pass "
+        "stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)] or None"
+    )
+
+
+def _one_tmax(tmax):
+    """The single tmax trajectory saving needs; per-particle values are refused."""
+    if np.ptp(tmax) != 0:
+        raise NotImplementedError(
+            "trajectories are saved to one tmax for all particles; pass a scalar "
+            "tmax, or forget_exact_path=True for per-particle values"
+        )
+    return float(tmax[0])
+
+
+def _cpu_format(inits, parallel_speeds, bodies, tmax):
+    """
+    Assemble the CPU tracers' (res_tys, res_hits) from GPU results.
+
+    inits, parallel_speeds: the initial conditions, for the t = 0 row.
+    bodies: per particle, the rows (t, x1, x2, x3, vpar, ...) after t = 0:
+        the saved trajectory, or just the final state.
+    tmax: per particle, to decide who was lost.
+
+    res_tys[i] has rows (t, x1, x2, x3, vpar): the initial state, then the
+    rows of bodies[i]. res_hits[i] is a single row (t, -1, x1, x2, x3, vpar)
+    at the final state of a lost particle, matching a CPU run with
+    stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)], and an empty
+    array otherwise. Everything is returned in float64.
+    """
+    nparticles = inits.shape[0]
+    first = np.column_stack(
+        (np.zeros(nparticles), np.asarray(inits, dtype=np.float64), parallel_speeds)
+    )
+    res_tys = []
+    res_hits = []
+    for i in range(nparticles):
+        body = np.asarray(bodies[i], dtype=np.float64)[:, :5]
+        res_tys.append(np.vstack((first[i], body)))
+        # the kernel stops at t >= tmax in the field's precision, so allow
+        # for tmax's own rounding to float32 before calling a particle lost
+        if body[-1, 0] < tmax[i] * (1 - 1e-6):
+            res_hits.append(np.array([[body[-1, 0], -1.0, *body[-1, 1:5]]]))
+        else:
+            res_hits.append(np.asarray([]))
+    return res_tys, res_hits
+
+
+def trace_particles_boozer_gpu(
+    field,
+    stz_inits,
+    parallel_speeds,
+    tmax,
+    mass,
+    charge,
+    vtotal,
+    tol,
+    ns=None,
+    ntheta=None,
+    nzeta=None,
+    stopping_criteria=None,
+    dt_save=1e-6,
+    forget_exact_path=False,
+):
+    """
+    Trace particles in an equilibrium field in Boozer coordinates using
+    CATAPULT, returning what trace_particles_boozer returns.
+
+    field: a CatapultBoozerField, built once at the resolution and precision
+        to trace in; or a magnetic field object in Boozer coordinates, in
+        which case ns, ntheta and nzeta are required, the interpolant is
+        built for this call, and the precision follows the dtype of stz_inits
+    stz_inits: initial positions, shape (nparticles, 3), in (s, theta, zeta)
+    parallel_speeds: initial parallel speeds of the particles
+    tmax: maximum time to trace particles, either a scalar applied to every
+        particle or a per-particle array of shape (nparticles,)
+    mass: mass of each particle
+    charge: charge of each particle
+    vtotal: total velocity of each particle
+    tol: tolerance for the ODE solver
+    ns, ntheta, nzeta: interpolant resolution, only when field is not a
+        CatapultBoozerField
+    stopping_criteria: the kernel stops particles at s = 1 and nothing else,
+        so this must be None or [MaxToroidalFluxStoppingCriterion(1.0)]; the
+        argument is accepted so that a call written for the CPU tracer runs
+        unchanged
+    dt_save: interval at which to record the trajectory when
+        forget_exact_path is False
+    forget_exact_path: if True, keep only the initial and final state of each
+        particle, in a single launch; if False, save the trajectory every
+        dt_save (see save_trajectories_boozer_gpu for how the save times
+        relate to the kernel's steps)
+
+    Returns: 2 element tuple containing
+        - res_tys: a list with one (ntimesteps, 5) array per particle of rows
+          (t, s, theta, zeta, vpar); the first row is the initial state at
+          t = 0 and the last the state where tracing stopped. Unlike the CPU
+          tracer, the last row of a lost particle is the state at or just
+          past the s = 1 crossing rather than the last state inside it, a
+          survivor's final time can exceed tmax by up to one step, theta is
+          in (-pi, pi], and zeta is wrapped to [0, 2 pi).
+        - res_hits: a list with one array per particle: a single row
+          (t, -1, s, theta, zeta, vpar) at the final state of a lost
+          particle, as for stopping_criteria[0] on the CPU, or an empty array.
+    """
+    _check_stopping_criteria(stopping_criteria)
+    cfield = _catapult_boozer(field, ns, ntheta, nzeta, np.asarray(stz_inits).dtype)
+    nparticles = stz_inits.shape[0]
+    tmax = _per_particle(tmax, nparticles, np.float64, None)
+    kwargs = {"mass": mass, "charge": charge, "vtotal": vtotal, "tol": tol}
+    if forget_exact_path:
+        final = advance_particles_boozer_gpu(
+            cfield, stz_inits, parallel_speeds, tmax, **kwargs
+        )
+        bodies = final[:, None, :]
+    else:
+        bodies = save_trajectories_boozer_gpu(
+            cfield, stz_inits, parallel_speeds, _one_tmax(tmax), dt_save, **kwargs
+        )
+    return _cpu_format(stz_inits, parallel_speeds, bodies, tmax)
+
+
+def trace_particles_boozer_perturbed_gpu(
+    perturbed_field,
+    stz_inits,
+    parallel_speeds,
+    mus,
+    tmax=1e-4,
+    mass=ALPHA_PARTICLE_MASS,
+    charge=ALPHA_PARTICLE_CHARGE,
+    Ekin=None,
+    tol=1e-9,
+    ns=None,
+    ntheta=None,
+    nzeta=None,
+    stopping_criteria=None,
+    forget_exact_path=True,
+):
+    """
+    Trace particles in a field with shear Alfven waves in Boozer coordinates
+    using CATAPULT, returning what trace_particles_boozer_perturbed returns.
+    The arguments follow it: the waves do work on the particles, so the
+    magnetic moment, which they conserve, is given per particle and the
+    energy is not.
+
+    perturbed_field: a CatapultPerturbedBoozerField, built once at the
+        resolution to trace in; or a ShearAlfvenWavesSuperposition, in which
+        case ns, ntheta and nzeta are required and the interpolant is built
+        for this call
+    stz_inits: initial positions, shape (nparticles, 3), in (s, theta, zeta)
+    parallel_speeds: initial parallel speeds of the particles
+    mus: magnetic moment of each particle, shape (nparticles,)
+    tmax: maximum time to trace particles, either a scalar applied to every
+        particle or a per-particle array of shape (nparticles,)
+    mass: mass of each particle
+    charge: charge of each particle
+    Ekin: kinetic energy in Joule setting the speed the kernel scales its
+        maximum step and tolerances by; if None, the initial energy of the
+        first particle is used, as in trace_particles_boozer_perturbed
+    tol: tolerance for the ODE solver
+    ns, ntheta, nzeta: interpolant resolution, only when perturbed_field is
+        not a CatapultPerturbedBoozerField
+    stopping_criteria: as for trace_particles_boozer_gpu
+    forget_exact_path: must be True. The kernel starts every launch at t = 0
+        of the waves' phase, so trajectories cannot yet be saved in chunks
+        as they are for equilibrium fields; the default differs from the CPU
+        tracer's for that reason.
+
+    Returns:
+        (res_tys, res_hits) as for trace_particles_boozer_gpu, each res_tys
+        entry holding the initial and final state.
+    """
+    _check_stopping_criteria(stopping_criteria)
+    if not forget_exact_path:
+        raise NotImplementedError(
+            "trajectories in a perturbed field cannot be saved in chunks, since "
+            "the kernel restarts the waves' phase at each launch; pass "
+            "forget_exact_path=True"
+        )
+    cfield = _catapult_perturbed(perturbed_field, ns, ntheta, nzeta)
+    nparticles = stz_inits.shape[0]
+    tmax = _per_particle(tmax, nparticles, np.float64, None)
+    final = advance_particles_boozer_perturbed_gpu(
+        cfield,
+        stz_inits,
+        parallel_speeds,
+        mus,
+        tmax=tmax,
+        mass=mass,
+        charge=charge,
+        Ekin=Ekin,
+        tol=tol,
+    )
+    return _cpu_format(stz_inits, parallel_speeds, final[:, None, :], tmax)
+
+
+def trace_particles_cartesian_gpu(
+    field,
+    surface_classifier,
+    xyz_inits,
+    parallel_speeds,
+    tmax,
+    mass,
+    charge,
+    vtotal,
+    tol,
+    dt_save=1e-6,
+    forget_exact_path=False,
+):
+    """
+    Trace particles in Cartesian coordinates using CATAPULT, returning what
+    simsopt's trace_particles returns.
+
+    field: a CatapultCartesianField, built once; or a magnetic field object
+        in Cartesian coordinates, in which case surface_classifier is
+        required and the interpolant is built for this call
+    surface_classifier: a simsopt surface classifier object for detecting a
+        surface; None when field is a CatapultCartesianField. Particles are
+        stopped when they cross it.
+    xyz_inits: initial positions, shape (nparticles, 3), in (x, y, z)
+    parallel_speeds: initial parallel speeds of the particles
+    tmax: maximum time to trace particles, either a scalar applied to every
+        particle or a per-particle array of shape (nparticles,)
+    mass: mass of each particle
+    charge: charge of each particle
+    vtotal: total velocity of each particle
+    tol: tolerance for the ODE solver
+    dt_save, forget_exact_path: as for trace_particles_boozer_gpu
+
+    Returns: 2 element tuple containing
+        - res_tys: a list with one (ntimesteps, 5) array per particle of rows
+          (t, x, y, z, vpar), from the initial state at t = 0 to the state
+          where tracing stopped
+        - res_hits: a list with one array per particle: a single row
+          (t, -1, x, y, z, vpar) at the final state of a particle that
+          crossed the surface, or an empty array
+    """
+    cfield = _catapult_cartesian(field, surface_classifier, np.asarray(xyz_inits).dtype)
+    nparticles = xyz_inits.shape[0]
+    tmax = _per_particle(tmax, nparticles, np.float64, None)
+    kwargs = {"mass": mass, "charge": charge, "vtotal": vtotal, "tol": tol}
+    if forget_exact_path:
+        final = advance_particles_cartesian_gpu(
+            cfield, None, xyz_inits, parallel_speeds, tmax, **kwargs
+        )
+        bodies = final[:, None, :]
+    else:
+        bodies = save_trajectories_cartesian_gpu(
+            cfield, None, xyz_inits, parallel_speeds, _one_tmax(tmax), dt_save, **kwargs
+        )
+    return _cpu_format(xyz_inits, parallel_speeds, bodies, tmax)
