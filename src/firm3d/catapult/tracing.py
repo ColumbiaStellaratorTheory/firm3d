@@ -18,7 +18,11 @@ from firm3d.catapult.field import (
     CatapultPerturbedBoozerField,
 )
 from firm3d.field.tracing import MaxToroidalFluxStoppingCriterion
-from firm3d.util.constants import ALPHA_PARTICLE_CHARGE, ALPHA_PARTICLE_MASS
+from firm3d.util.constants import (
+    ALPHA_PARTICLE_CHARGE,
+    ALPHA_PARTICLE_MASS,
+    FUSION_ALPHA_PARTICLE_ENERGY,
+)
 
 
 def _catapult_boozer(field, ns, ntheta, nzeta, dtype):
@@ -454,7 +458,7 @@ def advance_particles_cartesian_gpu(
     )
 
 
-def _save_trajectories(trace_chunk, inits, parallel_speeds, tmax, dt_save):
+def _save_trajectories(trace_chunk, inits, parallel_speeds, tmax, dt_save, dt=None):
     """
     Trace particles in chunks of dt_save, recording the state at the end of
     each chunk. This is the field-type-independent trajectory-saving loop
@@ -480,7 +484,7 @@ def _save_trajectories(trace_chunk, inits, parallel_speeds, tmax, dt_save):
     trajectories = [[] for _ in range(nparticles)]
     ids = np.arange(nparticles)
     current_time = np.zeros(nparticles)
-    dt = np.full(nparticles, -1.0, dtype=dtype)
+    dt = _per_particle(dt, nparticles, dtype, -1.0)
     mu = np.full(nparticles, -1.0, dtype=dtype)
 
     # ceil of the ratio, but tolerant of float rounding in an exact multiple
@@ -529,12 +533,13 @@ def save_trajectories_boozer_gpu(
     ns=None,
     ntheta=None,
     nzeta=None,
+    dt=None,
 ):
     """
     Trace particles in Boozer coordinates using CATAPULT, saving the
     trajectory of each particle every dt_save.
 
-    Arguments are as for trace_particles_boozer_gpu, plus dt_save, the
+    Arguments are as for advance_particles_boozer_gpu, plus dt_save, the
     interval at which to record the state. Give a CatapultBoozerField to
     build the interpolant once (it is otherwise built for this call, and the
     precision follows the dtype of stz_inits). Equilibrium fields only: the
@@ -575,7 +580,7 @@ def save_trajectories_boozer_gpu(
         )
 
     trajectories = _save_trajectories(
-        trace_chunk, inits, parallel_speeds, tmax, dt_save
+        trace_chunk, inits, parallel_speeds, tmax, dt_save, dt
     )
     return [_to_boozer(traj) for traj in trajectories]
 
@@ -591,12 +596,13 @@ def save_trajectories_cartesian_gpu(
     charge,
     vtotal,
     tol,
+    dt=None,
 ):
     """
     Trace particles in Cartesian coordinates using CATAPULT, saving the
     trajectory of each particle every dt_save.
 
-    Arguments are as for trace_particles_cartesian_gpu, plus dt_save, the
+    Arguments are as for advance_particles_cartesian_gpu, plus dt_save, the
     interval at which to record the state. Give a CatapultCartesianField
     (with surface_classifier=None) to build the interpolant once; it is
     otherwise built for this call.
@@ -629,7 +635,7 @@ def save_trajectories_cartesian_gpu(
             tol,
         )
 
-    return _save_trajectories(trace_chunk, inits, parallel_speeds, tmax, dt_save)
+    return _save_trajectories(trace_chunk, inits, parallel_speeds, tmax, dt_save, dt)
 
 
 def _check_stopping_criteria(stopping_criteria):
@@ -659,6 +665,15 @@ def _one_tmax(tmax):
             "tmax, or forget_exact_path=True for per-particle values"
         )
     return float(tmax[0])
+
+
+def _vtotal(Ekin, mass):
+    """The speed for a kinetic energy, which CATAPULT takes once for all particles."""
+    if np.ndim(Ekin) != 0:
+        raise ValueError(
+            "CATAPULT takes one kinetic energy for all particles; pass a scalar Ekin"
+        )
+    return float(np.sqrt(2 * Ekin / mass))
 
 
 def _cpu_format(inits, parallel_speeds, bodies, tmax):
@@ -698,21 +713,23 @@ def trace_particles_boozer_gpu(
     field,
     stz_inits,
     parallel_speeds,
-    tmax,
-    mass,
-    charge,
-    vtotal,
-    tol,
+    tmax=1e-4,
+    mass=ALPHA_PARTICLE_MASS,
+    charge=ALPHA_PARTICLE_CHARGE,
+    Ekin=FUSION_ALPHA_PARTICLE_ENERGY,
+    tol=1e-9,
     ns=None,
     ntheta=None,
     nzeta=None,
     stopping_criteria=None,
     dt_save=1e-6,
     forget_exact_path=False,
+    dt=None,
 ):
     """
     Trace particles in an equilibrium field in Boozer coordinates using
-    CATAPULT, returning what trace_particles_boozer returns.
+    CATAPULT. The arguments and the result follow trace_particles_boozer,
+    where CATAPULT has the same option.
 
     field: a CatapultBoozerField, built once at the resolution and precision
         to trace in; or a magnetic field object in Boozer coordinates, in
@@ -724,8 +741,9 @@ def trace_particles_boozer_gpu(
         particle or a per-particle array of shape (nparticles,)
     mass: mass of each particle
     charge: charge of each particle
-    vtotal: total velocity of each particle
-    tol: tolerance for the ODE solver
+    Ekin: kinetic energy in Joule, one value for all particles
+    tol: tolerance for the ODE solver, used as both the absolute and the
+        relative tolerance
     ns, ntheta, nzeta: interpolant resolution, only when field is not a
         CatapultBoozerField
     stopping_criteria: the kernel stops particles at s = 1 and nothing else,
@@ -738,6 +756,8 @@ def trace_particles_boozer_gpu(
         particle, in a single launch; if False, save the trajectory every
         dt_save (see save_trajectories_boozer_gpu for how the save times
         relate to the kernel's steps)
+    dt: the initial time step size for the solver (optional; chosen from the
+        maximum stable step size if not given)
 
     Returns: 2 element tuple containing
         - res_tys: a list with one (ntimesteps, 5) array per particle of rows
@@ -755,7 +775,13 @@ def trace_particles_boozer_gpu(
     cfield = _catapult_boozer(field, ns, ntheta, nzeta, np.asarray(stz_inits).dtype)
     nparticles = stz_inits.shape[0]
     tmax = _per_particle(tmax, nparticles, np.float64, None)
-    kwargs = {"mass": mass, "charge": charge, "vtotal": vtotal, "tol": tol}
+    kwargs = {
+        "mass": mass,
+        "charge": charge,
+        "vtotal": _vtotal(Ekin, mass),
+        "tol": tol,
+        "dt": dt,
+    }
     if forget_exact_path:
         final = advance_particles_boozer_gpu(
             cfield, stz_inits, parallel_speeds, tmax, **kwargs
@@ -847,17 +873,19 @@ def trace_particles_cartesian_gpu(
     surface_classifier,
     xyz_inits,
     parallel_speeds,
-    tmax,
-    mass,
-    charge,
-    vtotal,
-    tol,
+    tmax=1e-4,
+    mass=ALPHA_PARTICLE_MASS,
+    charge=ALPHA_PARTICLE_CHARGE,
+    Ekin=FUSION_ALPHA_PARTICLE_ENERGY,
+    tol=1e-9,
     dt_save=1e-6,
     forget_exact_path=False,
+    dt=None,
 ):
     """
-    Trace particles in Cartesian coordinates using CATAPULT, returning what
-    simsopt's trace_particles returns.
+    Trace particles in Cartesian coordinates using CATAPULT. The arguments
+    and the result follow simsopt's trace_particles, where CATAPULT has the
+    same option.
 
     field: a CatapultCartesianField, built once; or a magnetic field object
         in Cartesian coordinates, in which case surface_classifier is
@@ -871,9 +899,10 @@ def trace_particles_cartesian_gpu(
         particle or a per-particle array of shape (nparticles,)
     mass: mass of each particle
     charge: charge of each particle
-    vtotal: total velocity of each particle
-    tol: tolerance for the ODE solver
-    dt_save, forget_exact_path: as for trace_particles_boozer_gpu
+    Ekin: kinetic energy in Joule, one value for all particles
+    tol: tolerance for the ODE solver, used as both the absolute and the
+        relative tolerance
+    dt_save, forget_exact_path, dt: as for trace_particles_boozer_gpu
 
     Returns: 2 element tuple containing
         - res_tys: a list with one (ntimesteps, 5) array per particle of rows
@@ -886,7 +915,13 @@ def trace_particles_cartesian_gpu(
     cfield = _catapult_cartesian(field, surface_classifier, np.asarray(xyz_inits).dtype)
     nparticles = xyz_inits.shape[0]
     tmax = _per_particle(tmax, nparticles, np.float64, None)
-    kwargs = {"mass": mass, "charge": charge, "vtotal": vtotal, "tol": tol}
+    kwargs = {
+        "mass": mass,
+        "charge": charge,
+        "vtotal": _vtotal(Ekin, mass),
+        "tol": tol,
+        "dt": dt,
+    }
     if forget_exact_path:
         final = advance_particles_cartesian_gpu(
             cfield, None, xyz_inits, parallel_speeds, tmax, **kwargs

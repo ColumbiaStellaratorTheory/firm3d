@@ -73,7 +73,7 @@ res_tys, res_hits = trace_particles_cartesian_gpu(
     tmax=tmax,
     mass=ALPHA_PARTICLE_MASS,
     charge=ALPHA_PARTICLE_CHARGE,
-    vtotal=vpar0,
+    Ekin=FUSION_ALPHA_PARTICLE_ENERGY,
     tol=1e-8,
     forget_exact_path=True,
 )

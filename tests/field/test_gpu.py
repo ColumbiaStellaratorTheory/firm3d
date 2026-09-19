@@ -850,7 +850,7 @@ class TestGPUTracingBoozerVacuum(unittest.TestCase):
         kwargs = {
             "mass": MASS,
             "charge": CHARGE,
-            "vtotal": self.VELOCITY,
+            "Ekin": ENERGY,
             "tol": 1e-8,
             "stopping_criteria": [MaxToroidalFluxStoppingCriterion(1.0)],
         }

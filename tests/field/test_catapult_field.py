@@ -92,13 +92,15 @@ class TestCatapultBoozerField(unittest.TestCase):
         cfield = CatapultBoozerField(self.field, *RESOLUTION)
         stz = np.array([[0.5, 0.0, 0.0]])
         vpar = np.array([1e6])
-        args = (stz, vpar, 1e-6, 1.0, 1.0, 1e6, 1e-8)
         # the resolution is fixed by the field object
         with self.assertRaises(ValueError):
-            trace_particles_boozer_gpu(cfield, *args, ns=2)
+            trace_particles_boozer_gpu(cfield, stz, vpar, ns=2)
         # a bare field needs one
         with self.assertRaises(ValueError):
-            trace_particles_boozer_gpu(self.field, *args)
+            trace_particles_boozer_gpu(self.field, stz, vpar)
+        # CATAPULT takes one kinetic energy for all particles
+        with self.assertRaises(ValueError):
+            trace_particles_boozer_gpu(cfield, stz, vpar, Ekin=np.array([1e6]))
 
 
 class TestCatapultPerturbedBoozerField(unittest.TestCase):
@@ -138,7 +140,7 @@ class TestCatapultPerturbedBoozerField(unittest.TestCase):
         vpar = np.array([1e6])
         mus = np.array([1e6])
         with self.assertRaises(TypeError):
-            trace_particles_boozer_gpu(perturbed, stz, vpar, 1e-6, 1.0, 1.0, 1e6, 1e-8)
+            trace_particles_boozer_gpu(perturbed, stz, vpar)
         with self.assertRaises(TypeError):
             save_trajectories_boozer_gpu(
                 perturbed, stz, vpar, 1e-6, 1e-7, 1.0, 1.0, 1e6, 1e-8
@@ -157,7 +159,6 @@ class TestCatapultPerturbedBoozerField(unittest.TestCase):
         perturbed = CatapultPerturbedBoozerField(self.saw, *RESOLUTION)
         stz = np.array([[0.5, 0.0, 0.0]])
         vpar = np.array([1e6])
-        args = (stz, vpar, 1e-6, 1.0, 1.0, 1e6, 1e-8)
         self.assertEqual(MaxToroidalFluxStoppingCriterion(1.0).max_s, 1.0)
         for criteria in (
             [MinToroidalFluxStoppingCriterion(0.1)],
@@ -168,18 +169,16 @@ class TestCatapultPerturbedBoozerField(unittest.TestCase):
             ],
         ):
             with self.assertRaises(NotImplementedError):
-                trace_particles_boozer_gpu(cfield, *args, stopping_criteria=criteria)
+                trace_particles_boozer_gpu(
+                    cfield, stz, vpar, stopping_criteria=criteria
+                )
         # trajectories need one tmax for all particles
         with self.assertRaises(NotImplementedError):
             trace_particles_boozer_gpu(
                 cfield,
                 np.vstack((stz, stz)),
                 np.tile(vpar, 2),
-                np.array([1e-6, 2e-6]),
-                1.0,
-                1.0,
-                1e6,
-                1e-8,
+                tmax=np.array([1e-6, 2e-6]),
             )
         # and cannot be saved in a perturbed field
         with self.assertRaises(NotImplementedError):
