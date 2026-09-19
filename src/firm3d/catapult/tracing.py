@@ -89,6 +89,27 @@ def _catapult_cartesian(field, surface_classifier, dtype):
     return CatapultCartesianField(field, surface_classifier, precision=dtype)
 
 
+def _check_per_particle(nparticles, **arrays):
+    """
+    Refuse a per-particle array of the wrong length, which the kernel would
+    read past its end, or holding a NaN or infinity, which breaks its grid
+    indexing and ends in an illegal memory access instead of an exception.
+    """
+    for name, value in arrays.items():
+        if value.shape != (nparticles,):
+            raise ValueError(
+                f"{name} must have one entry per particle, shape ({nparticles},), "
+                f"got {value.shape}"
+            )
+        if not np.all(np.isfinite(value)):
+            raise ValueError(f"{name} contains NaN or infinite values")
+
+
+def _check_finite_scalar(name, value):
+    if not np.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be finite and positive, got {value}")
+
+
 def _launch_kwargs(
     cfield, x_inits, parallel_speeds, tmax, dt, mu, mass, charge, vtotal, tol
 ):
@@ -97,20 +118,35 @@ def _launch_kwargs(
     to the field's dtype, which the bindings require.
     """
     dtype = cfield.dtype
+    x_inits = np.ascontiguousarray(x_inits, dtype=dtype)
+    if x_inits.ndim != 2 or x_inits.shape[1] != 3:
+        raise ValueError(
+            f"initial positions must have shape (nparticles, 3), got {x_inits.shape}"
+        )
+    if not np.all(np.isfinite(x_inits)):
+        raise ValueError("initial positions contain NaN or infinite values")
+    _check_finite_scalar("vtotal", vtotal)
+    parallel_speeds = np.ascontiguousarray(parallel_speeds, dtype=dtype)
+    tmax = np.ascontiguousarray(tmax, dtype=np.float64)
+    dt = np.ascontiguousarray(dt, dtype=dtype)
+    mu = np.ascontiguousarray(mu, dtype=dtype)
+    _check_per_particle(
+        x_inits.shape[0], parallel_speeds=parallel_speeds, tmax=tmax, dt=dt, mu=mu
+    )
     return {
         "quad_pts": cfield.quad_info,
         "srange": cfield.srange,
         "trange": cfield.trange,
         "zrange": cfield.zrange,
-        "stz_init": np.ascontiguousarray(x_inits, dtype=dtype),
+        "stz_init": x_inits,
         "m": mass,
         "q": charge,
         "vtotal": vtotal,
-        "vtang": np.ascontiguousarray(parallel_speeds, dtype=dtype),
-        "tmax": np.ascontiguousarray(tmax, dtype=np.float64),
+        "vtang": parallel_speeds,
+        "tmax": tmax,
         "tol": tol,
-        "dt_in": np.ascontiguousarray(dt, dtype=dtype),
-        "mu_in": np.ascontiguousarray(mu, dtype=dtype),
+        "dt_in": dt,
+        "mu_in": mu,
         "psi0": cfield.psi0,
         "nparticles": x_inits.shape[0],
     }
@@ -124,12 +160,12 @@ def _launch_boozer(
     conditions x_inits of shape (nparticles, 3). Returns the (nparticles, 7)
     array (t, x1, x2, zeta, vpar, dt, mu) in the field's dtype.
     """
-    out = firm3dpp.boozer_gpu_tracing(
-        **_launch_kwargs(
-            cfield, x_inits, parallel_speeds, tmax, dt, mu, mass, charge, vtotal, tol
-        ),
-        vacuum=cfield.vacuum,
+    # the arguments are checked before the binding is looked up, so that a
+    # malformed call fails the same way with or without the GPU bindings
+    kwargs = _launch_kwargs(
+        cfield, x_inits, parallel_speeds, tmax, dt, mu, mass, charge, vtotal, tol
     )
+    out = firm3dpp.boozer_gpu_tracing(**kwargs, vacuum=cfield.vacuum)
     return np.asarray(out, dtype=cfield.dtype).reshape(x_inits.shape[0], 7)
 
 
@@ -164,22 +200,37 @@ def _launch_cartesian(
     One CATAPULT launch in a CatapultCartesianField. Returns the
     (nparticles, 7) array (t, x, y, z, vpar, dt, mu) in the field's dtype.
     """
-    nparticles = xyz_inits.shape[0]
     dtype = cfield.dtype
+    xyz_inits = np.ascontiguousarray(xyz_inits, dtype=dtype)
+    if xyz_inits.ndim != 2 or xyz_inits.shape[1] != 3:
+        raise ValueError(
+            f"initial positions must have shape (nparticles, 3), got {xyz_inits.shape}"
+        )
+    if not np.all(np.isfinite(xyz_inits)):
+        raise ValueError("initial positions contain NaN or infinite values")
+    _check_finite_scalar("vtotal", vtotal)
+    nparticles = xyz_inits.shape[0]
+    parallel_speeds = np.ascontiguousarray(parallel_speeds, dtype=dtype)
+    tmax = np.ascontiguousarray(tmax, dtype=np.float64)
+    dt = np.ascontiguousarray(dt, dtype=dtype)
+    mu = np.ascontiguousarray(mu, dtype=dtype)
+    _check_per_particle(
+        nparticles, parallel_speeds=parallel_speeds, tmax=tmax, dt=dt, mu=mu
+    )
     out = firm3dpp.cartesian_gpu_tracing(
         quad_pts=cfield.quad_info,
         rrange=cfield.rrange,
         phirange=cfield.phirange,
         zrange=cfield.zrange,
-        xyz_init=np.ascontiguousarray(xyz_inits, dtype=dtype),
+        xyz_init=xyz_inits,
         m=mass,
         q=charge,
         vtotal=vtotal,
-        vtang=np.ascontiguousarray(parallel_speeds, dtype=dtype),
-        tmax=np.ascontiguousarray(tmax, dtype=np.float64),
+        vtang=parallel_speeds,
+        tmax=tmax,
         tol=tol,
-        dt_in=np.ascontiguousarray(dt, dtype=dtype),
-        mu_in=np.ascontiguousarray(mu, dtype=dtype),
+        dt_in=dt,
+        mu_in=mu,
         nparticles=nparticles,
     )
     return np.asarray(out, dtype=dtype).reshape(nparticles, 7)
@@ -373,7 +424,13 @@ def advance_particles_boozer_perturbed_gpu(
             stz0 = np.array([[np.hypot(x1, x2), np.arctan2(x2, x1), zeta]])
         cfield.B0.set_points(stz0)
         modB = cfield.B0.modB()[0, 0]
-        vtotal = float(np.sqrt(parallel_speeds[0] ** 2 + 2 * mus[0] * modB))
+        v2 = parallel_speeds[0] ** 2 + 2 * mus[0] * modB
+        if not np.isfinite(v2) or v2 <= 0:
+            raise ValueError(
+                "could not derive a speed from the first particle's vpar, mu and "
+                f"|B| = {modB}; pass Ekin"
+            )
+        vtotal = float(np.sqrt(v2))
     else:
         vtotal = float(np.sqrt(2 * Ekin / mass))
 

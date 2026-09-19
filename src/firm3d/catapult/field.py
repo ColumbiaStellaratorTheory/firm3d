@@ -119,7 +119,8 @@ class CatapultPerturbedBoozerField(_CatapultBoozerTable):
             equilibrium is of type ``"vac"`` or ``"nok"``.
         ns, ntheta, nzeta: The number of interpolation cells in each
             coordinate.
-        precision: Only ``"double"`` is bound for perturbed tracing.
+        precision: ``"double"`` (the default) or ``"single"``: the precision
+            the table is stored in and the kernels run in.
 
     Attributes:
         dtype: The numpy dtype matching ``precision``.
@@ -141,10 +142,6 @@ class CatapultPerturbedBoozerField(_CatapultBoozerTable):
             )
         B0 = perturbed_field.B0
         super().__init__(B0, ns, ntheta, nzeta, precision, ("vac", "nok"))
-        # boozer_saw_gpu_tracing and boozer_saw_nok_gpu_tracing are bound for
-        # double precision only
-        if self.dtype != np.float64:
-            raise NotImplementedError("single precision perturbed tracing is not bound")
         self.perturbed_field = perturbed_field
         self.B0 = B0
         self.srange, self.trange, self.zrange, self.quad_info, self.maxJ = (
@@ -160,7 +157,8 @@ class CatapultPerturbedBoozerField(_CatapultBoozerTable):
         self.saw_phihats = np.ascontiguousarray(
             np.column_stack(
                 [np.array([wave.phihat(s_val) for s_val in saw_s]) for wave in waves]
-            )
+            ),
+            dtype=self.dtype,
         )
 
 
@@ -179,7 +177,8 @@ class CatapultCartesianField:
         surface_classifier: A simsopt :class:`SurfaceClassifier`. Its signed
             distance to the plasma boundary is tabulated alongside the field
             and is what the kernel tests to decide that a particle is lost.
-        precision: Only ``"double"`` is bound for Cartesian tracing.
+        precision: ``"double"`` (the default) or ``"single"``: the precision
+            the table is stored in and the kernel runs in.
 
     Attributes:
         dtype: The numpy dtype matching ``precision``.
@@ -190,9 +189,6 @@ class CatapultCartesianField:
 
     def __init__(self, field, surface_classifier, precision="double"):
         self.dtype = _dtype_from_precision(precision)
-        # cartesian_gpu_tracing is bound for double precision only
-        if self.dtype != np.float64:
-            raise NotImplementedError("single precision Cartesian tracing is not bound")
         self.field = field
         self.surface_classifier = surface_classifier
         self.rrange, self.phirange, self.zrange, self.quad_info = cartesian_interpolant(
