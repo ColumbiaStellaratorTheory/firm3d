@@ -967,6 +967,37 @@ class TestGPUTracingBoozerFiniteBeta(unittest.TestCase):
         )
         self.assertTrue(is_small)
 
+    def test_single_precision_tracing(self):
+        # The finite-beta Boozer kernel in single precision diverges from
+        # double by no more than double diverges from itself when the
+        # tolerance is tightened tenfold; compared in the pseudo-Cartesian
+        # coordinates the kernel integrates in, on particles starting inside
+        field = self.field.field
+        self.assertEqual(field.field_type, "")
+        res = self.n_metagrid_pts
+        inside = self.stz[:, 0] < 1.0
+        stz = self.stz[inside][:200]
+        vpar = self.vpar_init[inside][:200]
+        x_inits = np.column_stack(
+            (stz[:, 0] * np.cos(stz[:, 1]), stz[:, 0] * np.sin(stz[:, 1]), stz[:, 2])
+        )
+        double = CatapultBoozerField(field, res, res, res)
+        single = CatapultBoozerField(field, res, res, res, precision="single")
+        self.assertFalse(double.vacuum)
+        args = (x_inits, vpar, 1e-6, MASS, CHARGE, self.VELOCITY)
+        out64 = advance_particles_boozer_gpu(double, *args, 1e-8, in_boozer=False)
+        out32 = advance_particles_boozer_gpu(single, *args, 1e-8, in_boozer=False)
+        self.assertEqual(out32.dtype, np.float32)
+        survived = out64[:, 0] >= 0.999e-6
+        self.assertTrue(survived.any())
+        self.assertTrue(np.all(out32[survived, 0] >= 0.999e-6))
+        tighter = advance_particles_boozer_gpu(double, *args, 1e-9, in_boozer=False)
+        columns = [1, 2, 4]
+        assert_no_worse_than(
+            out32[:, columns].astype(np.float64) - out64[:, columns],
+            tighter[:, columns] - out64[:, columns],
+        )
+
 
 @unittest.skipUnless(HAS_CUDA, "CUDA support not available")
 class TestGPUTracingBoozerVacuumSAW(unittest.TestCase):
@@ -1145,6 +1176,55 @@ class TestGPUTracingBoozerNoKSAW(unittest.TestCase):
             self.stz, self.vpar_init, self.VELOCITY, self.time, self.field.psi0, 1e-8
         )
         self.assertTrue(is_small)
+
+    def test_single_precision_tracing(self):
+        # The no-K perturbed kernel, reached through a genuine "nok"
+        # equilibrium, in single precision diverges from double by no more
+        # than double diverges from itself under a tenfold tighter tolerance
+        res = self.n_metagrid_pts
+        bri = BoozerRadialInterpolant(self.filename, 3, no_K=True)
+        equilibrium = InterpolatedBoozerField(
+            bri, 3, ns_interp=res, ntheta_interp=res, nzeta_interp=res
+        )
+        self.assertEqual(equilibrium.field_type, "nok")
+        saw = ShearAlfvenWavesSuperposition.from_ae3d(
+            eigenvector=AE3DEigenvector.load_from_numpy(
+                filename="./examples/tracing_with_AE/ae.npy"
+            ),
+            B0=equilibrium,
+            max_dB_normal_by_B0=5e-3,
+            minor_radius_meters=1.7,
+        )
+        double = CatapultPerturbedBoozerField(saw, res, res, res)
+        single = CatapultPerturbedBoozerField(saw, res, res, res, precision="single")
+        self.assertEqual(double.field_type, "nok")
+        inside = self.stz[:, 0] < 1.0
+        stz = self.stz[inside][:200]
+        vpar = self.vpar_init[inside][:200]
+        equilibrium.set_points(stz)
+        mus = (self.VELOCITY**2 - vpar**2) / (2 * equilibrium.modB()[:, 0])
+        x_inits = np.column_stack(
+            (stz[:, 0] * np.cos(stz[:, 1]), stz[:, 0] * np.sin(stz[:, 1]), stz[:, 2])
+        )
+        kwargs = {"tmax": 1e-6, "mass": MASS, "charge": CHARGE, "in_boozer": False}
+        out64 = advance_particles_boozer_perturbed_gpu(
+            double, x_inits, vpar, mus, tol=1e-8, **kwargs
+        )
+        out32 = advance_particles_boozer_perturbed_gpu(
+            single, x_inits, vpar, mus, tol=1e-8, **kwargs
+        )
+        self.assertEqual(out32.dtype, np.float32)
+        survived = out64[:, 0] >= 0.999e-6
+        self.assertTrue(survived.any())
+        self.assertTrue(np.all(out32[survived, 0] >= 0.999e-6))
+        tighter = advance_particles_boozer_perturbed_gpu(
+            double, x_inits, vpar, mus, tol=1e-9, **kwargs
+        )
+        columns = [1, 2, 4]
+        assert_no_worse_than(
+            out32[:, columns].astype(np.float64) - out64[:, columns],
+            tighter[:, columns] - out64[:, columns],
+        )
 
 
 @unittest.skipUnless(HAS_SIMSOPT and HAS_CUDA, "simsopt or CUDA not available")

@@ -71,7 +71,13 @@ class CatapultBoozerField(_CatapultBoozerTable):
         ns, ntheta, nzeta: The number of interpolation cells in each
             coordinate.
         precision: ``"double"`` (the default) or ``"single"``: the precision
-            the table is stored in and the kernels run in.
+            the table is stored in and the kernels run in. Single precision
+            is faster and halves the memory, and reproduces double
+            precision loss fractions; it does not reproduce individual
+            orbits, which diverge from their double precision counterparts
+            by about as much as they do under a tenfold change of the
+            solver tolerance. Use it for statistics over an ensemble, not
+            for following a particular particle.
 
     Attributes:
         dtype: The numpy dtype matching ``precision``.
@@ -120,7 +126,13 @@ class CatapultPerturbedBoozerField(_CatapultBoozerTable):
         ns, ntheta, nzeta: The number of interpolation cells in each
             coordinate.
         precision: ``"double"`` (the default) or ``"single"``: the precision
-            the table is stored in and the kernels run in.
+            the table is stored in and the kernels run in. Single precision
+            is faster and halves the memory, and reproduces double
+            precision loss fractions; it does not reproduce individual
+            orbits, which diverge from their double precision counterparts
+            by about as much as they do under a tenfold change of the
+            solver tolerance. Use it for statistics over an ensemble, not
+            for following a particular particle.
 
     Attributes:
         dtype: The numpy dtype matching ``precision``.
@@ -178,7 +190,13 @@ class CatapultCartesianField:
             distance to the plasma boundary is tabulated alongside the field
             and is what the kernel tests to decide that a particle is lost.
         precision: ``"double"`` (the default) or ``"single"``: the precision
-            the table is stored in and the kernel runs in.
+            the table is stored in and the kernel runs in. Single precision
+            is faster and halves the memory, and reproduces double
+            precision loss fractions; it does not reproduce individual
+            orbits, which diverge from their double precision counterparts
+            by about as much as they do under a tenfold change of the
+            solver tolerance. Use it for statistics over an ensemble, not
+            for following a particular particle.
 
     Attributes:
         dtype: The numpy dtype matching ``precision``.

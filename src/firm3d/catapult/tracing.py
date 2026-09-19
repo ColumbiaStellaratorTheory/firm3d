@@ -316,8 +316,10 @@ def advance_particles_boozer_gpu(
         in pseudo-Cartesian coordinates; the result is returned in the same
         coordinates
 
-    The arrays are cast to the field's precision, so float32 tracing needs
-    only a CatapultBoozerField with precision="single".
+    The arrays are cast to the field's precision, so single precision tracing
+    needs only a CatapultBoozerField with precision="single". Single precision
+    reproduces double precision loss fractions, not individual orbits: see
+    CatapultBoozerField.
 
     Returns:
         An array of shape (nparticles, 7), in the field's dtype, whose columns
