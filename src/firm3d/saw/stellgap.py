@@ -263,6 +263,126 @@ class Continuum:
         values["psi0"] = self._psi0
         return values
 
+    def _sample_geometry(self, surface, theta, zeta, expected_orientation=None):
+        """Calculate geometric continuum weights and diagnostics on one surface.
+
+        Args:
+            surface (float): Normalized flux inside the copied spline interval,
+                excluding the axis.
+            theta (array-like): One-dimensional poloidal angles in radians.
+            zeta (array-like): One-dimensional Boozer toroidal angles in radians.
+            expected_orientation (int, optional): Required sign of the Jacobian,
+                +1 or -1, for comparison with another surface. If omitted, either
+                orientation is accepted provided it is constant on this grid.
+
+        Returns:
+            dict: Arrays of shape (len(theta), len(zeta)): the signed ``Jg``
+            in m^3, ``H`` in m^4, ``S`` in m^2, and the positive weights
+            ``A = H / (abs(Jg) * S)`` and ``W0 = H * abs(Jg) / (psi0**2 * S)``.
+            Their units are 1/m and m/T^2, respectively, with psi0 in T*m^2.
+            ``jacobian_quality`` is abs(Jg) divided by the product of the three
+            tangent lengths. Scalar entries are ``min_jacobian_quality``,
+            ``orientation`` (+1 or -1), and ``iota``.
+
+        Raises:
+            ValueError: If coordinates or computed quantities are nonfinite,
+                geometry is singular, the sampled orientation is inconsistent,
+                or expected_orientation is not +1 or -1.
+        """
+        if expected_orientation is not None and (
+            isinstance(expected_orientation, (bool, np.bool_))
+            or not isinstance(expected_orientation, Integral)
+            or expected_orientation not in (-1, 1)
+        ):
+            raise ValueError("expected_orientation must be +1, -1, or None.")
+
+        try:
+            with np.errstate(over="raise", invalid="raise", divide="raise"):
+                values = self._sample_coordinates(surface, theta, zeta)
+                for coordinate in ("R", "Z", "nu"):
+                    for suffix in ("", "_s", "_theta", "_zeta"):
+                        name = coordinate + suffix
+                        if not np.all(np.isfinite(values[name])):
+                            raise ValueError(f"{name} must be finite at s={surface}.")
+                iota = values["iota"]
+                if not np.isfinite(iota):
+                    raise ValueError(f"iota must be finite at s={surface}.")
+
+                radius = values["R"]
+                r_s = np.stack(
+                    (values["R_s"], -radius * values["nu_s"], values["Z_s"]),
+                    axis=-1,
+                )
+                r_theta = np.stack(
+                    (
+                        values["R_theta"],
+                        -radius * values["nu_theta"],
+                        values["Z_theta"],
+                    ),
+                    axis=-1,
+                )
+                r_zeta = np.stack(
+                    (
+                        values["R_zeta"],
+                        radius * (1 - values["nu_zeta"]),
+                        values["Z_zeta"],
+                    ),
+                    axis=-1,
+                )
+                area_vector = np.cross(r_theta, r_zeta)
+                field_line_tangent = r_zeta + iota * r_theta
+                H = np.sum(area_vector * area_vector, axis=-1)
+                S = np.sum(field_line_tangent * field_line_tangent, axis=-1)
+                Jg = np.sum(r_s * area_vector, axis=-1)
+                for name, array in (("H", H), ("S", S)):
+                    if np.any(array <= 0):
+                        raise ValueError(f"{name} must be positive at s={surface}.")
+                if np.any(Jg == 0):
+                    raise ValueError(f"Jg must be nonzero at s={surface}.")
+
+                orientation = int(np.sign(Jg.flat[0]))
+                if np.any(orientation * Jg < 0):
+                    raise ValueError(f"Jg changes sign on the grid at s={surface}.")
+                if (
+                    expected_orientation is not None
+                    and orientation != expected_orientation
+                ):
+                    raise ValueError(
+                        f"Jg orientation {orientation} at s={surface} differs "
+                        f"from expected orientation {expected_orientation}."
+                    )
+
+                absolute_jacobian = np.abs(Jg)
+                quality = absolute_jacobian / np.linalg.norm(r_s, axis=-1)
+                quality /= np.linalg.norm(r_theta, axis=-1)
+                quality /= np.linalg.norm(r_zeta, axis=-1)
+                ratio = H / S
+                A = ratio / absolute_jacobian
+                W0 = ratio * absolute_jacobian / np.square(self._psi0)
+                for name, array in (
+                    ("jacobian_quality", quality), ("A", A), ("W0", W0)
+                ):
+                    if not np.all(np.isfinite(array)) or np.any(array <= 0):
+                        raise ValueError(
+                            f"{name} must be finite and positive at s={surface}."
+                        )
+        except FloatingPointError as error:
+            raise ValueError(
+                f"Geometry calculation failed at s={surface}: {error}."
+            ) from error
+
+        return {
+            "Jg": Jg,
+            "H": H,
+            "S": S,
+            "A": A,
+            "W0": W0,
+            "jacobian_quality": quality,
+            "min_jacobian_quality": float(quality.min()),
+            "orientation": orientation,
+            "iota": iota,
+        }
+
     def _plan_basis(self):
         """Plan cosine normalization and all pairwise Fourier moment indices.
 
