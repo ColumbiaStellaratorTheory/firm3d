@@ -1,10 +1,144 @@
 import os
 from dataclasses import dataclass
+from numbers import Integral, Real
 
 import numpy as np
 import plotly.graph_objects as go
 
-__all__ = ["Harmonic", "ModeContinuum", "AlfvenSpecData"]
+__all__ = ["Continuum", "Harmonic", "ModeContinuum", "AlfvenSpecData"]
+
+
+class Continuum:
+    r"""Configure a cosine-basis shear Alfvén continuum calculation.
+
+    This initial implementation validates and stores inputs. Geometry sampling
+    and eigensolves will be added in subsequent steps.
+
+    Args:
+        field (BoozerRadialInterpolant): Stellarator-symmetric equilibrium.
+        surfaces (array-like): Nonempty one-dimensional normalized flux values
+            ``s = psi / psi0`` within the field's radial interpolation interval
+            and ``0 < s <= 1``.
+        modes (array-like): Nonempty integer array of shape ``(N, 2)`` with
+            rows ``(m, n)`` for ``cos(m*theta - n*zeta)``. Toroidal indices are
+            actual mode numbers, not divided by ``nfp``. All modes must belong
+            to one family: ``n_i = +/- n_j`` modulo ``nfp``. Duplicate cosine
+            functions, including ``(m, n)`` and ``(-m, -n)``, are rejected.
+        density (float or callable, optional): Mass density in kg/m^3. A callable
+          ``density(s)`` must return
+            a finite positive scalar for each requested surface; it is stored
+            without evaluation here and will be checked before solving.
+            ``None`` requests density-independent results only.
+
+    Raises:
+        ValueError: If the field, surfaces, modes, or scalar density are invalid.
+
+    Surface and mode arrays are copied without reordering. ``mode_family`` is
+    the smaller of the two equivalent toroidal residues, ``n`` and ``-n``.
+    Controls for angular grids, convergence limits, the reference magnetic
+    field, and eigenvector storage will accompany the numerical methods.
+    """
+
+    def __init__(self, field, surfaces, modes, density=None):
+        # The Boozer field module also imports the readers in this module.
+        from ..field.boozermagneticfield import BoozerRadialInterpolant
+
+        if not isinstance(field, BoozerRadialInterpolant):
+            raise ValueError(
+                "field must be a BoozerRadialInterpolant; "
+                f"got {type(field).__name__}."
+            )
+        if not field.stellsym:
+            raise ValueError("field must be stellarator-symmetric for a cosine basis.")
+        if (
+            isinstance(field.nfp, (bool, np.bool_))
+            or not isinstance(field.nfp, Integral)
+            or field.nfp <= 0
+        ):
+            raise ValueError(f"field.nfp must be a positive integer; got {field.nfp}.")
+        if (
+            not isinstance(field.psi0, Real)
+            or not np.isfinite(field.psi0)
+            or field.psi0 == 0
+        ):
+            raise ValueError(
+                f"field.psi0 must be finite and nonzero; got {field.psi0}."
+            )
+
+        self.field = field
+        self.surfaces = self._validate_surfaces(surfaces)
+        self.modes, self.mode_family = self._validate_modes(modes)
+
+        if density is not None and not callable(density):
+            if (
+                isinstance(density, (bool, np.bool_))
+                or not isinstance(density, Real)
+                or not np.isfinite(density)
+                or density <= 0
+            ):
+                raise ValueError(
+                    "density must be None, a callable, or a finite positive scalar "
+                    f"in kg/m^3; got {density!r}."
+                )
+            density = float(density)
+        self.density = density
+
+    def _validate_surfaces(self, surfaces):
+        """Return a copy of the requested surfaces without extrapolating."""
+        surfaces = np.asarray(surfaces)
+        if surfaces.ndim != 1 or surfaces.size == 0:
+            raise ValueError("surfaces must be a nonempty one-dimensional array.")
+        if not np.issubdtype(surfaces.dtype, np.number) or np.iscomplexobj(surfaces):
+            raise ValueError("surfaces must contain real numbers.")
+        surfaces = surfaces.astype(float, copy=True)
+        invalid = surfaces[~np.isfinite(surfaces)]
+        if invalid.size:
+            raise ValueError(f"surfaces must be finite; got {invalid[0]}.")
+
+        lower = max(0.0, self.field.s_half_ext[0])
+        upper = min(1.0, self.field.s_half_ext[-1])
+        invalid = surfaces[(surfaces <= 0) | (surfaces < lower) | (surfaces > upper)]
+        if invalid.size:
+            raise ValueError(
+                f"surfaces must lie in [{lower}, {upper}] with s > 0; "
+                f"got {invalid[0]}."
+            )
+        return surfaces
+
+    def _validate_modes(self, modes):
+        """Return the integer mode array and its common cosine-mode family."""
+        modes = np.asarray(modes)
+        if modes.ndim != 2 or modes.shape[0] == 0 or modes.shape[1] != 2:
+            raise ValueError("modes must be a nonempty array of (m, n) pairs.")
+        if not np.issubdtype(modes.dtype, np.integer):
+            raise ValueError("modes must contain integer mode numbers.")
+        try:
+            # Converting through Python integers catches unsigned values above int64.
+            modes = np.array(modes.tolist(), dtype=np.int64)
+        except OverflowError as error:
+            raise ValueError(
+                "mode numbers must fit in signed 64-bit integers."
+            ) from error
+
+        nfp = int(self.field.nfp)
+        first_residue = int(modes[0, 1]) % nfp
+        mode_family = min(first_residue, nfp - first_residue)
+        seen = set()
+        for index, (m, n) in enumerate(modes.tolist()):
+            if (m, n) in seen or (-m, -n) in seen:
+                raise ValueError(
+                    f"modes[{index}] = ({m}, {n}) duplicates a cosine basis function."
+                )
+            seen.add((m, n))
+
+            residue = n % nfp
+            family = min(residue, nfp - residue)
+            if family != mode_family:
+                raise ValueError(
+                    f"modes[{index}] = ({m}, {n}) belongs to family {family}; "
+                    f"expected family {mode_family} for nfp = {nfp}."
+                )
+        return modes, mode_family
 
 
 @dataclass
