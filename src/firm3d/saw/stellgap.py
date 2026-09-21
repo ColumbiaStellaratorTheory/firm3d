@@ -27,6 +27,8 @@ class Continuum:
             actual mode numbers, not divided by ``nfp``. All modes must belong
             to one family: ``n_i = +/- n_j`` modulo ``nfp``. Duplicate cosine
             functions, including ``(m, n)`` and ``(-m, -n)``, are rejected.
+            The constant basis function is 1; other cosines have a factor of
+            ``sqrt(2)`` for unit norm under the full-torus angular average.
         density (float or callable, optional): Mass density in kg/m^3. A callable
             ``density(s)`` must return
             a finite positive scalar for each requested surface; it is stored
@@ -89,6 +91,7 @@ class Continuum:
 
     def _copy_geometry(self, field):
         """Copy the field data needed for local, consistent coordinate sampling."""
+        self._nfp = int(field.nfp)
         self._geometry_m = np.array(field.xm_b, copy=True)
         self._geometry_n = np.array(field.xn_b, copy=True)
         mode_pairs = np.column_stack((self._geometry_m, self._geometry_n))
@@ -259,6 +262,123 @@ class Continuum:
             values[name] = float(spline(surface))
         values["psi0"] = self._psi0
         return values
+
+    def _plan_basis(self):
+        """Plan cosine normalization and all pairwise Fourier moment indices.
+
+        Returns:
+            dict: ``normalization`` has length N, with 1 for the constant and
+            sqrt(2) otherwise. ``difference_modes`` and ``sum_modes`` have
+            shape (N, N, 2), with entry (i, j) equal to k_i - k_j or k_i + k_j.
+            The corresponding ``difference_allowed`` and ``sum_allowed`` masks
+            have shape (N, N). A moment is allowed only if its toroidal index
+            is divisible by nfp; all other full-torus moments are exactly zero.
+
+        Raises:
+            ValueError: If pairwise indices could overflow signed 64-bit integers.
+
+        This allocates O(N**2) lookup arrays on demand, keeping initialization
+        inexpensive. It preserves the input mode order and retains all allowed
+        moments, including those beyond the equilibrium Fourier cutoff.
+        """
+        largest_index = max(abs(int(self.modes.min())), abs(int(self.modes.max())))
+        if largest_index > np.iinfo(np.int64).max // 2:
+            raise ValueError(
+                "Mode indices are too large for signed 64-bit sums and differences."
+            )
+
+        normalization = np.full(len(self.modes), np.sqrt(2.0))
+        constant = np.all(self.modes == 0, axis=1)
+        normalization[constant] = 1.0
+        difference_modes = self.modes[:, None, :] - self.modes[None, :, :]
+        sum_modes = self.modes[:, None, :] + self.modes[None, :, :]
+        return {
+            "normalization": normalization,
+            "difference_modes": difference_modes,
+            "sum_modes": sum_modes,
+            "difference_allowed": difference_modes[:, :, 1] % self._nfp == 0,
+            "sum_allowed": sum_modes[:, :, 1] % self._nfp == 0,
+        }
+
+    def _plan_angular_grid(self, basis, shape=None):
+        """Plan one-field-period sampling and checked FFT moment lookups.
+
+        Args:
+            basis (dict): The result of ``_plan_basis()`` for this calculation.
+            shape (tuple, optional): Positive integer counts (Ntheta, Nzeta).
+                Defaults to the smallest odd counts that keep the coordinate
+                harmonics and allowed moments strictly below Nyquist.
+
+        Returns:
+            dict: Endpoint-excluded arrays ``theta`` on [0, 2*pi) and ``zeta``
+            on [0, 2*pi/nfp), the selected ``shape``, and ``minimum_shape``.
+            ``difference_indices`` and ``sum_indices`` are pairs of 1D arrays
+            indexing only the corresponding True entries in the basis masks,
+            in NumPy's boolean-indexing order.
+
+        Raises:
+            ValueError: If equilibrium indices are not integers with toroidal
+                period nfp, or the grid is invalid or too small.
+
+        For ``F = fft2(weight) / weight.size``, the quadrature estimate of the
+        cosine moment (m, n) is ``F[m % Ntheta, (-n // nfp) % Nzeta].real`` when
+        n is divisible by nfp.
+        The FFT uses exp(-i * (p*theta + q*nfp*zeta)), whereas our Fourier phase
+        is m*theta - n*zeta. Bounds are checked before applying modulo indices.
+
+        Nonlinear geometric weights can contain arbitrarily higher harmonics.
+        """
+        for indices in (self._geometry_m, self._geometry_n):
+            if not np.issubdtype(indices.dtype, np.integer):
+                raise ValueError("Equilibrium Fourier indices must be integers.")
+        if np.any(self._geometry_n % self._nfp != 0):
+            raise ValueError(
+                "Equilibrium toroidal indices must be multiples of nfp "
+                "for one-field-period sampling."
+            )
+
+        poloidal_bound = max(
+            abs(int(self._geometry_m.min())), abs(int(self._geometry_m.max()))
+        )
+        toroidal_bound = max(
+            abs(int(self._geometry_n.min())), abs(int(self._geometry_n.max()))
+        ) // self._nfp
+        for kind in ("difference", "sum"):
+            selected = basis[kind + "_modes"][basis[kind + "_allowed"]]
+            if selected.size:
+                poloidal_bound = max(poloidal_bound, int(np.abs(selected[:, 0]).max()))
+                toroidal_bound = max(
+                    toroidal_bound, int(np.abs(selected[:, 1]).max()) // self._nfp
+                )
+        minimum_shape = (2 * poloidal_bound + 1, 2 * toroidal_bound + 1)
+
+        if shape is None:
+            shape = minimum_shape
+        else:
+            shape = np.asarray(shape)
+            if (
+                shape.shape != (2,)
+                or not np.issubdtype(shape.dtype, np.integer)
+                or np.any(shape <= 0)
+            ):
+                raise ValueError("grid shape must contain two positive integer counts.")
+            shape = tuple(int(count) for count in shape)
+            if shape[0] < minimum_shape[0] or shape[1] < minimum_shape[1]:
+                raise ValueError(
+                    f"grid shape {shape} must be at least {minimum_shape} to keep "
+                    "coordinate harmonics and required moments below Nyquist."
+                )
+
+        ntheta, nzeta = shape
+        grid = {"shape": shape, "minimum_shape": minimum_shape}
+        grid["theta"] = 2 * np.pi * np.arange(ntheta) / ntheta
+        grid["zeta"] = 2 * np.pi * np.arange(nzeta) / (self._nfp * nzeta)
+        for kind in ("difference", "sum"):
+            selected = basis[kind + "_modes"][basis[kind + "_allowed"]]
+            theta_indices = selected[:, 0] % ntheta
+            zeta_indices = (-selected[:, 1] // self._nfp) % nzeta
+            grid[kind + "_indices"] = (theta_indices, zeta_indices)
+        return grid
 
     def _validate_surfaces(self, surfaces):
         """Return a copy of the requested surfaces without extrapolating."""
