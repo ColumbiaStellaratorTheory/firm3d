@@ -3,9 +3,10 @@
 Incompressible continuum solver for Boozer fields
 =================================================
 
-For a given ``InterpolatedBoozerField``, FIRM3D can calculate incompressible
-shear Alfvén continuum on selected flux surfaces. The algorithm follows
-the no-sound-wave computational approach of the STELLGAP code described in [Spong2003]_.
+The planned FIRM3D continuum solver will take a ``BoozerRadialInterpolant``
+and calculate the incompressible shear Alfvén continuum on selected flux
+surfaces. It will implement the geometry-derived equation below, using the
+no-sound-wave approximation of the STELLGAP code described in [Spong2003]_.
 
 Continuum equation
 ------------------
@@ -96,14 +97,14 @@ with :math:`f` in :math:`\mathrm{Hz}` when :math:`\omega_A` is in
 Preliminary considerations
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-In ``get_covariant_metric()`` method of the ``BoozerMagneticField`` class, covariant
+In the ``get_covariant_metric()`` method of the ``BoozerMagneticField`` class, covariant
 Boozer metric components :math:`g_{ij}` are calculated from covariant basis vectors,
 
 .. math::
 
    g_{ij}=\frac{\partial\mathbf{R}}{\partial x_i}\cdot\frac{\partial\mathbf{R}}{\partial x_j},
 
-where , :math:`x_i` and :math:`x_j` are Boozer coordinates,
+where :math:`x_i` and :math:`x_j` are Boozer coordinates,
 :math:`x_i,\;x_j\in(s,\theta,\zeta)`. When doing so, cylindrical coordinates
 :math:`R,Z,\phi` are treated as given functions of Boozer coordinates, so the components
 are given by
@@ -114,52 +115,55 @@ are given by
    \frac{\partial Z}{\partial x_i}\frac{\partial Z}{\partial x_j} +
    R^2 \frac{\partial \phi}{\partial x_i}\frac{\partial \phi}{\partial x_j}.
 
-Consistent contravariant metric is then computed as inverse of :math:`g_{ij}`,
+A consistent contravariant metric is then computed by inverting the covariant
+metric matrix,
 
 .. math::
 
-   g^{ij}=(g_{ij})^{-1}.
+   [g^{ij}]=[g_{ij}]^{-1}.
 
 While this approach is valid, care should be taken when using :math:`g^{ij}` in
-expressions involving covariant filed components :math:`I` and :math:`G`, like in
-continuum equation above. Notably, the issue can arise in Booz_xform of VMEC equilibrium
-since, although :math:`\mathbf{R}(s,\theta,\zeta)`, :math:`\psi_0` and :math:`\iota`
-**are provided simultaneously** with :math:`B`, :math:`I`, and :math:`G`, **both these
-inputs fully determine magnetic field,**
+expressions involving covariant field components :math:`I` and :math:`G`, as in
+the continuum equation above. The coordinate mapping
+:math:`\mathbf{R}(s,\theta,\zeta)`, :math:`\psi_0`, and :math:`\iota` determine
+a magnetic field through its contravariant representation. The independently
+represented magnetic data must be compatible with that field. For exact
+Boozer coordinates, the two representations satisfy
 
 .. math::
-   :nowrap:
+   :label: stellgap-field-representations
 
-   \[
    \begin{aligned}
    \mathbf{B}&=\frac{\psi_0}{\frac{\partial \mathbf{R}}{\partial s}\cdot\left(\frac{\partial \mathbf{R}}{\partial \theta}\times\frac{\partial \mathbf{R}}{\partial \zeta}\right)}\left(\frac{\partial \mathbf{R}}{\partial \zeta}+\iota\frac{\partial\mathbf{R}}{\partial\theta}\right)\\
-   &=G\nabla\zeta+I\nabla\theta+K\nabla s.
-   \end{aligned}\tag{1}
-   \]
+   &=G\nabla\zeta+I\nabla\theta+\psi_0K\nabla s.
+   \end{aligned}
 
 In :math:`{\rm VMEC}\to{\rm Booz\_xform}` pipeline, the :math:`\mathbf{B}` field
-computed in covariant basis from :math:`\mathbf{R}`, :math:`\psi_0` and :math:`\iota`
+computed in the contravariant representation from :math:`\mathbf{R}`,
+:math:`\psi_0`, and :math:`\iota`
 **is only approximately** equal to the :math:`\mathbf{B}` field computed in
-contravariant basis from :math:`G` and :math:`I`. One consequence of that is that, for
-example, the Boozer Jacobian relation
+the covariant representation from :math:`G`, :math:`I`, and :math:`K`.
 
 .. math::
 
-   \frac{\partial \mathbf{R}}{\partial s}\cdot\left(\frac{\partial \mathbf{R}}{\partial \theta}\times\frac{\partial \mathbf{R}}{\partial \zeta}\right)=\frac{G+\iota I}{B^2}
+   \frac{\partial \mathbf{R}}{\partial s}\cdot\left(\frac{\partial \mathbf{R}}{\partial \theta}\times\frac{\partial \mathbf{R}}{\partial \zeta}\right)=\frac{\psi_0(G+\iota I)}{B^2}.
 
-holds only approximately. Next section shows the consequences of vialating this identiy
-for continuum equation.
+holds only approximately. The next section derives the continuum
+equation using the magnetic field inferred from the coordinate mapping.
 
 .. _stellgap-geometric-continuum:
 
 Continuum equation from :math:`\mathbf{R}(s,\theta,\zeta)` and :math:`\iota`
 ----------------------------------------------------------------------------
 
-Suppose the covariant matrix :math:`g_{ij}`,  calculated from
-:math:`\mathbf{R}(s,\theta,\zeta)` as described above, we are given rotational transform
-:math:`\iota(s)` and :math:`\psi_0`. This information fully specifies the magnetic field
-data needed in continuum equation, as in the rest of this section. We avoid clutter with
-notation :math:`\mathbf r_i=\partial\mathbf R/\partial x^i`, and introduce
+Suppose we are given the smooth coordinate mapping
+:math:`\mathbf{R}(s,\theta,\zeta)`, its covariant metric :math:`g_{ij}`,
+the rotational transform :math:`\iota(s)`, and :math:`\psi_0\ne0`.
+We exclude magnetic axis and work in a connected region where the coordinate mapping is nonsingular.
+These data specify the magnetic quantities needed in the continuum equation. 
+For dimensional frequencies, also specify a positive mass density :math:`\rho(s)`.
+Using :math:`\mathbf r_i=\partial\mathbf R/\partial x^i`, with
+:math:`(x^1,x^2,x^3)=(s,\theta,\zeta)`, introduce
 
 .. math::
 
@@ -185,9 +189,9 @@ the amplitude of magnetic field :math:`B_g` is given by
 
    B_{\rm g}^2=\frac{\psi_0^2 S}{\Delta}.
 
-With derivative along the field line :math:`\partial_\|=\partial_\zeta +
-\iota(s)\partial_\theta,` gradient :math:`\nabla_{||}^g` along the :math:`\mathbf{B}_g`
-field is
+With the angular field-line derivative
+:math:`\partial_\|=\partial_\zeta+\iota(s)\partial_\theta`, the directional
+derivative along the unit vector :math:`\mathbf{B}_g/B_g` is
 
 .. math::
 
@@ -232,7 +236,7 @@ and
 
 .. math::
 
-   \frac{g^{ss}}{B_g}\nabla_\|=\frac{H}{\Delta}\frac{J_g}{\psi_0S}\partial_\|,
+   \frac{g^{ss}}{B_g}\nabla_\|^g=\frac{H}{\Delta}\frac{J_g}{\psi_0S}\partial_\|,
 
 so the continuum equation becomes
 
@@ -246,7 +250,7 @@ continuum equation can be simplified into
 
 .. math::
 
-   \partial_\|(\mathcal A \partial_\|\Phi)-\omega^2\mathcal{W}\Phi=0,
+   \partial_\|(\mathcal A \partial_\|\Phi)+\omega^2\mathcal{W}\Phi=0,
 
 where
 
@@ -254,8 +258,12 @@ where
 
    \mathcal{A}=\frac{H}{\sqrt{\Delta} S}\text{ and }\mathcal{W}=\frac{\mu_0\rho\Delta}{\psi_0^2}\mathcal{A}.
 
-Notably, although all metric :math:`g_{ij}=\mathbf{r}_i\cdot\mathbf{r}_j` components are
-needed for evaluating :math:`H` and
+The regularity assumptions imply :math:`H>0`, :math:`S>0`, and
+:math:`\Delta>0`. With :math:`\rho(s)>0` and :math:`\psi_0\ne0`, both
+scalar weights :math:`\mathcal A` and :math:`\mathcal W` are strictly positive.
+
+The angular metric components determine :math:`H` and :math:`S`, while
+evaluating the determinant generally requires all six metric components:
 
 .. math::
 
@@ -263,48 +271,56 @@ needed for evaluating :math:`H` and
    +2g_{s\theta}g_{s\zeta}g_{\theta\zeta}
    -g_{s\zeta}^2g_{\theta\theta},
 
-only :math:`\Delta` and :math:`H/S` values are needed to evaluate the continuum
-equation.
+Once these quantities are known, only :math:`\Delta` and :math:`H/S`,
+together with :math:`\iota`, :math:`\psi_0`, and :math:`\rho`, are needed
+to evaluate this scalar continuum equation.
 
-We seek approximate solution to the continuum equation, expressed in a basis of
+At fixed :math:`s`, seek an approximate solution to the continuum equation in a basis of
 :math:`N` known linearly independent periodic functions,
 
 .. math::
 
-   \Phi_N(\theta,\zeta)=\sum_{k=1}^N c_k f_k(\theta,\zeta),
+   \Phi_N(\theta,\zeta)=\sum_{j=1}^N c_j f_j(\theta,\zeta),
 
-where :math:`c_j` are the constant amplitudes to be determined. We will use cosine basis
+where :math:`c_j` are the unknown amplitudes, constant with respect to the
+angles. We will use the cosine basis
 
 .. math::
 
-   f_k=\cos(m_k\theta-n_k\zeta),
+   f_j=\cos(m_j\theta-n_j\zeta),
 
 so
 
 .. math::
 
-   \partial_\| f_k=-(m_k\iota-n_k)\sin(m_k\theta-n_k \zeta).
+   \partial_\| f_j=-(m_j\iota-n_j)\sin(m_j\theta-n_j \zeta).
 
-This expansion will not, in general, satisfy continuum equation everywhere on the
-surface. However, a set of expansion amplitudes :math:`c_i` exists that satisfies
-Galerkin condition of zero residual against each basis function used as a test function:
+Retain only one of the identical cosine functions associated with
+:math:`(m,n)` and :math:`(-m,-n)`. This basis selects the even parity sector
+when the coefficient fields have stellarator symmetry.
+
+The expansion will not, in general, satisfy the continuum equation everywhere
+on the surface. The Galerkin condition requires zero integrated residual
+against each test function :math:`f_i^*`:
 
 .. math::
 
-   \int f_k^*\left[\partial_\| (\mathcal{A}\partial_\|\Phi_N)-\omega^2\mathcal{W}\Phi_N\right]d\Omega=0,\quad k=1,..,N,
+   \int_\Omega f_i^*\left[\partial_\| (\mathcal{A}\partial_\|\Phi_N)
+   +\omega^2\mathcal{W}\Phi_N\right]d\Omega=0,
+   \quad i=1,\ldots,N,
 
 where :math:`\Omega` denotes integral over Boozer angles,:math:`d\Omega=d\theta d\zeta`.
 Using each of the functions from the :math:`N` basis functions in :math:`\Phi_N`
 expansions results in :math:`N` linearly independent equations for :math:`N` unknown
 amplitudes :math:`c_k`.
 
-The first integral can be expressed as
+Since :math:`\iota(s)` is independent of the angles, the derivative term is
 
 .. math::
 
    \begin{aligned}
-   \int f_k^*\partial_\| (\mathcal{A}\partial_\|\Phi_N)d\Omega&=\int f_k^*\partial_\zeta\left(\mathcal{A}\partial_\| \Phi_N\right)d\Omega\\
-   &\quad +\iota\int f_k^*\partial_\theta (\mathcal{A}\partial_\|\Phi_N)d\Omega.
+   \int f_i^*\partial_\| (\mathcal{A}\partial_\|\Phi_N)d\Omega&=\int f_i^*\partial_\zeta\left(\mathcal{A}\partial_\| \Phi_N\right)d\Omega\\
+   &\quad +\iota\int f_i^*\partial_\theta (\mathcal{A}\partial_\|\Phi_N)d\Omega.
    \end{aligned}
 
 Integrating the first with respect to :math:`\zeta` gives
@@ -312,38 +328,38 @@ Integrating the first with respect to :math:`\zeta` gives
 .. math::
 
    \begin{aligned}
-   \int f_k^*\partial_\zeta\left(\mathcal{A}\partial_\| \Phi_N\right)d\Omega&=\int_0^{2\pi}[f_k^*\mathcal{A}\partial_\|\Phi_N]_{\zeta=0}^{\zeta=2\pi}d\theta\\
-   &\quad -\iota \int(\partial_\zeta f_k)^*\mathcal{A}\partial_\|\Phi_Nd\Omega,
+   \int f_i^*\partial_\zeta\left(\mathcal{A}\partial_\| \Phi_N\right)d\Omega&=\int_0^{2\pi}[f_i^*\mathcal{A}\partial_\|\Phi_N]_{\zeta=0}^{\zeta=2\pi}d\theta\\
+   &\quad -\int(\partial_\zeta f_i)^*\mathcal{A}\partial_\|\Phi_Nd\Omega,
    \end{aligned}
 
-where the boundary terms vanishes since integrand matches on the periodic boundary.
-Likewise, boundary term vanishes in
+where the boundary term vanishes because the product has matching values
+at opposite periodic boundaries. Likewise, the boundary term vanishes in
 
 .. math::
 
    \begin{aligned}
-   \int f_k^*\partial_\theta (\mathcal{A}\partial_\|\Phi_N)d\Omega&=\int [f_k^*\mathcal{A}\partial_\|\Phi_N]_{\theta=0}^{\theta=2\pi}d\theta\\
-   &\quad -\int (\partial_\theta f_k)^* \mathcal{A}\partial_\|\Phi_Nd\Omega.
+   \int f_i^*\partial_\theta (\mathcal{A}\partial_\|\Phi_N)d\Omega&=\int_0^{2\pi}[f_i^*\mathcal{A}\partial_\|\Phi_N]_{\theta=0}^{\theta=2\pi}d\zeta\\
+   &\quad -\int (\partial_\theta f_i)^* \mathcal{A}\partial_\|\Phi_Nd\Omega.
    \end{aligned}
 
 Combining remaining terms gives
 
 .. math::
 
-   \int f_k^*\partial_\| (\mathcal{A}\partial_\|\Phi_N)d\Omega=-\int (\partial_\| f_i)^* \mathcal{A} \partial _\| \Phi_N d\Omega,
+   \int f_i^*\partial_\| (\mathcal{A}\partial_\|\Phi_N)d\Omega=-\int (\partial_\| f_i)^* \mathcal{A} \partial _\| \Phi_N d\Omega,
 
-so the equation is
+so substituting into the Galerkin condition and rearranging gives
 
 .. math::
 
-   \int \mathcal{A}(\partial_\| f_k)^* \partial_\|\Phi_Nd\Omega=\omega^2\int\mathcal{W}f_k^*\Phi_Nd\Omega.
+   \int \mathcal{A}(\partial_\| f_i)^* \partial_\|\Phi_Nd\Omega=\omega^2\int\mathcal{W}f_i^*\Phi_Nd\Omega.
 
 Substituting :math:`\Phi_N=\sum_jc_jf_j` gives
 
 .. math::
 
-   \sum_{j=1}^{N}c_j\int\mathcal A(\partial_\| f_k)^*\partial_\|f_j\,d\Omega
-   =\omega^2\sum_{j=1}^{N}c_j\int\mathcal W f_k^*f_j\,d\Omega.
+   \sum_{j=1}^{N}c_j\int\mathcal A(\partial_\| f_i)^*\partial_\|f_j\,d\Omega
+   =\omega^2\sum_{j=1}^{N}c_j\int\mathcal W f_i^*f_j\,d\Omega.
 
 These expressions define :math:`N\times N` stiffness :math:`K_{ij}` and mass
 :math:`M_{ij}` matrices
@@ -351,13 +367,12 @@ These expressions define :math:`N\times N` stiffness :math:`K_{ij}` and mass
 .. math::
 
    \begin{aligned}
-   K_{ij} &= \int\mathcal A(\partial_\| f_k)^*\partial_\|f_j\,d\Omega,\\
-   M_{ij} &=\int\mathcal W f_k^*f_j\,d\Omega,
+   K_{ij} &= \int\mathcal A(\partial_\| f_i)^*\partial_\|f_j\,d\Omega,\\
+   M_{ij} &=\int\mathcal W f_i^*f_j\,d\Omega,
    \end{aligned}
 
-where row index :math:`i` labels the test function, and the column index :math:`j`
-multiplies the basis function multiplying :math:`c_j`. The :math:`N` linear equations
-are then
+where the row index :math:`i` labels the test function, and the column index
+:math:`j` labels the trial function multiplying :math:`c_j`. The equations are
 
 .. math::
 
@@ -365,13 +380,18 @@ are then
    =\omega^2\sum_{j=1}^{N}\mathsf M_{ij}c_j,
    \qquad i=1,\ldots,N.
 
+Writing :math:`\mathbf c=(c_1,\ldots,c_N)^T`, this is
+:math:`\mathsf K\mathbf c=\omega^2\mathsf M\mathbf c`. For a given eigenvalue,
+:math:`\mathsf K-\omega^2\mathsf M` is singular, we normalize the eigenvector as
+:math:`\mathbf c^\dagger\mathsf M\mathbf c=1` to fix its magnitude.
+
 Observe that, since :math:`\mathcal A` and :math:`\mathcal W` are real, conjugating a
 matrix entry and interchanging its indices gives
 
 .. math::
 
    \mathsf K_{ji}^*
-   =\int_\Omega\mathcal A(Df_j)(Df_i)^*\,d\Omega
+   =\int_\Omega\mathcal A(\partial_\|f_j)(\partial_\|f_i)^*\,d\Omega
    =\mathsf K_{ij},\qquad
    \mathsf M_{ji}^*=\mathsf M_{ij}.
 
@@ -413,8 +433,8 @@ equation are non-negative,
 
    \omega^2=\frac{\mathbf c^\dagger\mathsf K\mathbf c}
    {\mathbf c^\dagger\mathsf M\mathbf c}
-   =\frac{\int\mathcal A|D\Phi_N|^2\,d\Omega}
-   {\int\mathcal W|\Phi_N|^2\,d\Omega}\ge0,
+   =\frac{\int\mathcal A|\partial_\|\Phi_c|^2\,d\Omega}
+   {\int\mathcal W|\Phi_c|^2\,d\Omega}\ge0.
 
 as expected for ideal MHD model. To evaluate integrals over the flux surface
 numerically, we sum integrand over the integration points
@@ -436,7 +456,7 @@ the quadrature approximation of the stiffness and mass matrices can be written a
    \mathsf M^{(q)}&=F^\dagger\operatorname{diag}(w_p\mathcal W_p)F.
    \end{aligned}
 
-Because :math:`(F\mathbf c)_p=\Phi_c(x_p)` and :math:`(F_D\mathbf
+Because :math:`(F\mathbf c)_p=\Phi_c(x_p)` and :math:`(F_{\partial_\|}\mathbf
 c)_p=\partial_\|\Phi_c(x_p)`,
 
 .. math::
@@ -445,7 +465,7 @@ c)_p=\partial_\|\Phi_c(x_p)`,
    \mathbf c^\dagger\mathsf M^{(q)}\mathbf c
    &=\sum_p w_p\mathcal W_p|\Phi_c(x_p)|^2,\\
    \mathbf c^\dagger\mathsf K^{(q)}\mathbf c
-   &=\sum_p w_p\mathcal A_p|D\Phi_c(x_p)|^2.
+   &=\sum_p w_p\mathcal A_p|\partial_\|\Phi_c(x_p)|^2.
    \end{aligned}
 
 This shows that finite sums preserve Herminian symmetry and nonnegativity of the
@@ -456,7 +476,7 @@ basis functions :math:`f_j`. To avoid this aliasing issue, we will  use a unifor
 with Fourier modes strictly below the Nyquist limit.
 
 Another important resolution consideration is truncated Fourier approximation of
-:math:`\mathcal{A}` and :math:`\mathcal{W}` matrices, because such truncated
+:math:`\mathcal{A}` and :math:`\mathcal{W}` coefficient fields, because such a truncated
 approximation can reach negative values. For example,
 
 .. math::
@@ -482,7 +502,10 @@ Observe that the first matrix is positive definite, while the second one is inde
 However, it is not necessary to preserve harmonics that never enter the selected basis
 product. Defining cosine moments :math:`\mathcal W_c(k)=\langle\mathcal
 W\cos\alpha_k\rangle` and :math:`\mathcal A_c(k)=\langle\mathcal A\cos\alpha_k\rangle`,
-with :math:`\alpha_k=m\theta-n\zeta`, the products of cosines or sines give
+with :math:`k=(m,n)`, :math:`\alpha_k=m\theta-n\zeta`, and
+:math:`\langle u\rangle=(2\pi)^{-2}\int_\Omega u\,d\Omega`, the products
+of cosines or sines give the following matrices when both are divided by
+the common angular area :math:`(2\pi)^2`:
 
 .. math::
 
@@ -493,8 +516,10 @@ with :math:`\alpha_k=m\theta-n\zeta`, the products of cosines or sines give
    \kappa_i&=m_i\iota-n_i.
    \end{aligned}
 
-Therefore, if every required sum and difference moment is retained, Fourier lookup will
-produce the same matrix as the quadrature.
+Dividing both matrices by the same factor leaves the generalized
+eigenproblem unchanged. If every required sum and difference moment is
+retained, Fourier lookup produces the same matrices as quadrature using
+the same angular normalization.
 
 References
 ----------
@@ -510,9 +535,3 @@ References
    Journal of Plasma Physics **91**, E101 (2025).
    https://doi.org/10.1017/S0022377825100524
    In particular, Secs. 2--3 and 5.1.
-
-.. [Schwab1993] C. Schwab,
-   *Ideal magnetohydrodynamics: Global mode analysis of three-dimensional
-   plasma configurations*, Physics of Fluids B **5**, 3195--3206 (1993).
-   https://doi.org/10.1063/1.860656
-   In particular, p. 3197, Eqs. (12)--(13) and the accompanying discussion.
