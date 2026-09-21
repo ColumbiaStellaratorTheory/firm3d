@@ -84,9 +84,6 @@ void init_tracing(py::module_ &m){
     );
 
 #ifdef USE_CUDA
-    // Overloads are told apart by the dtype of the T-typed arrays, so those
-    // take noconvert(): a float32 array must reach the float kernel, never be
-    // converted to double by the first overload that accepts it.
     m.def("cartesian_gpu_tracing", &cartesian_gpu_tracing<double>,
         py::arg("quad_pts").noconvert(),
         py::arg("rrange"),

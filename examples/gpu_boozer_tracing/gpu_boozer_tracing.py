@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 
-
 import numpy as np
 import pandas as pd
 
@@ -24,10 +23,9 @@ from firm3d.util.functions import in_github_actions, sigmav
 resolution = 5 if in_github_actions else 15  # Resolution for field interpolation
 nparticles = 100 if in_github_actions else 30000  # Number of particles to trace
 tol = 1e-4 if in_github_actions else 1e-6  # Tolerance for ODE solver
-
+tmax = 1e-4
 
 ### CREATE A FIELD FOR TRACING
-# boozmn_filename = "../inputs/boozmn_aten_rescaled.nc"
 boozmn_filename = "../inputs/boozmn_ariescs_low_res.nc"
 bri = BoozerRadialInterpolant(boozmn_filename, 3, enforce_vacuum=True)
 
@@ -48,9 +46,7 @@ nD = lambda s: 1 - s**5  # Normalized density
 nT = nD
 T = lambda s: 11.5 * (1 - s)  # Temperature in keV
 
-
 # D-T cross-section
-np.random.seed(0)
 # Reactivity profile
 reactivity = lambda s: nD(s) * nT(s) * sigmav(T(s))
 stz_inits = initialize_position_profile(field, nparticles, reactivity, seed=1)
@@ -62,7 +58,6 @@ charge = ALPHA_PARTICLE_CHARGE
 vpar0 = np.sqrt(2 * Ekin / mass)
 vpar_inits = initialize_velocity_uniform(vpar0, nparticles, seed=1)
 
-tmax = 1e-4
 # The field is tabulated for the GPU once, at the resolution and precision to
 # trace in; the tracing calls then need neither.
 field_dbl = CatapultBoozerField(bri, resolution, resolution, resolution)
@@ -72,9 +67,7 @@ field_flt = CatapultBoozerField(
 
 # Trace in double precision. As for the CPU tracer, res_tys holds each
 # particle's (t, s, theta, zeta, vpar) rows and res_hits its boundary crossing,
-# so the same post-processing serves both. The kernel stops particles at s = 1,
-# the CPU tracer's MaxToroidalFluxStoppingCriterion(1.0); it takes no
-# stopping_criteria argument.
+# so the same post-processing serves both.
 res_tys_dbl, res_hits_dbl = trace_particles_boozer_gpu(
     field_dbl,
     stz_inits,
@@ -120,7 +113,8 @@ particle_data = pd.DataFrame(
         "vpar_end_flt": final_flt[:, 4],
     }
 )
-# particle_data.to_csv("./particle_data.csv")
+
+particle_data.to_csv("./particle_data.csv")
 print(f"tmax= {tmax}")
 print(f"Number of particles= {nparticles}")
 print(f"Flt. Loss fraction: {np.mean([len(hits) > 0 for hits in res_hits_flt]):.3f}")

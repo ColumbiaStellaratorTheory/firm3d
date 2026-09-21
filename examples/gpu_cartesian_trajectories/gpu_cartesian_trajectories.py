@@ -28,9 +28,6 @@ order = 12  # order of coil curves
 tol = 1e-8
 nparticles = 100 if in_github_actions else 1000  # Number of particles to trace
 tmax = 1e-4  # Tracing time
-# Interval at which to save the trajectory. Steps at this tolerance are
-# 0.5-4e-7 s, and a save time inside a step gets no row, so keep dt_save above
-# the step size.
 dt_save = 1e-6
 
 filename = "../inputs/coils.curves_22_7_21"
