@@ -187,39 +187,39 @@ class TestContinuumSolver(unittest.TestCase):
     def test_run_preserves_surface_and_mode_order_and_optional_vectors(self):
         continuum = self.make_continuum()
         result = continuum.run(keep_eigenvectors=True)
-        np.testing.assert_array_equal(result["surfaces"], [0.8, 0.2, 0.8])
-        np.testing.assert_array_equal(result["modes"], continuum.modes)
-        self.assertEqual(result["eigenvalues"].shape, (3, 4))
-        self.assertEqual(result["eigenvectors"].shape, (3, 4, 4))
-        self.assertEqual(result["eigenvalue_units"], "T^2/m^2")
-        self.assertIsNone(result["density"])
-        self.assertTrue(np.all(np.diff(result["eigenvalues"], axis=1) >= 0))
-        np.testing.assert_allclose(result["eigenvalues"][:, :2], 0, atol=1e-12)
+        np.testing.assert_array_equal(result.surfaces, [0.8, 0.2, 0.8])
+        np.testing.assert_array_equal(result.modes, continuum.modes)
+        self.assertEqual(result.eigenvalues.shape, (3, 4))
+        self.assertEqual(result.eigenvectors.shape, (3, 4, 4))
+        self.assertEqual(result.eigenvalue_units, "T^2/m^2")
+        self.assertIsNone(result.density)
+        self.assertTrue(np.all(np.diff(result.eigenvalues, axis=1) >= 0))
+        np.testing.assert_allclose(result.eigenvalues[:, :2], 0, atol=1e-12)
         np.testing.assert_array_equal(
-            result["eigenvalues"][0], result["eigenvalues"][2]
+            result.eigenvalues[0], result.eigenvalues[2]
         )
-        for record in result["diagnostics"]:
+        for record in result.diagnostics:
             self.assertTrue(record["quadrature"]["converged"])
             self.assertEqual(record["frequency_grid_convergence"], "unverified")
             self.assertLessEqual(
                 max(record["solver"]["scaled_residuals"]), record["solver"]["tolerance"]
             )
-        result["surfaces"][0] = 0.1
-        result["modes"][0] = [99, 99]
+        result.surfaces[0] = 0.1
+        result.modes[0] = [99, 99]
         self.assertEqual(continuum.surfaces[0], 0.8)
         np.testing.assert_array_equal(continuum.modes[0], [0, 0])
         compact = continuum.run()
-        self.assertIsNone(compact["eigenvectors"])
-        np.testing.assert_array_equal(compact["eigenvalues"], result["eigenvalues"])
+        self.assertIsNone(compact.eigenvectors)
+        np.testing.assert_array_equal(compact.eigenvalues, result.eigenvalues)
 
     def test_density_does_not_change_eigenvalues(self):
         continuum = self.make_continuum(surfaces=[0.4])
-        reference = continuum.run()["eigenvalues"]
+        reference = continuum.run().eigenvalues
         for density in (1e-7, lambda s: 2e-7 * (1 + s)):
             result = self.make_continuum(surfaces=[0.4], density=density).run()
-            np.testing.assert_array_equal(result["eigenvalues"], reference)
+            np.testing.assert_array_equal(result.eigenvalues, reference)
             expected = density(0.4) if callable(density) else density
-            np.testing.assert_allclose(result["density"], [expected])
+            np.testing.assert_allclose(result.density, [expected])
 
     def test_density_on_every_surface_is_checked_before_any_solve(self):
         def density(surface):

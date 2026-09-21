@@ -238,11 +238,11 @@ class TestReferenceField(unittest.TestCase):
         with patch.object(continuum, "_integrate_reference_field") as integrate:
             result = continuum.run()
             integrate.assert_not_called()
-        self.assertEqual(result["reference_field"], reference)
+        self.assertEqual(result.reference_field, reference)
         explicit = self.make_continuum(reference_field=5.7).run()
-        np.testing.assert_array_equal(explicit["eigenvalues"], result["eigenvalues"])
-        self.assertEqual(explicit["reference_field"]["value"], 5.7)
-        result["reference_field"]["value"] = -1
+        np.testing.assert_array_equal(explicit.eigenvalues, result.eigenvalues)
+        self.assertEqual(explicit.reference_field["value"], 5.7)
+        result.reference_field["value"] = -1
         self.assertEqual(continuum.get_reference_field(rtol=1e-10), reference)
 
 

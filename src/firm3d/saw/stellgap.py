@@ -1,14 +1,125 @@
 import os
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from numbers import Integral, Real
+from typing import Optional
 
 import numpy as np
 import plotly.graph_objects as go
 from scipy.linalg import eigh, norm
 from scipy.special import roots_legendre
 
-__all__ = ["Continuum", "Harmonic", "ModeContinuum", "AlfvenSpecData"]
+from ..util.constants import VACUUM_PERMEABILITY
+
+__all__ = [
+    "Continuum", "ContinuumResult", "Harmonic", "ModeContinuum", "AlfvenSpecData"
+]
+
+
+def _sample_density(density, surfaces):
+    """Validate optional mass density in kg/m^3 at each requested surface."""
+    if density is None:
+        return None
+    values = np.empty(len(surfaces))
+    for index, surface in enumerate(surfaces):
+        value = density
+        if callable(density):
+            try:
+                value = density(surface)
+            except Exception as error:
+                raise ValueError(
+                    f"density evaluation failed at s={surface}."
+                ) from error
+        if (
+            isinstance(value, (bool, np.bool_))
+            or not isinstance(value, Real)
+            or not np.isfinite(value)
+            or value <= 0
+        ):
+            raise ValueError(
+                f"density must be a finite positive scalar at s={surface}; "
+                f"got {value!r}."
+            )
+        values[index] = value
+    return values
+
+
+def _frequencies_khz(eigenvalues, density, surfaces):
+    """Convert Lambda = mu0*rho*omega**2 using already validated density."""
+    if density is None:
+        return None
+    # Taking square roots separately avoids overflow in Lambda/(mu0*rho).
+    denominator = (2 * np.pi * 1e3 * np.sqrt(VACUUM_PERMEABILITY)) * np.sqrt(density)
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        frequencies = np.sqrt(eigenvalues) / denominator[:, None]
+    invalid = ~np.all(np.isfinite(frequencies), axis=1)
+    if np.any(invalid):
+        surface = surfaces[np.flatnonzero(invalid)[0]]
+        raise ValueError(
+            f"Frequency conversion produced nonfinite values at s={surface}."
+        )
+    return frequencies
+
+
+@dataclass
+class ContinuumResult:
+    """Continuum spectra and conventions returned by ``Continuum.run()``.
+
+    Attributes:
+        surfaces (ndarray): Normalized flux values, shape (Ns,), in input order.
+        modes (ndarray): Input cosine harmonics (m, n), shape (N, 2).
+        eigenvalues (ndarray): Lambda = mu0*rho*omega**2, shape (Ns, N),
+            ascending on each surface. Sorting does not track branches.
+        normalized_frequencies (ndarray): Dimensionless omega/omega_A(s),
+            shape (Ns, N), where omega_A = B_ref**2/(abs(G+iota*I)*sqrt(mu0*rho)).
+        dominant_modes (ndarray): Harmonic with the largest absolute coefficient
+            in each eigenvector, shape (Ns, N, 2), preserving input signs.
+            Exact ties select the first input mode. Labels can change within
+            degenerate eigenspaces; a coefficient is not an energy fraction.
+        reference_field (dict): Reference field in tesla and its provenance.
+        normalization (dict): Frequency formulas, local factors, and units.
+        mode_convention (dict): Fourier phase, basis normalization, and label rule.
+        diagnostics (list): Per-surface quadrature and eigenpair checks.
+        eigenvectors (ndarray or None): Optional shape (Ns, N, N), with
+            M0-normalized eigenvectors as columns in the input basis order.
+        density (ndarray or None): Sampled mass density in kg/m^3, shape (Ns,).
+        frequencies_khz (ndarray or None): Dimensional frequencies, shape (Ns, N).
+        eigenvalue_units (str): Units of Lambda, T^2/m^2.
+    """
+
+    surfaces: np.ndarray
+    modes: np.ndarray
+    eigenvalues: np.ndarray
+    normalized_frequencies: np.ndarray
+    dominant_modes: np.ndarray
+    reference_field: dict
+    normalization: dict
+    mode_convention: dict
+    diagnostics: list
+    eigenvectors: Optional[np.ndarray] = None
+    density: Optional[np.ndarray] = None
+    frequencies_khz: Optional[np.ndarray] = None
+    eigenvalue_units: str = "T^2/m^2"
+
+    def with_density(self, density):
+        """Return dimensional frequencies for a new density without solving again.
+
+        Args:
+            density (float or callable or None): Finite positive mass density
+                in kg/m^3, or ``density(s)`` returning it at each surface.
+                None removes dimensional frequencies from the returned result.
+
+        Returns:
+            ContinuumResult: New result with its own density and kHz arrays.
+            Unchanged arrays and metadata are shared with this result to avoid
+            copying retained eigenvectors. Treat shared data as read-only.
+
+        Raises:
+            ValueError: If sampled density or converted frequencies are invalid.
+        """
+        values = _sample_density(density, self.surfaces)
+        frequencies = _frequencies_khz(self.eigenvalues, values, self.surfaces)
+        return replace(self, density=values, frequencies_khz=frequencies)
 
 
 class Continuum:
@@ -16,7 +127,8 @@ class Continuum:
 
     Inputs are validated and the coordinate splines are copied for local
     sampling. ``run()`` computes density-independent eigenvalues after checking
-    angular quadrature on each surface. Frequency conversion will follow.
+    angular quadrature on each surface, and returns normalized frequencies and
+    dominant harmonics. Supplying density also gives frequencies in kHz.
 
     Args:
         field (BoozerRadialInterpolant): Stellarator-symmetric equilibrium with
@@ -126,12 +238,9 @@ class Continuum:
                 Defaults to False; they are always computed for solver checks.
 
         Returns:
-            dict: Copies of ``surfaces`` and ``modes`` in input order;
-            ``eigenvalues`` of shape (Ns, N), sorted on each surface, with
-            Lambda = mu0*rho*omega**2 in T^2/m^2; ``eigenvectors`` of shape
-            (Ns, N, N) or None, with eigenvectors stored as columns; optional
-            sampled ``density`` in kg/m^3; and per-surface ``diagnostics``.
-            ``reference_field`` records the field value and its provenance.
+            ContinuumResult: Sorted eigenvalues, normalized frequencies, dominant
+            harmonics, numerical diagnostics, and optional eigenvectors and kHz
+            frequencies. Surface and basis ordering follow the supplied inputs.
 
         Raises:
             ValueError: If settings, density, geometry, or matrices are invalid.
@@ -144,14 +253,17 @@ class Continuum:
         """
         if not isinstance(keep_eigenvectors, (bool, np.bool_)):
             raise ValueError("keep_eigenvectors must be a boolean.")
-        density = self._sample_density()
+        density = _sample_density(self.density, self.surfaces)
         if self._reference_cache is None:
             self.get_reference_field()
         reference = deepcopy(self._reference_cache)
+        normalization = self._frequency_normalization(reference)
         basis = self._plan_basis()
         surface_count = len(self.surfaces)
         mode_count = len(self.modes)
         eigenvalues = np.empty((surface_count, mode_count))
+        normalized_frequencies = np.empty_like(eigenvalues)
+        dominant_modes = np.empty((surface_count, mode_count, 2), dtype=np.int64)
         eigenvectors = None
         if keep_eigenvectors:
             eigenvectors = np.empty((surface_count, mode_count, mode_count))
@@ -165,6 +277,17 @@ class Continuum:
             orientation = matrices["orientation"]
             solution = self._solve_surface(surface, matrices["K"], matrices["M0"])
             eigenvalues[index] = solution["eigenvalues"]
+            with np.errstate(over="ignore", invalid="ignore"):
+                normalized_frequencies[index] = (
+                    normalization["frequency_factors"][index]
+                    * np.sqrt(solution["eigenvalues"])
+                )
+            if not np.all(np.isfinite(normalized_frequencies[index])):
+                raise ValueError(
+                    f"Normalized frequencies are nonfinite at s={surface}."
+                )
+            dominant_indices = np.argmax(np.abs(solution["eigenvectors"]), axis=0)
+            dominant_modes[index] = self.modes[dominant_indices]
             if keep_eigenvectors:
                 eigenvectors[index] = solution["eigenvectors"]
             diagnostics.append({
@@ -177,15 +300,65 @@ class Continuum:
                 "frequency_grid_convergence": "unverified",
             })
             del matrices, solution
+        return ContinuumResult(
+            surfaces=self.surfaces.copy(),
+            modes=self.modes.copy(),
+            eigenvalues=eigenvalues,
+            normalized_frequencies=normalized_frequencies,
+            dominant_modes=dominant_modes,
+            reference_field=reference,
+            normalization=normalization,
+            mode_convention={
+                "phase": "m*theta - n*zeta; n is the actual toroidal index",
+                "basis": "1 for (0, 0); sqrt(2)*cos(m*theta - n*zeta) otherwise",
+                "parity": "cosine (even) sector",
+                "dominant_mode": "Largest abs(c_j) in the normalized basis",
+                "ordering": "Ascending frequency per surface; no branch tracking",
+                "nfp": self._nfp,
+                "mode_family": self.mode_family,
+            },
+            diagnostics=diagnostics,
+            eigenvectors=eigenvectors,
+            density=density,
+            frequencies_khz=_frequencies_khz(eigenvalues, density, self.surfaces),
+        )
+
+    def _frequency_normalization(self, reference):
+        """Validate local factors omega_hat = abs(G+iota*I)*sqrt(Lambda)/B_ref**2."""
+        field = reference["value"]
+        combinations = np.empty(len(self.surfaces))
+        factors = np.empty(len(self.surfaces))
+        for index, surface in enumerate(self.surfaces):
+            values = {}
+            for name in ("G", "I", "iota"):
+                value = float(self._flux_splines[name](surface))
+                if not np.isfinite(value):
+                    raise ValueError(f"{name} must be finite at s={surface}.")
+                values[name] = value
+            with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+                combination = np.float64(values["G"]) + values["iota"] * values["I"]
+                factor = abs(combination) / field / field
+            if not np.isfinite(combination) or combination == 0:
+                raise ValueError(f"G+iota*I must be finite and nonzero at s={surface}.")
+            if not np.isfinite(factor) or factor <= 0:
+                raise ValueError(
+                    f"Frequency normalization factor must be finite and positive "
+                    f"at s={surface}; check G+iota*I and reference_field."
+                )
+            combinations[index] = combination
+            factors[index] = factor
         return {
-            "surfaces": self.surfaces.copy(),
-            "modes": self.modes.copy(),
-            "eigenvalues": eigenvalues,
-            "eigenvalue_units": "T^2/m^2",
-            "eigenvectors": eigenvectors,
-            "density": density,
-            "reference_field": reference,
-            "diagnostics": diagnostics,
+            "normalized_frequency": "omega_hat = abs(G+iota*I)*sqrt(Lambda)/B_ref**2",
+            "alfven_angular_frequency": (
+                "omega_A(s) = B_ref**2/(abs(G+iota*I)*sqrt(mu0*rho(s)))"
+            ),
+            "dimensional_frequency": "f_kHz = sqrt(Lambda/(mu0*rho(s)))/(2*pi*1e3)",
+            "G_plus_iota_I": combinations,
+            "magnetic_combination_units": "T*m",
+            "frequency_factors": factors,
+            "frequency_factor_units": "m/T",
+            "mu0": VACUUM_PERMEABILITY,
+            "mu0_units": "N/A^2",
         }
 
     def get_reference_field(
@@ -402,33 +575,6 @@ class Continuum:
         result["orientation"] = orientation
         result["min_jacobian_quality"] = float(min_quality)
         return result
-
-    def _sample_density(self):
-        """Validate optional density on all requested surfaces before any solve."""
-        if self.density is None:
-            return None
-        values = np.empty(len(self.surfaces))
-        for index, surface in enumerate(self.surfaces):
-            value = self.density
-            if callable(self.density):
-                try:
-                    value = self.density(surface)
-                except Exception as error:
-                    raise ValueError(
-                        f"density evaluation failed at s={surface}."
-                    ) from error
-            if (
-                isinstance(value, (bool, np.bool_))
-                or not isinstance(value, Real)
-                or not np.isfinite(value)
-                or value <= 0
-            ):
-                raise ValueError(
-                    f"density must be a finite positive scalar at s={surface}; "
-                    f"got {value!r}."
-                )
-            values[index] = value
-        return values
 
     def _copy_geometry(self, field):
         """Copy the field data needed for local, consistent coordinate sampling."""
