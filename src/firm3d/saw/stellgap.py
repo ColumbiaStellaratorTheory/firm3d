@@ -2,6 +2,7 @@ import os
 import platform
 from copy import deepcopy
 from dataclasses import dataclass, replace
+from hashlib import sha256
 from numbers import Integral, Real
 from time import perf_counter
 from typing import Optional
@@ -568,12 +569,15 @@ class Continuum:
         }
 
     def run(
-        self, *, shape=None, rtol=1e-8, atol=1e-10, max_shape=(1024, 1024),
+        self, comm=None, *, shape=None, rtol=1e-8, atol=1e-10, max_shape=(1024, 1024),
         keep_eigenvectors=False,
     ):
-        """Solve K*c = Lambda*M0*c serially on each requested surface.
+        """Solve K*c = Lambda*M0*c on each requested surface.
 
         Args:
+            comm (mpi4py.MPI.Intracomm, optional): Communicator for distributing
+                surfaces. All ranks must call this method with matching geometry,
+                surfaces, and modes. None runs serially, without MPI collectives.
             shape (tuple, optional): Fixed one-period angular grid to verify.
                 If omitted, refine automatically from the planned minimum.
             rtol (float): Relative tolerance for angular Fourier moments.
@@ -586,26 +590,69 @@ class Continuum:
             ContinuumResult: Sorted eigenvalues, normalized frequencies, dominant
             harmonics, numerical diagnostics, and optional eigenvectors and kHz
             frequencies. Surface and basis ordering follow the supplied inputs.
+            With MPI, only rank zero returns the result; other ranks return None.
 
         Raises:
             ValueError: If settings, density, geometry, or matrices are invalid.
-            RuntimeError: If quadrature or the eigensolve fails its checks.
+            RuntimeError: If quadrature or the eigensolve fails its checks. With
+                MPI, recoverable setup, surface, and result errors are reported
+                as the same RuntimeError on all participating ranks.
+            ImportError: If a communicator is supplied but mpi4py is unavailable.
 
         Note that, although density is validated before solving,
         it does not enter the eigenproblem.
         The reference field uses the last successful ``get_reference_field()``
         calculation, or its default settings if it has not yet been calculated.
         Preparation is automatic; matching pilot work from ``prepare()`` is reused.
+
+        With MPI, rank zero supplies the run settings, density, and reference.
+        It prepares once and reuses its pilots; remaining surface indices are
+        assigned cyclically. Each rank samples geometry and solves locally.
+        Set BLAS thread counts before launching Python, for example
+        ``OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 mpiexec -n 4 python solve.py``.
+        Gathering retained eigenvectors needs extra memory on rank zero, beyond
+        the serial array estimate in ``prepare()``. Process crashes and MPI
+        communication failures are outside the collective error handling.
         """
+        if comm is not None:
+            return self._run_mpi(
+                comm, shape, rtol, atol, max_shape, keep_eigenvectors
+            )
         self.prepare(
             shape=shape, rtol=rtol, atol=atol, max_shape=max_shape,
             keep_eigenvectors=keep_eigenvectors,
         )
         preparation = self._preparation
+        records = self._run_surfaces(
+            range(len(self.surfaces)), preparation["basis"],
+            preparation["settings"], preparation["reference"].get("orientation"),
+            keep_eigenvectors, preparation["pilots"],
+        )
+        return self._build_result(records, preparation, keep_eigenvectors)
+
+    def _run_surfaces(
+        self, indices, basis, settings, orientation, keep_eigenvectors, pilots,
+    ):
+        """Yield completed surfaces locally, reusing any supplied pilot entries."""
+        for index in indices:
+            surface = self.surfaces[index]
+            entry = pilots.get(surface)
+            if entry is None:
+                entry = self._prepare_surface(surface, basis, settings, orientation)
+            sampled_orientation = entry["metadata"]["orientation"]
+            if orientation is not None and sampled_orientation != orientation:
+                raise ValueError(f"Inconsistent Jacobian orientation at s={surface}.")
+            orientation = sampled_orientation
+            if entry["solution"] is None:
+                self._finish_surface(surface, entry, keep_eigenvectors)
+            yield index, entry
+            del entry
+
+    def _build_result(self, records, preparation, keep_eigenvectors):
+        """Place completed surface records in input order and convert frequencies."""
         density = preparation["density"]
         reference = deepcopy(preparation["reference"])
         normalization = deepcopy(preparation["normalization"])
-        basis = preparation["basis"]
         surface_count = len(self.surfaces)
         mode_count = len(self.modes)
         eigenvalues = np.empty((surface_count, mode_count))
@@ -614,20 +661,10 @@ class Continuum:
         eigenvectors = None
         if keep_eigenvectors:
             eigenvectors = np.empty((surface_count, mode_count, mode_count))
-        diagnostics = []
-        orientation = reference.get("orientation")
-        for index, surface in enumerate(self.surfaces):
-            entry = preparation["pilots"].get(surface)
-            if entry is None:
-                entry = self._prepare_surface(
-                    surface, basis, preparation["settings"], orientation
-                )
+        diagnostics = [None] * surface_count
+        for index, entry in records:
+            surface = self.surfaces[index]
             metadata = entry["metadata"]
-            if orientation is not None and metadata["orientation"] != orientation:
-                raise ValueError(f"Inconsistent Jacobian orientation at s={surface}.")
-            orientation = metadata["orientation"]
-            if entry["solution"] is None:
-                self._finish_surface(surface, entry, keep_eigenvectors)
             solution = entry["solution"]
             eigenvalues[index] = solution["eigenvalues"]
             with np.errstate(over="ignore", invalid="ignore"):
@@ -642,15 +679,15 @@ class Continuum:
             dominant_modes[index] = entry["dominant_modes"]
             if keep_eigenvectors:
                 eigenvectors[index] = solution["eigenvectors"]
-            diagnostics.append({
+            diagnostics[index] = {
                 "surface": float(surface),
                 "iota": metadata["iota"],
-                "orientation": orientation,
+                "orientation": metadata["orientation"],
                 "min_jacobian_quality": metadata["min_jacobian_quality"],
                 "quadrature": deepcopy(metadata["quadrature"]),
                 "solver": deepcopy(solution["diagnostics"]),
                 "frequency_grid_convergence": "unverified",
-            })
+            }
             del entry, solution
         return ContinuumResult(
             surfaces=self.surfaces.copy(),
@@ -674,6 +711,114 @@ class Continuum:
             density=density,
             frequencies_khz=_frequencies_khz(eigenvalues, density, self.surfaces),
         )
+
+    def _mpi_input_signature(self):
+        """Identify the numerical inputs without sending the field or a callable."""
+        arrays = [
+            self.surfaces, self.modes, np.array([self._nfp]),
+            np.array([self._psi0]), self._geometry_m, self._geometry_n,
+        ]
+        for splines in (
+            self._coordinate_splines, self._radial_splines, self._flux_splines,
+        ):
+            for name in sorted(splines):
+                spline = splines[name]
+                arrays.extend([np.array([spline.k]), spline.t, spline.c])
+        signature = sha256()
+        for array in arrays:
+            signature.update(str((array.dtype.str, array.shape)).encode())
+            signature.update(array.tobytes())
+        return signature.hexdigest()
+
+    @staticmethod
+    def _check_mpi_errors(comm, error):
+        """Reach the same collective before any rank raises a local failure."""
+        errors = comm.allgather(error)
+        failures = [message for message in errors if message is not None]
+        if failures:
+            raise RuntimeError("MPI continuum run failed: " + "; ".join(failures))
+
+    def _run_mpi(self, comm, shape, rtol, atol, max_shape, keep_eigenvectors):
+        """Prepare on root, solve local surfaces, and gather compact records."""
+        from mpi4py import MPI
+
+        if not isinstance(comm, MPI.Intracomm) or comm == MPI.COMM_NULL:
+            raise ValueError("comm must be a non-null mpi4py intracommunicator.")
+        rank, size = comm.Get_rank(), comm.Get_size()
+        shared = None
+        error = None
+        if rank == 0:
+            try:
+                self.prepare(
+                    shape=shape, rtol=rtol, atol=atol, max_shape=max_shape,
+                    keep_eigenvectors=keep_eigenvectors,
+                )
+                preparation = self._preparation
+                pilots = preparation["pilots"]
+                orientation = preparation["reference"].get("orientation")
+                for surface, entry in pilots.items():
+                    if entry["solution"] is None:
+                        self._finish_surface(surface, entry, keep_eigenvectors)
+                    # A pilot establishes orientation even for an explicit B_ref.
+                    orientation = entry["metadata"]["orientation"]
+                shared = {
+                    "signature": self._mpi_input_signature(),
+                    "settings": preparation["settings"],
+                    "keep_eigenvectors": keep_eigenvectors,
+                    "orientation": orientation,
+                    "completed_surfaces": list(pilots),
+                }
+            except Exception as exception:
+                error = f"rank 0 preparation: {type(exception).__name__}: {exception}"
+        error, shared = comm.bcast((error, shared), root=0)
+        if error is not None:
+            raise RuntimeError("MPI continuum run failed: " + error)
+
+        error = None
+        try:
+            if self._mpi_input_signature() != shared["signature"]:
+                raise ValueError("Geometry, surfaces, or modes differ from rank 0.")
+            completed = shared["completed_surfaces"]
+            indices = [index for index in range(rank, len(self.surfaces), size)
+                       if self.surfaces[index] not in completed]
+            basis = None
+            if rank == 0:
+                basis = self._preparation["basis"]
+            elif indices:
+                basis = self._plan_basis()
+        except Exception as exception:
+            error = f"rank {rank} setup: {type(exception).__name__}: {exception}"
+        self._check_mpi_errors(comm, error)
+
+        records = []
+        error = None
+        try:
+            records.extend(self._run_surfaces(
+                indices, basis, shared["settings"], shared["orientation"],
+                shared["keep_eigenvectors"], {},
+            ))
+            if rank == 0:
+                for index, surface in enumerate(self.surfaces):
+                    if surface in completed:
+                        records.append((index, self._preparation["pilots"][surface]))
+        except Exception as exception:
+            error = f"rank {rank} surfaces: {type(exception).__name__}: {exception}"
+        self._check_mpi_errors(comm, error)
+        gathered = comm.gather(records, root=0)
+        result = None
+        error = None
+        if rank == 0:
+            try:
+                all_records = (record for group in gathered for record in group)
+                result = self._build_result(
+                    all_records, self._preparation, shared["keep_eigenvectors"]
+                )
+            except Exception as exception:
+                error = f"rank 0 results: {type(exception).__name__}: {exception}"
+        error = comm.bcast(error, root=0)
+        if error is not None:
+            raise RuntimeError("MPI continuum run failed: " + error)
+        return result
 
     def _frequency_normalization(self, reference):
         """Validate local factors omega_hat = abs(G+iota*I)*sqrt(Lambda)/B_ref**2."""
