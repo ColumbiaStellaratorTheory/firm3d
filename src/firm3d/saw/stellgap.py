@@ -5,6 +5,7 @@ from numbers import Integral, Real
 
 import numpy as np
 import plotly.graph_objects as go
+from scipy.linalg import eigh, norm
 
 __all__ = ["Continuum", "Harmonic", "ModeContinuum", "AlfvenSpecData"]
 
@@ -13,8 +14,8 @@ class Continuum:
     r"""Configure a cosine-basis shear Alfvén continuum calculation.
 
     Inputs are validated and the coordinate splines are copied for local
-    sampling. FFT matrix assembly and a direct-quadrature reference are
-    available, with per-surface angular convergence checks. Eigensolves will follow.
+    sampling. ``run()`` computes density-independent eigenvalues after checking
+    angular quadrature on each surface. Frequency conversion will follow.
 
     Args:
         field (BoozerRadialInterpolant): Stellarator-symmetric equilibrium with
@@ -41,8 +42,8 @@ class Continuum:
 
     Surface and mode arrays are copied without reordering. ``mode_family`` is
     the smaller of the two equivalent toroidal residues, ``n`` and ``-n``.
-    Controls for angular grids, convergence limits, the reference magnetic
-    field, and eigenvector storage will accompany the numerical methods.
+    Angular grids, convergence limits, and eigenvector storage are controlled by
+    ``run()``. The reference magnetic field will accompany frequency conversion.
     """
 
     def __init__(self, field, surfaces, modes, density=None):
@@ -89,6 +90,104 @@ class Continuum:
             density = float(density)
         self.density = density
         self._copy_geometry(field)
+
+    def run(
+        self, *, shape=None, rtol=1e-8, atol=1e-10, max_shape=(1024, 1024),
+        keep_eigenvectors=False,
+    ):
+        """Solve K*c = Lambda*M0*c serially on each requested surface.
+
+        Args:
+            shape (tuple, optional): Fixed one-period angular grid to verify.
+                If omitted, refine automatically from the planned minimum.
+            rtol (float): Relative tolerance for angular Fourier moments.
+            atol (float): Absolute moment tolerance relative to each weight's mean.
+            max_shape (tuple): Maximum angular counts, including verification grids.
+            keep_eigenvectors (bool): Retain the mass-normalized eigenvectors.
+                Defaults to False; they are always computed for solver checks.
+
+        Returns:
+            dict: Copies of ``surfaces`` and ``modes`` in input order;
+            ``eigenvalues`` of shape (Ns, N), sorted on each surface, with
+            Lambda = mu0*rho*omega**2 in T^2/m^2; ``eigenvectors`` of shape
+            (Ns, N, N) or None, with eigenvectors stored as columns; optional
+            sampled ``density`` in kg/m^3; and per-surface ``diagnostics``.
+
+        Raises:
+            ValueError: If settings, density, geometry, or matrices are invalid.
+            RuntimeError: If quadrature or the eigensolve fails its checks.
+
+        Note that, although density is validated before solving,
+        it does not enter the eigenproblem.
+        """
+        if not isinstance(keep_eigenvectors, (bool, np.bool_)):
+            raise ValueError("keep_eigenvectors must be a boolean.")
+        density = self._sample_density()
+        basis = self._plan_basis()
+        surface_count = len(self.surfaces)
+        mode_count = len(self.modes)
+        eigenvalues = np.empty((surface_count, mode_count))
+        eigenvectors = None
+        if keep_eigenvectors:
+            eigenvectors = np.empty((surface_count, mode_count, mode_count))
+        diagnostics = []
+        orientation = None
+        for index, surface in enumerate(self.surfaces):
+            matrices = self._converge_surface(
+                surface, basis, shape=shape, rtol=rtol, atol=atol,
+                max_shape=max_shape, expected_orientation=orientation,
+            )
+            orientation = matrices["orientation"]
+            solution = self._solve_surface(surface, matrices["K"], matrices["M0"])
+            eigenvalues[index] = solution["eigenvalues"]
+            if keep_eigenvectors:
+                eigenvectors[index] = solution["eigenvectors"]
+            diagnostics.append({
+                "surface": float(surface),
+                "iota": matrices["iota"],
+                "orientation": orientation,
+                "min_jacobian_quality": matrices["min_jacobian_quality"],
+                "quadrature": matrices["quadrature"],
+                "solver": solution["diagnostics"],
+                "frequency_grid_convergence": "unverified",
+            })
+            del matrices, solution
+        return {
+            "surfaces": self.surfaces.copy(),
+            "modes": self.modes.copy(),
+            "eigenvalues": eigenvalues,
+            "eigenvalue_units": "T^2/m^2",
+            "eigenvectors": eigenvectors,
+            "density": density,
+            "diagnostics": diagnostics,
+        }
+
+    def _sample_density(self):
+        """Validate optional density on all requested surfaces before any solve."""
+        if self.density is None:
+            return None
+        values = np.empty(len(self.surfaces))
+        for index, surface in enumerate(self.surfaces):
+            value = self.density
+            if callable(self.density):
+                try:
+                    value = self.density(surface)
+                except Exception as error:
+                    raise ValueError(
+                        f"density evaluation failed at s={surface}."
+                    ) from error
+            if (
+                isinstance(value, (bool, np.bool_))
+                or not isinstance(value, Real)
+                or not np.isfinite(value)
+                or value <= 0
+            ):
+                raise ValueError(
+                    f"density must be a finite positive scalar at s={surface}; "
+                    f"got {value!r}."
+                )
+            values[index] = value
+        return values
 
     def _copy_geometry(self, field):
         """Copy the field data needed for local, consistent coordinate sampling."""
@@ -885,6 +984,160 @@ class Continuum:
                     f"tolerance ratio {comparison['max_tolerance_ratio']:.3e} > 1."
                 )
             moments, diagnostics, grid = fine_moments, fine_diagnostics, fine_grid
+
+    def _solve_surface(self, surface, K, M0):
+        """Solve a real symmetric generalized eigenproblem and check its accuracy.
+
+        Args:
+            surface (float): Flux label included in diagnostics and errors.
+            K (array-like): real-valued stiffness matrix in 1/m.
+            M0 (array-like): positive-definite mass matrix in m/T^2.
+
+        Returns:
+            dict: Ascending ``eigenvalues`` in T^2/m^2, mass-normalized
+            ``eigenvectors`` as columns, and ``diagnostics`` containing raw
+            eigenvalues, symmetry errors, scaled residuals, mass orthogonality,
+            and per-negative-eigenvalue roundoff thresholds.
+
+        Raises:
+            ValueError: If either matrix has invalid values, shape, or symmetry.
+            RuntimeError: If LAPACK fails, diagnostics exceed their tolerance,
+                or an eigenvalue is appreciably negative.
+
+        Relative symmetry and solver checks use 100*N*float64 epsilon. Small
+        negative eigenvalues are interpreted as zero only within a bound from
+        the projected absolute stiffness and the computed residual. Small
+        positive eigenvalues are retained; the raw values remain in diagnostics.
+        """
+        size = len(self.modes)
+        tolerance = 100 * size * np.finfo(float).eps
+        matrices = {}
+        matrix_norms = {}
+        symmetry_errors = {}
+        for name, matrix in (("K", K), ("M0", M0)):
+            matrix = np.asarray(matrix)
+            if (
+                matrix.shape != (size, size)
+                or not np.issubdtype(matrix.dtype, np.number)
+                or np.iscomplexobj(matrix)
+                or not np.all(np.isfinite(matrix))
+            ):
+                raise ValueError(
+                    f"{name} must be a finite real matrix of shape {(size, size)} "
+                    f"at s={surface}."
+                )
+            try:
+                with np.errstate(over="raise", invalid="raise"):
+                    matrix = matrix.astype(float, copy=False)
+                    scale = norm(matrix, ord="fro")
+                    error = norm(matrix - matrix.T, ord="fro")
+            except (FloatingPointError, ValueError) as error:
+                raise ValueError(
+                    f"{name} matrix scaling failed at s={surface}: {error}."
+                ) from error
+            if scale > 0:
+                error /= scale
+            if not np.isfinite(scale) or not np.isfinite(error) or error > tolerance:
+                raise ValueError(
+                    f"{name} symmetry check failed at s={surface}: "
+                    f"relative error {error:.3e}, tolerance {tolerance:.3e}."
+                )
+            matrices[name] = matrix
+            matrix_norms[name] = scale
+            symmetry_errors[name] = float(error)
+        K, M0 = matrices["K"], matrices["M0"]
+        try:
+            raw_values, vectors = eigh(K, M0, type=1, driver="gvd", check_finite=False)
+        except np.linalg.LinAlgError as error:
+            raise RuntimeError(
+                f"Generalized eigensolve failed at s={surface}. M0 must be positive "
+                f"definite and the LAPACK iteration must converge: {error}"
+            ) from error
+        if not np.all(np.isfinite(raw_values)) or not np.all(np.isfinite(vectors)):
+            raise RuntimeError(f"Eigensolve produced nonfinite values at s={surface}.")
+
+        try:
+            with np.errstate(over="raise", invalid="raise", divide="raise"):
+                stiffness_vectors = K @ vectors
+                mass_vectors = M0 @ vectors
+                vector_norms = norm(vectors, axis=0)
+                residuals = stiffness_vectors - mass_vectors * raw_values
+                residual_norms = norm(residuals, axis=0)
+                scales = (
+                    matrix_norms["K"] + np.abs(raw_values) * matrix_norms["M0"]
+                ) * vector_norms
+                raw_errors = np.zeros(size)
+                np.divide(residual_norms, scales, out=raw_errors, where=scales > 0)
+                raw_errors[(scales == 0) & (residual_norms > 0)] = np.inf
+                orthogonality_error = float(
+                    np.max(np.abs(vectors.T @ mass_vectors - np.eye(size)))
+                )
+                if (
+                    not np.all(np.isfinite(raw_errors))
+                    or np.max(raw_errors) > tolerance
+                    or not np.isfinite(orthogonality_error)
+                    or orthogonality_error > tolerance
+                ):
+                    raise RuntimeError(
+                        f"Eigenpair checks failed at s={surface}: "
+                        f"maximum residual {np.max(raw_errors):.3e}, "
+                        f"mass orthogonality error {orthogonality_error:.3e}, "
+                        f"tolerance {tolerance:.3e}. Check matrix conditioning."
+                    )
+
+                negative = raw_values < 0
+                negative_tolerances = np.zeros(size)
+                if np.any(negative):
+                    absolute_vectors = np.abs(vectors[:, negative])
+                    projected_stiffness = np.sum(
+                        absolute_vectors * (np.abs(K) @ absolute_vectors), axis=0
+                    )
+                    negative_tolerances[negative] = (
+                        tolerance * projected_stiffness
+                        + 2 * vector_norms[negative] * residual_norms[negative]
+                    )
+                    invalid = raw_values < -negative_tolerances
+                    if np.any(invalid):
+                        index = int(np.flatnonzero(invalid)[0])
+                        raise RuntimeError(
+                            f"Negative eigenvalue at s={surface}, index {index}: "
+                            f"Lambda={raw_values[index]:.6e}, "
+                            f"roundoff threshold {negative_tolerances[index]:.3e}."
+                        )
+                values = raw_values.copy()
+                values[negative] = 0.0
+                residual_norms = norm(
+                    stiffness_vectors - mass_vectors * values, axis=0
+                )
+                scales = (
+                    matrix_norms["K"] + np.abs(values) * matrix_norms["M0"]
+                ) * vector_norms
+                errors = np.zeros(size)
+                np.divide(residual_norms, scales, out=errors, where=scales > 0)
+                errors[(scales == 0) & (residual_norms > 0)] = np.inf
+                if not np.all(np.isfinite(errors)) or np.max(errors) > tolerance:
+                    raise RuntimeError(
+                        f"Returned eigenpair residuals failed at s={surface}: "
+                        f"maximum {np.max(errors):.3e}, tolerance {tolerance:.3e}."
+                    )
+        except FloatingPointError as error:
+            raise RuntimeError(
+                f"Eigenpair diagnostics failed at s={surface}: {error}."
+            ) from error
+        return {
+            "eigenvalues": values,
+            "eigenvectors": vectors,
+            "diagnostics": {
+                "tolerance": tolerance,
+                "symmetry_errors": symmetry_errors,
+                "raw_eigenvalues": raw_values,
+                "raw_scaled_residuals": raw_errors,
+                "scaled_residuals": errors,
+                "mass_orthogonality_error": orthogonality_error,
+                "negative_tolerances": negative_tolerances,
+                "roundoff_zero_count": int(np.count_nonzero(negative)),
+            },
+        }
 
     def _validate_surfaces(self, surfaces):
         """Return a copy of the requested surfaces without extrapolating."""
