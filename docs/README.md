@@ -37,6 +37,7 @@ make livehtml
 - `installation.rst` - Installation instructions
 - `magnetic_fields.rst` - Magnetic field classes documentation
 - `shear_alfven_waves.rst` - Shear Alfvén wave documentation
+- `stellgap.rst` - Proposed STELLGAP continuum formulation and interfacen
 - `guiding_center.rst` - Guiding center integration
 - `stopping_criteria.rst` - Stopping criteria documentation
 - `trajectory_saving.rst` - Trajectory saving options

@@ -18,6 +18,7 @@ The core routines are based on `SIMSOPT <https://simsopt.readthedocs.io>`_, but 
    installation
    magnetic_fields
    shear_alfven_waves
+   stellgap
    guiding_center
    poincare_maps
    stopping_criteria
