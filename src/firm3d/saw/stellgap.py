@@ -1,7 +1,9 @@
 import os
+import platform
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from numbers import Integral, Real
+from time import perf_counter
 from typing import Optional
 
 import numpy as np
@@ -14,6 +16,31 @@ from ..util.constants import VACUUM_PERMEABILITY
 __all__ = [
     "Continuum", "ContinuumResult", "Harmonic", "ModeContinuum", "AlfvenSpecData"
 ]
+
+
+def _quadrature_settings(shape, rtol, atol, max_shape):
+    """Validate and normalize the shared preparation and run settings."""
+    for name, value in (("rtol", rtol), ("atol", atol)):
+        if (
+            isinstance(value, (bool, np.bool_)) or not isinstance(value, Real)
+            or not np.isfinite(value) or value < 0
+        ):
+            raise ValueError(f"{name} must be a finite nonnegative real scalar.")
+    if rtol == 0 and atol == 0:
+        raise ValueError("At least one of rtol and atol must be positive.")
+    settings = {"rtol": float(rtol), "atol": float(atol)}
+    for name, counts in (("shape", shape), ("max_shape", max_shape)):
+        if name == "shape" and counts is None:
+            settings[name] = None
+            continue
+        counts = np.asarray(counts)
+        if (
+            counts.shape != (2,) or not np.issubdtype(counts.dtype, np.integer)
+            or np.any(counts <= 0)
+        ):
+            raise ValueError(f"{name} must contain two positive integer counts.")
+        settings[name] = tuple(int(count) for count in counts)
+    return settings
 
 
 def _sample_density(density, surfaces):
@@ -221,6 +248,324 @@ class Continuum:
         self._reference_cache = None
         self._reference_settings = None
         self._copy_geometry(field)
+        self._preparation = None
+
+    def prepare(
+        self, *, shape=None, rtol=1e-8, atol=1e-10, max_shape=(1024, 1024),
+        keep_eigenvectors=False, benchmark=False, pilot_count=3, mpi_ranks=1,
+    ):
+        """Plan the calculation and check a bounded set of representative surfaces.
+
+        Args:
+            shape (tuple, optional): Fixed angular grid to verify, as in ``run()``.
+            rtol (float): Relative tolerance for angular moments.
+            atol (float): Absolute tolerance relative to each weight's mean.
+            max_shape (tuple): Maximum angular counts, including verification grids.
+            keep_eigenvectors (bool): Plan storage as in ``run()``.
+            benchmark (bool): Also solve pilot surfaces and estimate remaining time.
+            pilot_count (int): One to three radially spaced unique pilot surfaces
+                when benchmarking. Otherwise check just the middle unique surface.
+            mpi_ranks (int): Rank count for an ideal cyclic timing projection only.
+
+        Returns:
+            dict: Mode and grid sizes, equilibrium support, normalization, checked
+            surfaces, convergence status, estimated array memory, and timings.
+            Runtime estimates are None unless benchmarking was requested.
+
+        Raises:
+            ValueError: If configuration, density, or geometry is invalid.
+            RuntimeError: If a pilot fails quadrature or eigenpair checks.
+        """
+        start = perf_counter()
+        flags = (("benchmark", benchmark), ("keep_eigenvectors", keep_eigenvectors))
+        for name, value in flags:
+            if not isinstance(value, (bool, np.bool_)):
+                raise ValueError(f"{name} must be a boolean.")
+        for name, value in (("pilot_count", pilot_count), ("mpi_ranks", mpi_ranks)):
+            if (
+                isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral)
+                or value < 1
+            ):
+                raise ValueError(f"{name} must be a positive integer.")
+        if pilot_count > 3:
+            raise ValueError("pilot_count must be at most three.")
+        settings = _quadrature_settings(shape, rtol, atol, max_shape)
+        density = _sample_density(self.density, self.surfaces)
+        if self._reference_cache is None:
+            self.get_reference_field()
+        reference = deepcopy(self._reference_cache)
+        normalization = self._frequency_normalization(reference)
+        key = (
+            settings["shape"], settings["rtol"], settings["atol"],
+            settings["max_shape"], bool(keep_eigenvectors),
+            self.surfaces.shape, self.surfaces.tobytes(),
+            self.modes.shape, self.modes.tobytes(),
+        )
+        if self._preparation is None or self._preparation["key"] != key:
+            basis = self._plan_basis()
+            grid = self._plan_angular_grid(basis, shape, max_shape=max_shape)
+            self._preparation = {
+                "key": key, "settings": settings, "basis": basis,
+                "initial_shape": grid["shape"], "minimum_shape": grid["minimum_shape"],
+                "pilots": {}, "seconds": 0.0,
+            }
+            del grid
+        preparation = self._preparation
+        preparation["density"] = density
+        preparation["normalization"] = normalization
+        preparation["reference"] = reference
+        unique_surfaces = np.unique(self.surfaces)
+        count = min(pilot_count, len(unique_surfaces)) if benchmark else 1
+        if count == 1:
+            selected = unique_surfaces[[len(unique_surfaces) // 2]]
+        elif count == 2:
+            selected = unique_surfaces[[0, -1]]
+        else:
+            selected = unique_surfaces[[0, len(unique_surfaces) // 2, -1]]
+        orientation = reference.get("orientation")
+        for entry in preparation["pilots"].values():
+            orientation = entry["metadata"]["orientation"]
+        for surface in selected:
+            if surface not in preparation["pilots"]:
+                preparation["pilots"][surface] = self._prepare_surface(
+                    surface, preparation["basis"], settings, orientation
+                )
+            entry = preparation["pilots"][surface]
+            orientation = entry["metadata"]["orientation"]
+            if benchmark and entry["solution"] is None:
+                self._finish_surface(surface, entry, keep_eigenvectors)
+        preparation["seconds"] += perf_counter() - start
+        report = self._preparation_report(benchmark, mpi_ranks, keep_eigenvectors)
+        report["timing"]["this_call_seconds"] = perf_counter() - start
+        return report
+
+    def _prepare_surface(self, surface, basis, settings, orientation):
+        """Assemble one checked surface and retain stage times for a possible pilot."""
+        timings = {"geometry": 0.0, "fourier_moments": 0.0, "assembly": 0.0}
+        start = perf_counter()
+        matrices = self._converge_surface(
+            surface, basis, **settings, expected_orientation=orientation,
+            timings=timings,
+        )
+        timings["quadrature_total"] = perf_counter() - start
+        timings["planning_and_comparison"] = max(
+            0.0, timings["quadrature_total"] - timings["geometry"]
+            - timings["fourier_moments"] - timings["assembly"],
+        )
+        metadata = {
+            name: matrices[name]
+            for name in ("iota", "orientation", "min_jacobian_quality", "quadrature")
+        }
+        return {
+            "matrices": matrices, "metadata": metadata, "solution": None,
+            "timings": timings,
+        }
+
+    def _finish_surface(self, surface, entry, keep_eigenvectors):
+        """Solve a prepared surface, retain labels, and release its matrices."""
+        matrices = entry["matrices"]
+        start = perf_counter()
+        solution = self._solve_surface(surface, matrices["K"], matrices["M0"])
+        entry["timings"]["solve_and_checks"] = perf_counter() - start
+        dominant_indices = np.argmax(np.abs(solution["eigenvectors"]), axis=0)
+        entry["dominant_modes"] = self.modes[dominant_indices].copy()
+        if not keep_eigenvectors:
+            solution["eigenvectors"] = None
+        entry["solution"] = solution
+        entry["matrices"] = None
+
+    def _preparation_report(self, benchmark, mpi_ranks, keep_eigenvectors):
+        """Summarize completed preparation without exposing mutable cached arrays."""
+        preparation = self._preparation
+        pilots = []
+        for surface, entry in sorted(preparation["pilots"].items()):
+            metadata = entry["metadata"]
+            record = {
+                "surface": float(surface), "quadrature": metadata["quadrature"],
+                "orientation": metadata["orientation"],
+                "min_jacobian_quality": metadata["min_jacobian_quality"],
+                "solved": entry["solution"] is not None,
+                "seconds": entry["timings"],
+            }
+            if record["solved"]:
+                checks = entry["solution"]["diagnostics"]
+                record["max_scaled_residual"] = float(max(checks["scaled_residuals"]))
+                record["mass_orthogonality_error"] = checks["mass_orthogonality_error"]
+            pilots.append(record)
+        checked = set(preparation["pilots"])
+        unchecked = [float(s) for s in np.unique(self.surfaces) if s not in checked]
+        timing = {
+            "preparation_seconds": preparation["seconds"],
+            "estimates": None,
+            "machine": platform.platform(),
+            "logical_cpus": os.cpu_count(),
+            "thread_environment": {
+                name: os.environ.get(name)
+                for name in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS",
+                             "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
+            },
+            "assumptions": (
+                "Pilot times use this process and current BLAS settings; unset "
+                "thread variables do not identify the actual BLAS thread count. "
+                "MPI projects cyclic work with the same cost per surface, "
+                "excluding communication, startup, and contention."
+            ),
+        }
+        if benchmark:
+            timing["estimates"] = self._project_runtime(mpi_ranks)
+        shape = preparation["initial_shape"]
+        for record in pilots:
+            verification = record["quadrature"]["verification_shape"]
+            shape = tuple(max(a, b) for a, b in zip(shape, verification))
+        report = {
+            "surface_count": len(self.surfaces),
+            "mode_count": len(self.modes), "matrix_shape": (len(self.modes),) * 2,
+            "settings": preparation["settings"],
+            "keep_eigenvectors": bool(keep_eigenvectors),
+            "equilibrium_support": {
+                "harmonic_count": len(self._geometry_m), "nfp": self._nfp,
+                "m_range": (int(self._geometry_m.min()), int(self._geometry_m.max())),
+                "n_range": (int(self._geometry_n.min()), int(self._geometry_n.max())),
+            },
+            "initial_shape": preparation["initial_shape"],
+            "minimum_shape": preparation["minimum_shape"],
+            "reference_field": preparation["reference"],
+            "normalization": preparation["normalization"],
+            "pilots": pilots,
+            "convergence": {
+                "angular_moments": "checked on listed pilot surfaces",
+                "unchecked_surfaces": unchecked,
+                "perturbation_basis": "unverified",
+                "equilibrium": "unverified", "frequency_grid": "unverified",
+            },
+            "memory": {
+                "units": "bytes",
+                "at_pilot_grids": self._estimate_memory(shape, keep_eigenvectors),
+                "at_grid_limit": self._estimate_memory(
+                    preparation["settings"]["max_shape"], keep_eigenvectors
+                ),
+                "scope": (
+                    "Conservative array working estimates, not measured RSS or "
+                    "allocation limits. Include retained output and pilot cache; "
+                    "exclude caller-owned field data, Python object overhead, "
+                    "and implementation-dependent BLAS/FFT allocations."
+                ),
+            },
+            "timing": timing,
+        }
+        return deepcopy(report)
+
+    def _estimate_memory(self, shape, keep_eigenvectors):
+        """Estimate major resident arrays and conservative per-stage temporaries."""
+        preparation = self._preparation
+        basis = preparation["basis"]
+        size, surface_count = len(self.modes), len(self.surfaces)
+        square = size**2
+        points = int(shape[0]) * int(shape[1])
+        allowed = sum(
+            int(np.count_nonzero(basis[kind + "_allowed"]))
+            for kind in ("difference", "sum")
+        )
+        splines = list(self._coordinate_splines.values())
+        splines += list(self._radial_splines.values())
+        splines += list(self._flux_splines.values())
+        copied_geometry = sum(spline.c.nbytes + spline.t.nbytes for spline in splines)
+        copied_geometry += sum(
+            array.nbytes for array in (self._geometry_m, self._geometry_n,
+                                      self._m_indices, self._n_indices,
+                                      self._radial_data_grid)
+        )
+        cache_bytes = 0
+        for entry in preparation["pilots"].values():
+            if entry["solution"] is None:
+                cache_bytes += 16 * square
+            else:
+                cache_bytes += 56 * size
+                if entry["solution"]["eigenvectors"] is not None:
+                    cache_bytes += 8 * square
+        output_vectors = 8 * surface_count * square if keep_eigenvectors else 0
+        # Spectra, labels, solver diagnostics, modes, and surface-dependent data.
+        output_other = 64 * surface_count * size + 40 * surface_count + 16 * size
+        if preparation["density"] is not None:
+            output_other += 8 * surface_count * size
+        components = {
+            "copied_geometry": copied_geometry,
+            "basis_tables": sum(array.nbytes for array in basis.values()),
+            "pilot_cache": cache_bytes,
+            "retained_output_eigenvectors": output_vectors,
+            "retained_output_other": output_other,
+            # Two grid lookups plus temporary selected Fourier pairs and indices.
+            "moment_lookups": 48 * allowed,
+            # Allow 64 real grid buffers and four complex FFT buffers.
+            "geometry_and_fft_buffers": (64 * 8 + 4 * 16) * points,
+            "angular_factors": 16 * (
+                shape[0] * len(self._poloidal_modes)
+                + shape[1] * len(self._toroidal_modes)
+            ) + 8 * (shape[0] + shape[1]),
+            # Two sets of four moments, plus eight comparison/assembly buffers.
+            "moments_and_comparison": (8 + 8) * 8 * square,
+            "two_matrices": 16 * square,
+            "surface_eigenvectors": 8 * square,
+            # Two input copies, DSYGVD work (2*N²+6*N+1), and integer work.
+            "solver_copies_and_workspace": 32 * square + 88 * size + 32,
+            # Residuals, mass products, orthogonality, and negative-mode checks.
+            "solver_diagnostics": 10 * 8 * square + 16 * 8 * size,
+            "frequency_conversion_workspace": (
+                8 * surface_count * size if preparation["density"] is not None else 0
+            ),
+        }
+        resident = sum(components[name] for name in (
+            "copied_geometry", "basis_tables", "pilot_cache",
+            "retained_output_eigenvectors", "retained_output_other", "angular_factors",
+        ))
+        quadrature = resident + sum(components[name] for name in (
+            "moment_lookups", "geometry_and_fft_buffers", "moments_and_comparison",
+            "two_matrices",
+        ))
+        solve = resident + sum(components[name] for name in (
+            "two_matrices", "surface_eigenvectors", "solver_copies_and_workspace",
+            "solver_diagnostics",
+        ))
+        conversion = resident + components["frequency_conversion_workspace"]
+        return {
+            "shape": tuple(shape), "components": components,
+            "quadrature_peak_bytes": quadrature, "solve_peak_bytes": solve,
+            "conversion_peak_bytes": conversion,
+            "peak_bytes": max(quadrature, solve, conversion),
+        }
+
+    def _project_runtime(self, mpi_ranks):
+        """Project unmeasured surfaces using mean pilot cost and cyclic assignment."""
+        preparation = self._preparation
+        measured = []
+        for entry in preparation["pilots"].values():
+            if entry["solution"] is not None:
+                measured.append(
+                    entry["timings"]["quadrature_total"]
+                    + entry["timings"]["solve_and_checks"]
+                )
+        average = float(np.mean(measured))
+        costs = []
+        for surface in self.surfaces:
+            entry = preparation["pilots"].get(surface)
+            costs.append(0.0 if entry is not None and entry["solution"] is not None
+                         else average)
+        active_ranks = min(mpi_ranks, len(self.surfaces))
+        rank_costs = [sum(costs[rank::mpi_ranks]) for rank in range(active_ranks)]
+        return {
+            "sampled_surface_seconds": measured,
+            "surface_seconds_min_mean_max": (min(measured), average, max(measured)),
+            "remaining_surface_count": sum(cost > 0 for cost in costs),
+            "serial_remaining_seconds": sum(costs),
+            "serial_including_preparation_seconds": preparation["seconds"] + sum(costs),
+            "projected_mpi_ranks": int(mpi_ranks),
+            "projected_mpi_active_ranks": sum(cost > 0 for cost in rank_costs),
+            "projected_mpi_remaining_seconds": max(rank_costs),
+            "projected_mpi_including_preparation_seconds": (
+                preparation["seconds"] + max(rank_costs)
+            ),
+            "projection_only": True,
+        }
 
     def run(
         self, *, shape=None, rtol=1e-8, atol=1e-10, max_shape=(1024, 1024),
@@ -250,15 +595,17 @@ class Continuum:
         it does not enter the eigenproblem.
         The reference field uses the last successful ``get_reference_field()``
         calculation, or its default settings if it has not yet been calculated.
+        Preparation is automatic; matching pilot work from ``prepare()`` is reused.
         """
-        if not isinstance(keep_eigenvectors, (bool, np.bool_)):
-            raise ValueError("keep_eigenvectors must be a boolean.")
-        density = _sample_density(self.density, self.surfaces)
-        if self._reference_cache is None:
-            self.get_reference_field()
-        reference = deepcopy(self._reference_cache)
-        normalization = self._frequency_normalization(reference)
-        basis = self._plan_basis()
+        self.prepare(
+            shape=shape, rtol=rtol, atol=atol, max_shape=max_shape,
+            keep_eigenvectors=keep_eigenvectors,
+        )
+        preparation = self._preparation
+        density = preparation["density"]
+        reference = deepcopy(preparation["reference"])
+        normalization = deepcopy(preparation["normalization"])
+        basis = preparation["basis"]
         surface_count = len(self.surfaces)
         mode_count = len(self.modes)
         eigenvalues = np.empty((surface_count, mode_count))
@@ -270,12 +617,18 @@ class Continuum:
         diagnostics = []
         orientation = reference.get("orientation")
         for index, surface in enumerate(self.surfaces):
-            matrices = self._converge_surface(
-                surface, basis, shape=shape, rtol=rtol, atol=atol,
-                max_shape=max_shape, expected_orientation=orientation,
-            )
-            orientation = matrices["orientation"]
-            solution = self._solve_surface(surface, matrices["K"], matrices["M0"])
+            entry = preparation["pilots"].get(surface)
+            if entry is None:
+                entry = self._prepare_surface(
+                    surface, basis, preparation["settings"], orientation
+                )
+            metadata = entry["metadata"]
+            if orientation is not None and metadata["orientation"] != orientation:
+                raise ValueError(f"Inconsistent Jacobian orientation at s={surface}.")
+            orientation = metadata["orientation"]
+            if entry["solution"] is None:
+                self._finish_surface(surface, entry, keep_eigenvectors)
+            solution = entry["solution"]
             eigenvalues[index] = solution["eigenvalues"]
             with np.errstate(over="ignore", invalid="ignore"):
                 normalized_frequencies[index] = (
@@ -286,20 +639,19 @@ class Continuum:
                 raise ValueError(
                     f"Normalized frequencies are nonfinite at s={surface}."
                 )
-            dominant_indices = np.argmax(np.abs(solution["eigenvectors"]), axis=0)
-            dominant_modes[index] = self.modes[dominant_indices]
+            dominant_modes[index] = entry["dominant_modes"]
             if keep_eigenvectors:
                 eigenvectors[index] = solution["eigenvectors"]
             diagnostics.append({
                 "surface": float(surface),
-                "iota": matrices["iota"],
+                "iota": metadata["iota"],
                 "orientation": orientation,
-                "min_jacobian_quality": matrices["min_jacobian_quality"],
-                "quadrature": matrices["quadrature"],
-                "solver": solution["diagnostics"],
+                "min_jacobian_quality": metadata["min_jacobian_quality"],
+                "quadrature": deepcopy(metadata["quadrature"]),
+                "solver": deepcopy(solution["diagnostics"]),
                 "frequency_grid_convergence": "unverified",
             })
-            del matrices, solution
+            del entry, solution
         return ContinuumResult(
             surfaces=self.surfaces.copy(),
             modes=self.modes.copy(),
@@ -1195,13 +1547,19 @@ class Continuum:
             raise ValueError("Fourier matrix assembly produced nonfinite matrices.")
         return K, M0
 
-    def _sample_moments(self, surface, basis, grid, expected_orientation):
+    def _sample_moments(self, surface, basis, grid, expected_orientation, timings=None):
         """Return moments and scalar geometry diagnostics for one surface/grid."""
         try:
+            start = perf_counter()
             geometry = self._sample_geometry(
                 surface, grid["theta"], grid["zeta"], expected_orientation
             )
+            if timings is not None:
+                timings["geometry"] += perf_counter() - start
+            start = perf_counter()
             moments = self._fourier_moments(basis, grid, geometry)
+            if timings is not None:
+                timings["fourier_moments"] += perf_counter() - start
         except ValueError as error:
             raise ValueError(
                 f"Quadrature sampling failed at s={surface}, "
@@ -1255,7 +1613,7 @@ class Continuum:
 
     def _converge_surface(
         self, surface, basis, *, shape=None, rtol=1e-8, atol=1e-10,
-        max_shape=(1024, 1024), expected_orientation=None,
+        max_shape=(1024, 1024), expected_orientation=None, timings=None,
     ):
         """This tests angular integration of the supplied interpolant, 
         and assemble matrices on one surface.
@@ -1272,6 +1630,7 @@ class Continuum:
             max_shape (tuple): Maximum grid counts, including verification grids.
                 Defaults to (1024, 1024); this is not a total memory limit.
             expected_orientation (int, optional): Required Jacobian sign.
+            timings (dict, optional): Accumulate geometry, Fourier, and assembly times.
 
         Returns:
             dict: Matrices ``K`` and ``M0``, scalar ``iota``, ``orientation``,
@@ -1287,18 +1646,7 @@ class Continuum:
                 grid fails the moment comparison.
 
         """
-        for name, value in (("rtol", rtol), ("atol", atol)):
-            if (
-                isinstance(value, (bool, np.bool_))
-                or not isinstance(value, Real)
-                or not np.isfinite(value)
-                or value < 0
-            ):
-                raise ValueError(f"{name} must be a finite nonnegative real scalar.")
-        if rtol == 0 and atol == 0:
-            raise ValueError("At least one of rtol and atol must be positive.")
-        if max_shape is None:
-            raise ValueError("max_shape is required for bounded quadrature refinement.")
+        _quadrature_settings(shape, rtol, atol, max_shape)
         try:
             grid = self._plan_angular_grid(basis, shape, max_shape=max_shape)
         except ValueError as error:
@@ -1307,7 +1655,7 @@ class Continuum:
             ) from error
         history = []
         moments, diagnostics = self._sample_moments(
-            surface, basis, grid, expected_orientation
+            surface, basis, grid, expected_orientation, timings
         )
         while True:
             fine_shape = tuple(2 * count for count in grid["shape"])
@@ -1330,7 +1678,7 @@ class Continuum:
                     f"{detail} {error}"
                 ) from error
             fine_moments, fine_diagnostics = self._sample_moments(
-                surface, basis, fine_grid, diagnostics["orientation"]
+                surface, basis, fine_grid, diagnostics["orientation"], timings
             )
             try:
                 comparison = self._compare_moments(moments, fine_moments, rtol, atol)
@@ -1347,7 +1695,10 @@ class Continuum:
                     moments = fine_moments
                     diagnostics = fine_diagnostics
                     grid = fine_grid
+                start = perf_counter()
                 K, M0 = self._assemble_moments(basis, moments, diagnostics["iota"])
+                if timings is not None:
+                    timings["assembly"] += perf_counter() - start
                 return {
                     "K": K,
                     "M0": M0,

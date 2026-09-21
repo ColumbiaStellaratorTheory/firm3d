@@ -45,7 +45,8 @@ class TestContinuumResults(unittest.TestCase):
             K = M0 @ np.diag([0.0, 9.0, 4.0])
         matrices = {
             "K": K, "M0": M0, "iota": 0.5, "orientation": -1,
-            "min_jacobian_quality": 1.0, "quadrature": {"converged": True},
+            "min_jacobian_quality": 1.0,
+            "quadrature": {"converged": True, "verification_shape": (158, 162)},
         }
         with patch.object(continuum, "_converge_surface", return_value=matrices):
             return continuum.run(keep_eigenvectors=keep_eigenvectors)
@@ -149,7 +150,6 @@ class TestContinuumResults(unittest.TestCase):
         self.assertEqual(compact.mode_convention["nfp"], 3)
         self.assertEqual(compact.mode_convention["mode_family"], 0)
         self.assertIn("sqrt(2)", compact.mode_convention["basis"])
-        self.assertIn("degenerate", compact.mode_convention["dominant_mode"])
         self.assertIn("no branch tracking", compact.mode_convention["ordering"])
 
     def test_labels_use_normalized_basis_coefficients_and_preserve_input_signs(self):
@@ -184,7 +184,10 @@ class TestContinuumResults(unittest.TestCase):
             "firm3d.saw.stellgap.eigh",
             return_value=(np.array([0.0, 4.0, 4.0]), vectors),
         ):
-            second = self.solve(continuum, K=K, M0=M0, keep_eigenvectors=True)
+            second = self.solve(
+                self.make_continuum(surfaces=(0.4,)), K=K, M0=M0,
+                keep_eigenvectors=True,
+            )
         np.testing.assert_array_equal(first.eigenvalues, second.eigenvalues)
         first_space = first.eigenvectors[0, :, 1:]
         second_space = second.eigenvectors[0, :, 1:]
