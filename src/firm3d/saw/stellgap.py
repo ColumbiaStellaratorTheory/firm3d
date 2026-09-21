@@ -14,7 +14,7 @@ class Continuum:
 
     Inputs are validated and the coordinate splines are copied for local
     sampling. FFT matrix assembly and a direct-quadrature reference are
-    available; convergence checks and eigensolves will follow.
+    available, with per-surface angular convergence checks. Eigensolves will follow.
 
     Args:
         field (BoozerRadialInterpolant): Stellarator-symmetric equilibrium with
@@ -506,7 +506,7 @@ class Continuum:
             "sum_allowed": sum_modes[:, :, 1] % self._nfp == 0,
         }
 
-    def _plan_angular_grid(self, basis, shape=None):
+    def _plan_angular_grid(self, basis, shape=None, *, max_shape=None):
         """Plan one-field-period sampling and checked FFT moment lookups.
 
         Args:
@@ -514,6 +514,8 @@ class Continuum:
             shape (tuple, optional): Positive integer counts (Ntheta, Nzeta).
                 Defaults to the smallest odd counts that keep the coordinate
                 harmonics and allowed moments strictly below Nyquist.
+            max_shape (tuple, optional): Maximum counts in each direction,
+                checked before allocating angular grids or FFT lookups.
 
         Returns:
             dict: Endpoint-excluded arrays ``theta`` on [0, 2*pi) and ``zeta``
@@ -524,7 +526,7 @@ class Continuum:
 
         Raises:
             ValueError: If equilibrium indices are not integers with toroidal
-                period nfp, or the grid is invalid or too small.
+                period nfp, or the grid is invalid, too small, or above its limit.
 
         For ``F = fft2(weight) / weight.size``, the quadrature estimate of the
         cosine moment (m, n) is ``F[m % Ntheta, (-n // nfp) % Nzeta].real`` when
@@ -573,6 +575,19 @@ class Continuum:
                 raise ValueError(
                     f"grid shape {shape} must be at least {minimum_shape} to keep "
                     "coordinate harmonics and required moments below Nyquist."
+                )
+
+        if max_shape is not None:
+            limit = np.asarray(max_shape)
+            if (
+                limit.shape != (2,)
+                or not np.issubdtype(limit.dtype, np.integer)
+                or np.any(limit <= 0)
+            ):
+                raise ValueError("max_shape must contain two positive integer counts.")
+            if shape[0] > limit[0] or shape[1] > limit[1]:
+                raise ValueError(
+                    f"grid shape {shape} exceeds max_shape {tuple(limit.tolist())}."
                 )
 
         ntheta, nzeta = shape
@@ -687,6 +702,189 @@ class Continuum:
         if not np.all(np.isfinite(K)) or not np.all(np.isfinite(M0)):
             raise ValueError("Fourier matrix assembly produced nonfinite matrices.")
         return K, M0
+
+    def _sample_moments(self, surface, basis, grid, expected_orientation):
+        """Return moments and scalar geometry diagnostics for one surface/grid."""
+        try:
+            geometry = self._sample_geometry(
+                surface, grid["theta"], grid["zeta"], expected_orientation
+            )
+            moments = self._fourier_moments(basis, grid, geometry)
+        except ValueError as error:
+            raise ValueError(
+                f"Quadrature sampling failed at s={surface}, "
+                f"grid {grid['shape']}: {error}"
+            ) from error
+        diagnostics = {
+            "iota": geometry["iota"],
+            "orientation": geometry["orientation"],
+            "min_jacobian_quality": geometry["min_jacobian_quality"],
+        }
+        return moments, diagnostics
+
+    def _compare_moments(self, coarse, fine, rtol, atol):
+        """Compare every moment using its weight's zero-moment scale.
+
+        For each weight, divide both grids' moments by the larger zero moment.
+        Require abs(fine - coarse) <= atol + rtol*max(abs(coarse), abs(fine))
+        in these scaled units. Return the worst tolerance ratio and mode pair;
+        a ratio <= 1 passes. Zero error with zero tolerance also passes.
+        """
+        worst_ratio = -1.0
+        for weight in ("A", "W0"):
+            scale = max(
+                coarse[weight + "_difference"][0, 0],
+                fine[weight + "_difference"][0, 0],
+            )
+            if not np.isfinite(scale) or scale <= 0:
+                raise ValueError(
+                    f"{weight} zero-moment scale must be finite and positive."
+                )
+            for kind in ("difference", "sum"):
+                name = weight + "_" + kind
+                old = coarse[name] / scale
+                new = fine[name] / scale
+                change = np.abs(new - old)
+                tolerance = atol + rtol * np.maximum(np.abs(old), np.abs(new))
+                ratio = np.zeros_like(change)
+                np.divide(change, tolerance, out=ratio, where=tolerance > 0)
+                ratio[(tolerance == 0) & (change > 0)] = np.inf
+                index = np.unravel_index(np.argmax(ratio), ratio.shape)
+                if ratio[index] > worst_ratio:
+                    worst_ratio = float(ratio[index])
+                    worst_name = name
+                    worst_pair = tuple(int(i) for i in index)
+        return {
+            "converged": worst_ratio <= 1,
+            "max_tolerance_ratio": worst_ratio,
+            "worst_moment": worst_name,
+            "worst_pair": worst_pair,
+        }
+
+    def _converge_surface(
+        self, surface, basis, *, shape=None, rtol=1e-8, atol=1e-10,
+        max_shape=(1024, 1024), expected_orientation=None,
+    ):
+        """This tests angular integration of the supplied interpolant, 
+        and assemble matrices on one surface.
+
+        Args:
+            surface (float): Normalized flux within the copied spline interval.
+            basis (dict): The result of ``_plan_basis()`` for this calculation.
+            shape (tuple, optional): Fixed one-period grid to check against a
+                doubled grid. If omitted, start with the planned minimum grid
+                and double both dimensions until the moment comparison passes.
+            rtol (float): Nonnegative relative tolerance for each moment.
+            atol (float): Nonnegative absolute tolerance after scaling moments
+                by their weight's mean. At least one tolerance must be positive.
+            max_shape (tuple): Maximum grid counts, including verification grids.
+                Defaults to (1024, 1024); this is not a total memory limit.
+            expected_orientation (int, optional): Required Jacobian sign.
+
+        Returns:
+            dict: Matrices ``K`` and ``M0``, scalar ``iota``, ``orientation``,
+            and ``min_jacobian_quality`` on the returned grid. ``quadrature``
+            records the surface, returned and verification grid shapes,
+            tolerances, convergence status, and each moment comparison.
+            Automatic mode returns the finer passing grid; fixed mode returns
+            the requested grid after checking it against the finer grid.
+
+        Raises:
+            ValueError: If settings or sampled geometry are invalid.
+            RuntimeError: If refinement would exceed max_shape, or a fixed
+                grid fails the moment comparison.
+
+        """
+        for name, value in (("rtol", rtol), ("atol", atol)):
+            if (
+                isinstance(value, (bool, np.bool_))
+                or not isinstance(value, Real)
+                or not np.isfinite(value)
+                or value < 0
+            ):
+                raise ValueError(f"{name} must be a finite nonnegative real scalar.")
+        if rtol == 0 and atol == 0:
+            raise ValueError("At least one of rtol and atol must be positive.")
+        if max_shape is None:
+            raise ValueError("max_shape is required for bounded quadrature refinement.")
+        try:
+            grid = self._plan_angular_grid(basis, shape, max_shape=max_shape)
+        except ValueError as error:
+            raise ValueError(
+                f"Quadrature setup failed at s={surface}: {error}"
+            ) from error
+        history = []
+        moments, diagnostics = self._sample_moments(
+            surface, basis, grid, expected_orientation
+        )
+        while True:
+            fine_shape = tuple(2 * count for count in grid["shape"])
+            try:
+                fine_grid = self._plan_angular_grid(
+                    basis, fine_shape, max_shape=max_shape
+                )
+            except ValueError as error:
+                detail = "No coarse/fine comparison completed."
+                if history:
+                    last = history[-1]
+                    detail = (
+                        f"Worst moment {last['worst_moment']}, "
+                        f"pair {last['worst_pair']}, "
+                        f"tolerance ratio {last['max_tolerance_ratio']:.3e} > 1."
+                    )
+                raise RuntimeError(
+                    f"Angular quadrature did not converge at s={surface}, "
+                    f"last grid {grid['shape']}, rtol={rtol}, atol={atol}. "
+                    f"{detail} {error}"
+                ) from error
+            fine_moments, fine_diagnostics = self._sample_moments(
+                surface, basis, fine_grid, diagnostics["orientation"]
+            )
+            try:
+                comparison = self._compare_moments(moments, fine_moments, rtol, atol)
+            except ValueError as error:
+                raise ValueError(
+                    f"Quadrature comparison failed at s={surface}, "
+                    f"grids {grid['shape']} and {fine_shape}: {error}"
+                ) from error
+            comparison["coarse_shape"] = grid["shape"]
+            comparison["fine_shape"] = fine_shape
+            history.append(comparison)
+            if comparison["converged"]:
+                if shape is None:
+                    moments = fine_moments
+                    diagnostics = fine_diagnostics
+                    grid = fine_grid
+                K, M0 = self._assemble_moments(basis, moments, diagnostics["iota"])
+                return {
+                    "K": K,
+                    "M0": M0,
+                    "iota": diagnostics["iota"],
+                    "orientation": diagnostics["orientation"],
+                    "min_jacobian_quality": diagnostics["min_jacobian_quality"],
+                    "quadrature": {
+                        "surface": float(surface),
+                        "converged": True,
+                        "fixed_grid": shape is not None,
+                        "shape": grid["shape"],
+                        "verification_shape": fine_shape,
+                        "rtol": float(rtol),
+                        "atol": float(atol),
+                        "history": history,
+                        "basis_convergence": "unverified",
+                        "equilibrium_convergence": "unverified",
+                    },
+                }
+            if shape is not None:
+                raise RuntimeError(
+                    f"Fixed-grid angular quadrature failed at s={surface}: "
+                    f"grid {grid['shape']} versus {fine_shape}, "
+                    f"rtol={rtol}, atol={atol}; "
+                    f"worst moment {comparison['worst_moment']}, "
+                    f"pair {comparison['worst_pair']}, "
+                    f"tolerance ratio {comparison['max_tolerance_ratio']:.3e} > 1."
+                )
+            moments, diagnostics, grid = fine_moments, fine_diagnostics, fine_grid
 
     def _validate_surfaces(self, surfaces):
         """Return a copy of the requested surfaces without extrapolating."""
