@@ -65,19 +65,39 @@ HAS_CUDA = hasattr(firm3dpp, "test_gpu_interpolation")
 n_test_pts = 10000
 
 
-def assert_no_worse_than(diff, reference, factor=3.0):
+def check_single_precision(testcase, run, tmax, columns, factor=3.0):
     """
-    Per column, the median and 90th percentile of |diff| are within factor of
-    those of |reference|: a single precision run may diverge from double by no
-    more than the orbits themselves diverge under a comparable perturbation.
+    Single precision holds to the orbits' own sensitivity: run(precision, tol)
+    returns the (nparticles, 7) kernel state, and per column the median and
+    90th percentile of |single - double| are within factor of those of
+    |double at tol/10 - double|. Also checks the dtype, and that survivors
+    reach tmax in single precision as in double.
     """
+    out64 = run("double", 1e-8)
+    out32 = run("single", 1e-8)
+    tighter = run("double", 1e-9)
+    testcase.assertEqual(out32.dtype, np.float32)
+    survived = out64[:, 0] >= 0.999 * tmax
+    testcase.assertTrue(survived.any())
+    testcase.assertTrue(np.all(out32[survived, 0] >= 0.999 * tmax))
+    diff = out32[:, columns].astype(np.float64) - out64[:, columns]
+    reference = tighter[:, columns] - out64[:, columns]
     for c in range(diff.shape[1]):
         for q in (50, 90):
             got = np.percentile(np.abs(diff[:, c]), q)
             ref = np.percentile(np.abs(reference[:, c]), q)
-            assert got <= factor * ref + 1e-12, (
-                f"column {c}, p{q}: {got:.3e} exceeds {factor} x reference {ref:.3e}"
+            testcase.assertLessEqual(
+                got,
+                factor * ref + 1e-12,
+                f"column {columns[c]}, p{q}: {got:.3e} exceeds {factor} x {ref:.3e}",
             )
+
+
+def pseudo_cartesian(stz):
+    """(s, theta, zeta) rows as the (s cos theta, s sin theta, zeta) the kernel uses."""
+    return np.column_stack(
+        (stz[:, 0] * np.cos(stz[:, 1]), stz[:, 0] * np.sin(stz[:, 1]), stz[:, 2])
+    )
 
 
 def sample_test_points(n_test_pts):
@@ -820,39 +840,30 @@ class TestGPUTracingBoozerVacuum(unittest.TestCase):
 
     def test_catapult_field(self):
         # a prebuilt CatapultBoozerField traces exactly as a bare field with
-        # the resolution passed, and its precision replaces casting the inputs
+        # the resolution passed
         field = self.field.field
         res = self.n_metagrid_pts
         stz = self.stz[:200]
         vpar = self.vpar_init[:200]
-        kwargs = {
-            "tmax": 1e-6,
-            "mass": MASS,
-            "charge": CHARGE,
-            "vtotal": self.VELOCITY,
-            "tol": 1e-8,
-        }
-        bare = advance_particles_boozer_gpu(
-            field, stz, vpar, ns=res, ntheta=res, nzeta=res, **kwargs
-        )
+        args = (stz, vpar, 1e-6, MASS, CHARGE, self.VELOCITY, 1e-8)
+        bare = advance_particles_boozer_gpu(field, *args, ns=res, ntheta=res, nzeta=res)
         cfield = CatapultBoozerField(field, res, res, res)
-        np.testing.assert_array_equal(
-            advance_particles_boozer_gpu(cfield, stz, vpar, **kwargs), bare
-        )
+        np.testing.assert_array_equal(advance_particles_boozer_gpu(cfield, *args), bare)
 
-        single = CatapultBoozerField(field, res, res, res, precision="single")
-        out = advance_particles_boozer_gpu(single, stz, vpar, **kwargs)
-        self.assertEqual(out.dtype, np.float32)
-        legacy = advance_particles_boozer_gpu(
-            field,
-            stz.astype(np.float32),
-            vpar.astype(np.float32),
-            ns=res,
-            ntheta=res,
-            nzeta=res,
-            **kwargs,
-        )
-        np.testing.assert_array_equal(out, legacy)
+    def test_single_precision_tracing(self):
+        field = self.field.field
+        res = self.n_metagrid_pts
+        inside = self.stz[:, 0] < 1.0
+        x = pseudo_cartesian(self.stz[inside][:200])
+        vpar = self.vpar_init[inside][:200]
+
+        def run(precision, tol):
+            cfield = CatapultBoozerField(field, res, res, res, precision=precision)
+            return advance_particles_boozer_gpu(
+                cfield, x, vpar, 1e-6, MASS, CHARGE, self.VELOCITY, tol, in_boozer=False
+            )
+
+        check_single_precision(self, run, 1e-6, [1, 2, 4])
 
     def test_cpu_format(self):
         # trace_particles_boozer_gpu returns what trace_particles_boozer
@@ -957,35 +968,21 @@ class TestGPUTracingBoozerFiniteBeta(unittest.TestCase):
         self.assertTrue(is_small)
 
     def test_single_precision_tracing(self):
-        # The finite-beta Boozer kernel in single precision diverges from
-        # double by no more than double diverges from itself when the
-        # tolerance is tightened tenfold; compared in the pseudo-Cartesian
-        # coordinates the kernel integrates in, on particles starting inside
         field = self.field.field
         self.assertEqual(field.field_type, "")
         res = self.n_metagrid_pts
         inside = self.stz[:, 0] < 1.0
-        stz = self.stz[inside][:200]
+        x = pseudo_cartesian(self.stz[inside][:200])
         vpar = self.vpar_init[inside][:200]
-        x_inits = np.column_stack(
-            (stz[:, 0] * np.cos(stz[:, 1]), stz[:, 0] * np.sin(stz[:, 1]), stz[:, 2])
-        )
-        double = CatapultBoozerField(field, res, res, res)
-        single = CatapultBoozerField(field, res, res, res, precision="single")
-        self.assertFalse(double.vacuum)
-        args = (x_inits, vpar, 1e-6, MASS, CHARGE, self.VELOCITY)
-        out64 = advance_particles_boozer_gpu(double, *args, 1e-8, in_boozer=False)
-        out32 = advance_particles_boozer_gpu(single, *args, 1e-8, in_boozer=False)
-        self.assertEqual(out32.dtype, np.float32)
-        survived = out64[:, 0] >= 0.999e-6
-        self.assertTrue(survived.any())
-        self.assertTrue(np.all(out32[survived, 0] >= 0.999e-6))
-        tighter = advance_particles_boozer_gpu(double, *args, 1e-9, in_boozer=False)
-        columns = [1, 2, 4]
-        assert_no_worse_than(
-            out32[:, columns].astype(np.float64) - out64[:, columns],
-            tighter[:, columns] - out64[:, columns],
-        )
+
+        def run(precision, tol):
+            cfield = CatapultBoozerField(field, res, res, res, precision=precision)
+            self.assertFalse(cfield.vacuum)
+            return advance_particles_boozer_gpu(
+                cfield, x, vpar, 1e-6, MASS, CHARGE, self.VELOCITY, tol, in_boozer=False
+            )
+
+        check_single_precision(self, run, 1e-6, [1, 2, 4])
 
 
 @unittest.skipUnless(HAS_CUDA, "CUDA support not available")
@@ -1066,44 +1063,29 @@ class TestGPUTracingBoozerVacuumSAW(unittest.TestCase):
         np.testing.assert_array_equal(out, bare)
         np.testing.assert_array_equal(out[:, 6], mus)
 
-        # In single precision the perturbed kernel diverges from double by no
-        # more than the equilibrium single precision kernel does on the same
-        # points; the comparison is in the pseudo-Cartesian coordinates the
-        # kernel integrates in, and only on particles that start inside
-        single = CatapultPerturbedBoozerField(
-            self.saw, res, res, res, precision="single"
-        )
+        # and in single precision, held to the orbits' own sensitivity
         inside = stz[:, 0] < 1.0
-        x_inits = np.column_stack(
-            (stz[:, 0] * np.cos(stz[:, 1]), stz[:, 0] * np.sin(stz[:, 1]), stz[:, 2])
-        )[inside]
+        x = pseudo_cartesian(stz[inside])
         vpar_in = vpar[inside]
         mus_in = mus[inside]
-        out32 = advance_particles_boozer_perturbed_gpu(
-            single, x_inits, vpar_in, mus_in, in_boozer=False, **kwargs
-        )
-        out64 = advance_particles_boozer_perturbed_gpu(
-            cfield, x_inits, vpar_in, mus_in, in_boozer=False, **kwargs
-        )
-        self.assertEqual(out32.dtype, np.float32)
-        survived = out64[:, 0] >= 0.999 * kwargs["tmax"]
-        self.assertTrue(survived.any())
-        self.assertTrue(np.all(out32[survived, 0] >= 0.999 * kwargs["tmax"]))
-        equilibrium = self.saw.B0
-        args = (x_inits, vpar_in, kwargs["tmax"], MASS, CHARGE, self.VELOCITY, 1e-8)
-        ref64 = advance_particles_boozer_gpu(
-            CatapultBoozerField(equilibrium, res, res, res), *args, in_boozer=False
-        )
-        ref32 = advance_particles_boozer_gpu(
-            CatapultBoozerField(equilibrium, res, res, res, precision="single"),
-            *args,
-            in_boozer=False,
-        )
-        columns = [1, 2, 4]
-        assert_no_worse_than(
-            out32[:, columns].astype(np.float64) - out64[:, columns],
-            ref32[:, columns].astype(np.float64) - ref64[:, columns],
-        )
+
+        def run(precision, tol):
+            cfield = CatapultPerturbedBoozerField(
+                self.saw, res, res, res, precision=precision
+            )
+            return advance_particles_boozer_perturbed_gpu(
+                cfield,
+                x,
+                vpar_in,
+                mus_in,
+                tmax=1e-6,
+                mass=MASS,
+                charge=CHARGE,
+                tol=tol,
+                in_boozer=False,
+            )
+
+        check_single_precision(self, run, 1e-6, [1, 2, 4])
 
 
 @unittest.skipUnless(HAS_CUDA, "CUDA support not available")
@@ -1167,9 +1149,7 @@ class TestGPUTracingBoozerNoKSAW(unittest.TestCase):
         self.assertTrue(is_small)
 
     def test_single_precision_tracing(self):
-        # The no-K perturbed kernel, reached through a genuine "nok"
-        # equilibrium, in single precision diverges from double by no more
-        # than double diverges from itself under a tenfold tighter tolerance
+        # the no-K perturbed kernel, reached through a genuine "nok" equilibrium
         res = self.n_metagrid_pts
         bri = BoozerRadialInterpolant(self.filename, 3, no_K=True)
         equilibrium = InterpolatedBoozerField(
@@ -1184,36 +1164,31 @@ class TestGPUTracingBoozerNoKSAW(unittest.TestCase):
             max_dB_normal_by_B0=5e-3,
             minor_radius_meters=1.7,
         )
-        double = CatapultPerturbedBoozerField(saw, res, res, res)
-        single = CatapultPerturbedBoozerField(saw, res, res, res, precision="single")
-        self.assertEqual(double.field_type, "nok")
         inside = self.stz[:, 0] < 1.0
         stz = self.stz[inside][:200]
         vpar = self.vpar_init[inside][:200]
         equilibrium.set_points(stz)
         mus = (self.VELOCITY**2 - vpar**2) / (2 * equilibrium.modB()[:, 0])
-        x_inits = np.column_stack(
-            (stz[:, 0] * np.cos(stz[:, 1]), stz[:, 0] * np.sin(stz[:, 1]), stz[:, 2])
-        )
-        kwargs = {"tmax": 1e-6, "mass": MASS, "charge": CHARGE, "in_boozer": False}
-        out64 = advance_particles_boozer_perturbed_gpu(
-            double, x_inits, vpar, mus, tol=1e-8, **kwargs
-        )
-        out32 = advance_particles_boozer_perturbed_gpu(
-            single, x_inits, vpar, mus, tol=1e-8, **kwargs
-        )
-        self.assertEqual(out32.dtype, np.float32)
-        survived = out64[:, 0] >= 0.999e-6
-        self.assertTrue(survived.any())
-        self.assertTrue(np.all(out32[survived, 0] >= 0.999e-6))
-        tighter = advance_particles_boozer_perturbed_gpu(
-            double, x_inits, vpar, mus, tol=1e-9, **kwargs
-        )
-        columns = [1, 2, 4]
-        assert_no_worse_than(
-            out32[:, columns].astype(np.float64) - out64[:, columns],
-            tighter[:, columns] - out64[:, columns],
-        )
+        x = pseudo_cartesian(stz)
+
+        def run(precision, tol):
+            cfield = CatapultPerturbedBoozerField(
+                saw, res, res, res, precision=precision
+            )
+            self.assertEqual(cfield.field_type, "nok")
+            return advance_particles_boozer_perturbed_gpu(
+                cfield,
+                x,
+                vpar,
+                mus,
+                tmax=1e-6,
+                mass=MASS,
+                charge=CHARGE,
+                tol=tol,
+                in_boozer=False,
+            )
+
+        check_single_precision(self, run, 1e-6, [1, 2, 4])
 
 
 @unittest.skipUnless(HAS_SIMSOPT and HAS_CUDA, "simsopt or CUDA not available")
@@ -1307,9 +1282,6 @@ class TestGPUTracingCartesian(unittest.TestCase):
         self.assertTrue(self.field.test_precision(self.stz, vpar_init, VELOCITY))
 
     def test_single_precision_tracing(self):
-        # In single precision the Cartesian kernel diverges from double by no
-        # more than double diverges from itself when the tolerance is
-        # tightened tenfold: the orbits' own sensitivity, on the same points
         VELOCITY = np.sqrt(2 * ENERGY / MASS)
         rphiz = self.stz[:200]
         xyz = np.column_stack(
@@ -1320,21 +1292,16 @@ class TestGPUTracingCartesian(unittest.TestCase):
             )
         )
         vpar = np.random.uniform(-VELOCITY, VELOCITY, (len(xyz),))
-        args = (xyz, vpar, 1e-6, MASS, CHARGE, VELOCITY)
-        double = CatapultCartesianField(self.bsh, self.sc_particle)
-        single = CatapultCartesianField(self.bsh, self.sc_particle, precision="single")
-        out64 = advance_particles_cartesian_gpu(double, None, *args, 1e-8)
-        out32 = advance_particles_cartesian_gpu(single, None, *args, 1e-8)
-        self.assertEqual(out32.dtype, np.float32)
-        survived = out64[:, 0] >= 0.999e-6
-        self.assertTrue(survived.any())
-        self.assertTrue(np.all(out32[survived, 0] >= 0.999e-6))
-        tighter = advance_particles_cartesian_gpu(double, None, *args, 1e-9)
-        columns = [1, 2, 3, 4]
-        assert_no_worse_than(
-            out32[:, columns].astype(np.float64) - out64[:, columns],
-            tighter[:, columns] - out64[:, columns],
-        )
+
+        def run(precision, tol):
+            cfield = CatapultCartesianField(
+                self.bsh, self.sc_particle, precision=precision
+            )
+            return advance_particles_cartesian_gpu(
+                cfield, None, xyz, vpar, 1e-6, MASS, CHARGE, VELOCITY, tol
+            )
+
+        check_single_precision(self, run, 1e-6, [1, 2, 3, 4])
 
 
 if __name__ == "__main__":

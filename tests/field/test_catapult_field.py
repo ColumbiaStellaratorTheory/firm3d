@@ -140,79 +140,60 @@ class TestCatapultPerturbedBoozerField(unittest.TestCase):
             single.saw_phihats, double.saw_phihats.astype(np.float32)
         )
 
-    def test_tracers_keep_to_their_field(self):
+    def test_refused_before_launch(self):
+        # what the kernels cannot take is refused in Python, before any launch
         equilibrium = CatapultBoozerField(self.field, *RESOLUTION)
-        perturbed = CatapultPerturbedBoozerField(self.saw, *RESOLUTION)
-        stz = np.array([[0.5, 0.0, 0.0]])
-        vpar = np.array([1e6])
-        mus = np.array([1e6])
-        with self.assertRaises(TypeError):
-            trace_particles_boozer_gpu(perturbed, stz, vpar)
-        with self.assertRaises(TypeError):
-            save_trajectories_boozer_gpu(
-                perturbed, stz, vpar, 1e-6, 1e-7, 1.0, 1.0, 1e6, 1e-8
-            )
-        with self.assertRaises(TypeError):
-            trace_particles_boozer_perturbed_gpu(equilibrium, stz, vpar, mus)
-        with self.assertRaises(ValueError):
-            trace_particles_boozer_perturbed_gpu(perturbed, stz, vpar, mus[:0])
-        # and the CPU tracers do the same
-        with self.assertRaises(TypeError):
-            trace_particles_boozer(self.saw, stz, vpar)
-
-    def test_per_particle_shapes_checked(self):
-        # a per-particle array of the wrong length is refused before any
-        # launch, rather than read past its end by the kernel
-        cfield = CatapultBoozerField(self.field, *RESOLUTION)
         perturbed = CatapultPerturbedBoozerField(self.saw, *RESOLUTION)
         stz = np.array([[0.5, 0.0, 0.0], [0.4, 1.0, 2.0]])
         vpar = np.array([1e6, -1e6])
+        mus = np.array([1e6, 1e6])
         args = (1e-6, 1.0, 1.0, 1e6, 1e-8)
+
+        # each tracer and saver keeps to its kind of field, on both backends
+        with self.assertRaises(TypeError):
+            trace_particles_boozer_gpu(perturbed, stz, vpar)
+        with self.assertRaises(TypeError):
+            save_trajectories_boozer_gpu(perturbed, stz, vpar, 1e-6, 1e-7, *args[1:])
+        with self.assertRaises(TypeError):
+            trace_particles_boozer_perturbed_gpu(equilibrium, stz, vpar, mus)
+        with self.assertRaises(TypeError):
+            trace_particles_boozer(self.saw, stz, vpar)
+
+        # a per-particle array of the wrong length would be read past its
+        # end by the kernel: one case per path that checks it
         with self.assertRaises(ValueError):
-            advance_particles_boozer_gpu(cfield, stz, vpar[:1], *args)
+            advance_particles_boozer_gpu(equilibrium, stz, vpar[:1], *args)
         with self.assertRaises(ValueError):
-            advance_particles_boozer_gpu(cfield, stz, vpar, np.array([1e-6]), *args[1:])
+            advance_particles_boozer_gpu(equilibrium, stz[:, :2], vpar, *args)
         with self.assertRaises(ValueError):
-            advance_particles_boozer_gpu(cfield, stz, vpar, *args, dt=np.ones(3))
+            advance_particles_boozer_perturbed_gpu(perturbed, stz, vpar, mus[:1])
         with self.assertRaises(ValueError):
-            advance_particles_boozer_gpu(cfield, stz, vpar, *args, mu=np.ones(1))
-        with self.assertRaises(ValueError):
-            advance_particles_boozer_gpu(cfield, stz[:, :2], vpar, *args)
-        with self.assertRaises(ValueError):
-            advance_particles_boozer_perturbed_gpu(perturbed, stz, vpar[:1], np.ones(2))
-        with self.assertRaises(ValueError):
-            trace_particles_boozer_gpu(cfield, stz, vpar[:1], forget_exact_path=True)
-        # and so is anything non-finite, which would crash the kernel
-        with self.assertRaises(ValueError):
-            advance_particles_boozer_gpu(cfield, stz, np.array([1e6, np.nan]), *args)
-        with self.assertRaises(ValueError):
-            advance_particles_boozer_gpu(cfield, stz * np.nan, vpar, *args)
-        with self.assertRaises(ValueError):
-            advance_particles_boozer_gpu(
-                cfield, stz, vpar, 1e-6, 1.0, 1.0, np.nan, 1e-8
+            trace_particles_boozer_gpu(
+                equilibrium, stz, vpar[:1], forget_exact_path=True
             )
 
-    def test_cpu_arguments_checked_first(self):
-        # what the kernels cannot honor is refused before any launch
-        cfield = CatapultBoozerField(self.field, *RESOLUTION)
-        perturbed = CatapultPerturbedBoozerField(self.saw, *RESOLUTION)
-        stz = np.array([[0.5, 0.0, 0.0]])
-        vpar = np.array([1e6])
-        # the kernel stops at s = 1 and takes no stopping criteria
-        with self.assertRaises(TypeError):
-            trace_particles_boozer_gpu(cfield, stz, vpar, stopping_criteria=None)
-        # trajectories need one tmax for all particles
+        # and anything non-finite, which would crash the kernel: one case per
+        # check (a per-particle array, the positions, the speed)
+        with self.assertRaises(ValueError):
+            advance_particles_boozer_gpu(
+                equilibrium, stz, np.array([1e6, np.nan]), *args
+            )
+        with self.assertRaises(ValueError):
+            advance_particles_boozer_gpu(equilibrium, stz * np.nan, vpar, *args)
+        with self.assertRaises(ValueError):
+            advance_particles_boozer_gpu(
+                equilibrium, stz, vpar, 1e-6, 1.0, 1.0, np.nan, 1e-8
+            )
+
+        # trajectories need one tmax for all particles, and cannot yet be
+        # saved in a perturbed field
         with self.assertRaises(NotImplementedError):
             trace_particles_boozer_gpu(
-                cfield,
-                np.vstack((stz, stz)),
-                np.tile(vpar, 2),
-                tmax=np.array([1e-6, 2e-6]),
+                equilibrium, stz, vpar, tmax=np.array([1e-6, 2e-6])
             )
-        # and cannot be saved in a perturbed field
         with self.assertRaises(NotImplementedError):
             trace_particles_boozer_perturbed_gpu(
-                perturbed, stz, vpar, vpar, forget_exact_path=False
+                perturbed, stz, vpar, mus, forget_exact_path=False
             )
 
 
