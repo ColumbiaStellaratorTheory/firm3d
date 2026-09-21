@@ -54,7 +54,7 @@ jobs:
 
       - name: Confirm GPU bindings were compiled
         run: |
-          if ! grep -q "CUDA found. GPU bindings will be compiled." install.log; then
+          if ! grep -q "GPU bindings will be compiled with" install.log; then
             echo "::error::GPU bindings were not compiled!"
             exit 1
           fi
