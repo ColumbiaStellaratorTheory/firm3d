@@ -1,4 +1,5 @@
 import os
+from copy import deepcopy
 from dataclasses import dataclass
 from numbers import Integral, Real
 
@@ -11,11 +12,13 @@ __all__ = ["Continuum", "Harmonic", "ModeContinuum", "AlfvenSpecData"]
 class Continuum:
     r"""Configure a cosine-basis shear Alfvén continuum calculation.
 
-    This initial implementation validates and stores inputs. Geometry sampling
-    and eigensolves will be added in subsequent steps.
+    Inputs are validated and the coordinate splines are copied for local
+    sampling. Matrix assembly and eigensolves will be added in subsequent steps.
 
     Args:
-        field (BoozerRadialInterpolant): Stellarator-symmetric equilibrium.
+        field (BoozerRadialInterpolant): Stellarator-symmetric equilibrium with
+            coordinate splines of degree at least two and continuous first
+            derivatives at interior knots, so the tangents are continuous.
         surfaces (array-like): Nonempty one-dimensional normalized flux values
             ``s = psi / psi0`` within the field's radial interpolation interval
             and ``0 < s <= 1``.
@@ -25,7 +28,7 @@ class Continuum:
             to one family: ``n_i = +/- n_j`` modulo ``nfp``. Duplicate cosine
             functions, including ``(m, n)`` and ``(-m, -n)``, are rejected.
         density (float or callable, optional): Mass density in kg/m^3. A callable
-          ``density(s)`` must return
+            ``density(s)`` must return
             a finite positive scalar for each requested surface; it is stored
             without evaluation here and will be checked before solving.
             ``None`` requests density-independent results only.
@@ -82,6 +85,180 @@ class Continuum:
                 )
             density = float(density)
         self.density = density
+        self._copy_geometry(field)
+
+    def _copy_geometry(self, field):
+        """Copy the field data needed for local, consistent coordinate sampling."""
+        self._geometry_m = np.array(field.xm_b, copy=True)
+        self._geometry_n = np.array(field.xn_b, copy=True)
+        mode_pairs = np.column_stack((self._geometry_m, self._geometry_n))
+        if len(np.unique(mode_pairs, axis=0)) != len(mode_pairs):
+            raise ValueError("The equilibrium Fourier table contains duplicate modes.")
+
+        self._coordinate_splines = {
+            "R": deepcopy(field.rmnc_splines),
+            "Z": deepcopy(field.zmns_splines),
+            "nu": deepcopy(field.numns_splines),
+        }
+        self._radial_splines = {}
+        self._surface_min = max(0.0, field.s_half_ext[0])
+        self._surface_max = min(1.0, field.s_half_ext[-1])
+        for name, spline in self._coordinate_splines.items():
+            lower = spline.t[spline.k]
+            upper = spline.t[-spline.k - 1]
+            knots, multiplicities = np.unique(spline.t, return_counts=True)
+            interior = (knots > lower) & (knots < upper)
+            # At a knot of multiplicity p, a degree-k spline is C^(k-p).
+            if spline.k < 2 or np.any(multiplicities[interior] >= spline.k):
+                raise ValueError(
+                    f"{name} coordinate spline must have degree >= 2 and "
+                    "continuous first derivatives at interior knots."
+                )
+            if spline.axis != 0 or spline.c.shape[1:] != (len(mode_pairs),):
+                raise ValueError(
+                    f"{name} spline must have one column per Fourier mode."
+                )
+            spline.extrapolate = False
+            # Derive tangents from the same splines as the coordinates.
+            self._radial_splines[name] = spline.derivative()
+            self._surface_min = max(self._surface_min, lower)
+            self._surface_max = min(self._surface_max, upper)
+
+        self._flux_splines = {
+            "iota": deepcopy(field.iota_spline),
+            "G": deepcopy(field.G_spline),
+            "I": deepcopy(field.I_spline),
+        }
+        for spline in self._flux_splines.values():
+            spline.extrapolate = False
+            self._surface_min = max(self._surface_min, spline.t[spline.k])
+            self._surface_max = min(self._surface_max, spline.t[-spline.k - 1])
+        if np.any(self.surfaces < self._surface_min) or np.any(
+            self.surfaces > self._surface_max
+        ):
+            raise ValueError(
+                "surfaces must lie in the common coordinate/flux spline interval "
+                f"[{self._surface_min}, {self._surface_max}]."
+            )
+        self._psi0 = float(field.psi0)
+
+        self._poloidal_modes, self._m_indices = np.unique(
+            self._geometry_m, return_inverse=True
+        )
+        self._toroidal_modes, self._n_indices = np.unique(
+            self._geometry_n, return_inverse=True
+        )
+        self._theta_grid = None
+        self._zeta_grid = None
+
+    def _set_angular_grid(self, theta, zeta):
+        """Cache separable angular factors for just the current tensor grid."""
+        grids = []
+        for name, grid in (("theta", theta), ("zeta", zeta)):
+            grid = np.asarray(grid)
+            if (
+                grid.ndim != 1
+                or grid.size == 0
+                or not np.issubdtype(grid.dtype, np.number)
+                or np.iscomplexobj(grid)
+                or not np.all(np.isfinite(grid))
+            ):
+                raise ValueError(f"{name} must be a finite nonempty real 1D array.")
+            grids.append(grid)
+        theta, zeta = grids
+        if np.array_equal(theta, self._theta_grid) and np.array_equal(
+            zeta, self._zeta_grid
+        ):
+            return
+
+        self._theta_grid = np.array(theta, dtype=float, copy=True)
+        self._zeta_grid = np.array(zeta, dtype=float, copy=True)
+        theta_phase = np.outer(self._theta_grid, self._poloidal_modes)
+        zeta_phase = np.outer(self._toroidal_modes, self._zeta_grid)
+        self._cos_theta = np.cos(theta_phase)
+        self._sin_theta = np.sin(theta_phase)
+        self._cos_zeta = np.cos(zeta_phase)
+        self._sin_zeta = np.sin(zeta_phase)
+
+    def _sum_harmonics(self, coefficients, parity):
+        """Sum cos(m*theta - n*zeta) or sin(m*theta - n*zeta) on the grid.
+
+        Separate theta and zeta factors using the angle-difference identities.
+        The coefficient rectangle has one row per unique m and column per n;
+        this avoids allocating a grid-points-by-harmonics array.
+        """
+        rectangle = np.zeros((len(self._poloidal_modes), len(self._toroidal_modes)))
+        rectangle[self._m_indices, self._n_indices] = coefficients
+        cosine_zeta_sum = rectangle @ self._cos_zeta
+        sine_zeta_sum = rectangle @ self._sin_zeta
+        if parity == "cos":
+            return (
+                self._cos_theta @ cosine_zeta_sum + self._sin_theta @ sine_zeta_sum
+            )
+        return self._sin_theta @ cosine_zeta_sum - self._cos_theta @ sine_zeta_sum
+
+    def _sample_coordinates(self, surface, theta, zeta):
+        """Sample one surface locally without using the field's evaluation API.
+
+        Args:
+            surface (float): Normalized flux inside the copied spline interval,
+                excluding the axis.
+            theta (array-like): One-dimensional poloidal angles in radians.
+            zeta (array-like): One-dimensional Boozer toroidal angles in radians.
+
+        Returns:
+            dict: ``R``, ``Z``, ``nu``, and ``phi = zeta - nu``, each with
+            shape ``(len(theta), len(zeta))``. Derivative keys append ``_s``,
+            ``_theta``, or ``_zeta``. R and Z are in meters; nu and phi are in
+            radians. The scalar entries ``iota``, ``G``, ``I``, and ``psi0``
+            retain the field's flux and magnetic-component conventions.
+
+        Raises:
+            ValueError: If the surface or angular arrays are invalid.
+        """
+        if (
+            not isinstance(surface, Real)
+            or not np.isfinite(surface)
+            or surface <= 0
+            or surface < self._surface_min
+            or surface > self._surface_max
+        ):
+            raise ValueError(
+                f"surface must lie in [{self._surface_min}, {self._surface_max}] "
+                f"with s > 0; got {surface!r}."
+            )
+        self._set_angular_grid(theta, zeta)
+        values = {}
+        for name, spline in self._coordinate_splines.items():
+            coefficients = spline(surface)
+            radial_coefficients = self._radial_splines[name](surface)
+            if name == "R":
+                values[name] = self._sum_harmonics(coefficients, "cos")
+                values[name + "_s"] = self._sum_harmonics(radial_coefficients, "cos")
+                values[name + "_theta"] = self._sum_harmonics(
+                    -self._geometry_m * coefficients, "sin"
+                )
+                values[name + "_zeta"] = self._sum_harmonics(
+                    self._geometry_n * coefficients, "sin"
+                )
+            else:
+                values[name] = self._sum_harmonics(coefficients, "sin")
+                values[name + "_s"] = self._sum_harmonics(radial_coefficients, "sin")
+                values[name + "_theta"] = self._sum_harmonics(
+                    self._geometry_m * coefficients, "cos"
+                )
+                values[name + "_zeta"] = self._sum_harmonics(
+                    -self._geometry_n * coefficients, "cos"
+                )
+
+        values["phi"] = self._zeta_grid[None, :] - values["nu"]
+        values["phi_s"] = -values["nu_s"]
+        values["phi_theta"] = -values["nu_theta"]
+        values["phi_zeta"] = 1 - values["nu_zeta"]
+        for name, spline in self._flux_splines.items():
+            values[name] = float(spline(surface))
+        values["psi0"] = self._psi0
+        return values
 
     def _validate_surfaces(self, surfaces):
         """Return a copy of the requested surfaces without extrapolating."""
