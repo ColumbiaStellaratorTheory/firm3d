@@ -6,6 +6,7 @@ from numbers import Integral, Real
 import numpy as np
 import plotly.graph_objects as go
 from scipy.linalg import eigh, norm
+from scipy.special import roots_legendre
 
 __all__ = ["Continuum", "Harmonic", "ModeContinuum", "AlfvenSpecData"]
 
@@ -36,17 +37,21 @@ class Continuum:
             a finite positive scalar for each requested surface; it is stored
             without evaluation here and will be checked before solving.
             ``None`` requests density-independent results only.
+        reference_field (float, optional): Finite positive reference field in
+            tesla. If omitted, ``get_reference_field()`` computes the volume
+            average of the geometric field over the full plasma.
 
     Raises:
-        ValueError: If the field, surfaces, modes, or scalar density are invalid.
+        ValueError: If the field, surfaces, modes, density, or reference are invalid.
 
     Surface and mode arrays are copied without reordering. ``mode_family`` is
     the smaller of the two equivalent toroidal residues, ``n`` and ``-n``.
     Angular grids, convergence limits, and eigenvector storage are controlled by
-    ``run()``. The reference magnetic field will accompany frequency conversion.
+    ``run()``. Reference-field quadrature has separate convergence controls in
+    ``get_reference_field()``.
     """
 
-    def __init__(self, field, surfaces, modes, density=None):
+    def __init__(self, field, surfaces, modes, density=None, *, reference_field=None):
         # The Boozer field module also imports the readers in this module.
         from ..field.boozermagneticfield import BoozerRadialInterpolant
 
@@ -89,6 +94,20 @@ class Continuum:
                 )
             density = float(density)
         self.density = density
+        if reference_field is not None:
+            if (
+                isinstance(reference_field, (bool, np.bool_))
+                or not isinstance(reference_field, Real)
+                or not np.isfinite(reference_field)
+                or reference_field <= 0
+            ):
+                raise ValueError(
+                    "reference_field must be finite and positive in tesla."
+                )
+            reference_field = float(reference_field)
+        self._reference_field_value = reference_field
+        self._reference_cache = None
+        self._reference_settings = None
         self._copy_geometry(field)
 
     def run(
@@ -112,6 +131,7 @@ class Continuum:
             Lambda = mu0*rho*omega**2 in T^2/m^2; ``eigenvectors`` of shape
             (Ns, N, N) or None, with eigenvectors stored as columns; optional
             sampled ``density`` in kg/m^3; and per-surface ``diagnostics``.
+            ``reference_field`` records the field value and its provenance.
 
         Raises:
             ValueError: If settings, density, geometry, or matrices are invalid.
@@ -119,10 +139,15 @@ class Continuum:
 
         Note that, although density is validated before solving,
         it does not enter the eigenproblem.
+        The reference field uses the last successful ``get_reference_field()``
+        calculation, or its default settings if it has not yet been calculated.
         """
         if not isinstance(keep_eigenvectors, (bool, np.bool_)):
             raise ValueError("keep_eigenvectors must be a boolean.")
         density = self._sample_density()
+        if self._reference_cache is None:
+            self.get_reference_field()
+        reference = deepcopy(self._reference_cache)
         basis = self._plan_basis()
         surface_count = len(self.surfaces)
         mode_count = len(self.modes)
@@ -131,7 +156,7 @@ class Continuum:
         if keep_eigenvectors:
             eigenvectors = np.empty((surface_count, mode_count, mode_count))
         diagnostics = []
-        orientation = None
+        orientation = reference.get("orientation")
         for index, surface in enumerate(self.surfaces):
             matrices = self._converge_surface(
                 surface, basis, shape=shape, rtol=rtol, atol=atol,
@@ -159,8 +184,224 @@ class Continuum:
             "eigenvalue_units": "T^2/m^2",
             "eigenvectors": eigenvectors,
             "density": density,
+            "reference_field": reference,
             "diagnostics": diagnostics,
         }
+
+    def get_reference_field(
+        self, *, rtol=1e-6, radial_order=4, max_radial_order=32,
+        shape=None, max_shape=(512, 512),
+    ):
+        """Return the supplied field or a converged geometric volume average.
+
+        Args:
+            rtol (float): Positive relative tolerance for the field integral,
+                volume, and their ratio, checked radially and angularly.
+            radial_order (int): Initial Gauss-Legendre order per spline interval.
+            max_radial_order (int): Maximum order, including verification rules.
+            shape (tuple, optional): Initial one-period angular counts. Defaults
+                to the minimum for the coordinate spectrum, independent of modes.
+            max_shape (tuple): Maximum angular counts, including verification grids.
+
+        Returns:
+            dict: ``value`` in tesla, ``source``, ``domain``, and ``converged``.
+            Automatic results also record full-torus ``volume`` in m^3 and
+            ``field_integral`` in T*m^3, endpoint policy,
+            final quadrature settings, and separate radial/angular error histories.
+            Explicit values have no quadrature domain or convergence claim.
+
+        Raises:
+            ValueError: If settings, radial coverage, or sampled geometry are invalid.
+            RuntimeError: If the quadrature limits prevent convergence.
+
+        Integrate Bg = abs(psi0)*sqrt(S)/abs(Jg) with volume measure abs(Jg).
+
+        Repeated calls with the same settings reuse the last successful result.
+        Returned dictionaries are copies. A supplied reference bypasses quadrature.
+        """
+        if self._reference_field_value is not None:
+            self._reference_cache = {
+                "value": self._reference_field_value,
+                "units": "T",
+                "source": "explicit",
+                "domain": None,
+                "converged": None,
+            }
+            return deepcopy(self._reference_cache)
+
+        if (
+            isinstance(rtol, (bool, np.bool_))
+            or not isinstance(rtol, Real)
+            or not np.isfinite(rtol)
+            or rtol <= 0
+        ):
+            raise ValueError("reference-field rtol must be finite and positive.")
+        for name, order in (
+            ("radial_order", radial_order), ("max_radial_order", max_radial_order)
+        ):
+            if (
+                isinstance(order, (bool, np.bool_))
+                or not isinstance(order, Integral)
+                or order <= 0
+            ):
+                raise ValueError(f"{name} must be a positive integer.")
+        if max_shape is None:
+            raise ValueError("max_shape must contain two positive integer counts.")
+        grid = self._plan_angular_grid(None, shape, max_shape=max_shape)
+        settings = (
+            float(rtol), int(radial_order), int(max_radial_order),
+            grid["shape"], tuple(max_shape),
+        )
+        if self._reference_settings == settings:
+            return deepcopy(self._reference_cache)
+        breaks = self._reference_radial_breaks()
+        samples = {}
+        history = []
+        orientation = None
+        order = int(radial_order)
+        while True:
+            fine_order = 2 * order
+            fine_shape = tuple(2 * count for count in grid["shape"])
+            if (
+                fine_order > max_radial_order
+                or any(count > limit for count, limit in zip(fine_shape, max_shape))
+            ):
+                raise RuntimeError(
+                    "Reference-field quadrature could not converge: verification "
+                    f"needs radial order {fine_order} and grid {fine_shape}; "
+                    f"limits are {max_radial_order} and {tuple(max_shape)}. "
+                    f"Last comparison: {history[-1] if history else 'none'}."
+                )
+            fine_grid = self._plan_angular_grid(None, fine_shape, max_shape=max_shape)
+            # Compare each direction at the finer resolution of the other direction.
+            rules = ((order, fine_grid), (fine_order, grid), (fine_order, fine_grid))
+            for sample_order, sample_grid in rules:
+                key = (sample_order, sample_grid["shape"])
+                if key not in samples:
+                    samples[key] = self._integrate_reference_field(
+                        breaks, sample_order, sample_grid, orientation
+                    )
+                    orientation = samples[key]["orientation"]
+            radial_coarse = samples[(order, fine_shape)]
+            angular_coarse = samples[(fine_order, grid["shape"])]
+            fine = samples[(fine_order, fine_shape)]
+            errors = {}
+            for direction, coarse in (
+                ("radial", radial_coarse), ("angular", angular_coarse)
+            ):
+                errors[direction] = {}
+                for name in ("field_integral", "volume", "value"):
+                    scale = max(coarse[name], fine[name])
+                    errors[direction][name] = abs(coarse[name] - fine[name]) / scale
+            radial_passed = max(errors["radial"].values()) <= rtol
+            angular_passed = max(errors["angular"].values()) <= rtol
+            history.append({
+                "radial_orders": (order, fine_order),
+                "angular_shapes": (grid["shape"], fine_shape),
+                "relative_errors": errors,
+            })
+            if radial_passed and angular_passed:
+                result = dict(fine)
+                result.update({
+                    "units": "T",
+                    "source": "geometric_volume_average",
+                    "domain": (0.0, 1.0),
+                    "converged": True,
+                    "rtol": float(rtol),
+                    "radial_order": fine_order,
+                    "radial_intervals": len(breaks) - 1,
+                    "shape": fine_shape,
+                    "history": history,
+                    "native_radial_range": tuple(self._radial_data_grid[[1, -2]]),
+                    "endpoint_policy": (
+                        "Retain the supplied interpolant's half-grid endpoint "
+                        "extensions; integrate with interior Gauss-Legendre nodes."
+                    ),
+                    "equilibrium_accuracy": "unverified",
+                })
+                self._reference_cache = result
+                self._reference_settings = settings
+                return deepcopy(result)
+            if not radial_passed:
+                order = fine_order
+            if not angular_passed:
+                grid = fine_grid
+
+    def _reference_radial_breaks(self):
+        """Check full-volume coverage and split quadrature at geometry spline knots."""
+        data = self._radial_data_grid
+        if (
+            self._surface_min != 0 or self._surface_max != 1
+            or data.ndim != 1 or len(data) < 4
+            or not np.all(np.isfinite(data)) or np.any(np.diff(data) <= 0)
+            or data[0] != 0 or data[-1] != 1
+        ):
+            raise ValueError(
+                "Automatic reference field requires full radial coverage [0, 1]; "
+                "supply reference_field explicitly for restricted input."
+            )
+        # The interpolant adds endpoints even when booz_xform supplied a subset.
+        tolerance = 100 * np.finfo(float).eps
+        if (
+            data[1] > (data[2] - data[1]) / 2 + tolerance
+            or 1 - data[-2] > (data[-2] - data[-3]) / 2 + tolerance
+        ):
+            raise ValueError(
+                "Automatic reference field requires full native radial coverage "
+                "apart from ordinary half-grid endpoint gaps; "
+                "supply reference_field explicitly for restricted input."
+            )
+        splines = list(self._coordinate_splines.values())
+        splines.append(self._flux_splines["iota"])
+        knots = np.concatenate([spline.t for spline in splines])
+        interior = knots[(knots > 0) & (knots < 1)]
+        return np.unique(np.concatenate(([0.0], interior, [1.0])))
+
+    def _integrate_reference_field(self, breaks, order, grid, orientation=None):
+        """Integrate Bg*dV and dV, retaining one surface's geometry at a time.
+
+        The numerator density Bg*abs(Jg) = abs(psi0)*sqrt(S) avoids dividing by
+        a small near-axis Jacobian. Angular means over one field period equal
+        full-torus means; multiplying by (2*pi)**2 supplies the full volume.
+        """
+        nodes, weights = roots_legendre(order)
+        volume = 0.0
+        field_integral = 0.0
+        min_quality = np.inf
+        for lower, upper in zip(breaks[:-1], breaks[1:]):
+            half_width = (upper - lower) / 2
+            surfaces = (upper + lower) / 2 + half_width * nodes
+            if np.any(surfaces <= lower) or np.any(surfaces >= upper):
+                raise ValueError("Reference-field radial nodes must be interior.")
+            for surface, weight in zip(surfaces, half_width * weights):
+                try:
+                    geometry = self._sample_geometry(
+                        surface, grid["theta"], grid["zeta"], orientation
+                    )
+                    orientation = geometry["orientation"]
+                    min_quality = min(min_quality, geometry["min_jacobian_quality"])
+                    with np.errstate(over="raise", invalid="raise", divide="raise"):
+                        volume += weight * np.mean(np.abs(geometry["Jg"]))
+                        field_integral += (
+                            weight * abs(self._psi0) * np.mean(np.sqrt(geometry["S"]))
+                        )
+                    del geometry
+                except (ValueError, FloatingPointError) as error:
+                    raise ValueError(
+                        f"Reference-field integration failed at s={surface}, "
+                        f"grid {grid['shape']}: {error}"
+                    ) from error
+        with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+            result = {
+                "value": float(field_integral / volume),
+                "volume": float(volume * (2 * np.pi)**2),
+                "field_integral": float(field_integral * (2 * np.pi)**2),
+            }
+        if any(not np.isfinite(value) or value <= 0 for value in result.values()):
+            raise ValueError("Reference-field integrals must be finite and positive.")
+        result["orientation"] = orientation
+        result["min_jacobian_quality"] = float(min_quality)
+        return result
 
     def _sample_density(self):
         """Validate optional density on all requested surfaces before any solve."""
@@ -192,6 +433,7 @@ class Continuum:
     def _copy_geometry(self, field):
         """Copy the field data needed for local, consistent coordinate sampling."""
         self._nfp = int(field.nfp)
+        self._radial_data_grid = np.array(field.s_half_ext, dtype=float, copy=True)
         self._geometry_m = np.array(field.xm_b, copy=True)
         self._geometry_n = np.array(field.xn_b, copy=True)
         mode_pairs = np.column_stack((self._geometry_m, self._geometry_n))
@@ -609,7 +851,8 @@ class Continuum:
         """Plan one-field-period sampling and checked FFT moment lookups.
 
         Args:
-            basis (dict): The result of ``_plan_basis()`` for this calculation.
+            basis (dict or None): The result of ``_plan_basis()``. Use None for
+                geometry-only sampling, independent of the perturbation modes.
             shape (tuple, optional): Positive integer counts (Ntheta, Nzeta).
                 Defaults to the smallest odd counts that keep the coordinate
                 harmonics and allowed moments strictly below Nyquist.
@@ -650,13 +893,16 @@ class Continuum:
         toroidal_bound = max(
             abs(int(self._geometry_n.min())), abs(int(self._geometry_n.max()))
         ) // self._nfp
-        for kind in ("difference", "sum"):
-            selected = basis[kind + "_modes"][basis[kind + "_allowed"]]
-            if selected.size:
-                poloidal_bound = max(poloidal_bound, int(np.abs(selected[:, 0]).max()))
-                toroidal_bound = max(
-                    toroidal_bound, int(np.abs(selected[:, 1]).max()) // self._nfp
-                )
+        if basis is not None:
+            for kind in ("difference", "sum"):
+                selected = basis[kind + "_modes"][basis[kind + "_allowed"]]
+                if selected.size:
+                    poloidal_bound = max(
+                        poloidal_bound, int(np.abs(selected[:, 0]).max())
+                    )
+                    toroidal_bound = max(
+                        toroidal_bound, int(np.abs(selected[:, 1]).max()) // self._nfp
+                    )
         minimum_shape = (2 * poloidal_bound + 1, 2 * toroidal_bound + 1)
 
         if shape is None:
@@ -693,11 +939,12 @@ class Continuum:
         grid = {"shape": shape, "minimum_shape": minimum_shape}
         grid["theta"] = 2 * np.pi * np.arange(ntheta) / ntheta
         grid["zeta"] = 2 * np.pi * np.arange(nzeta) / (self._nfp * nzeta)
-        for kind in ("difference", "sum"):
-            selected = basis[kind + "_modes"][basis[kind + "_allowed"]]
-            theta_indices = selected[:, 0] % ntheta
-            zeta_indices = (-selected[:, 1] // self._nfp) % nzeta
-            grid[kind + "_indices"] = (theta_indices, zeta_indices)
+        if basis is not None:
+            for kind in ("difference", "sum"):
+                selected = basis[kind + "_modes"][basis[kind + "_allowed"]]
+                theta_indices = selected[:, 0] % ntheta
+                zeta_indices = (-selected[:, 1] // self._nfp) % nzeta
+                grid[kind + "_indices"] = (theta_indices, zeta_indices)
         return grid
 
     def _fourier_moments(self, basis, grid, geometry):
