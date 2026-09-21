@@ -40,17 +40,19 @@ defaults, and return the same ``(res_tys, res_hits)``:
     from firm3d.catapult.tracing import trace_particles_boozer_gpu
     res_tys, res_hits = trace_particles_boozer_gpu(
         field_gpu, stz_inits, vpar_inits, tmax=1e-2, Ekin=Ekin, mass=mass,
-        charge=charge, stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
-        forget_exact_path=True,
+        charge=charge, forget_exact_path=True,
     )
     times, loss_fraction = compute_loss_fraction(res_tys)
 
 The kernels stop a particle at :math:`s = 1` (or at the surface of the
-classifier) and nowhere else, so ``stopping_criteria`` must be ``None`` or
-``[MaxToroidalFluxStoppingCriterion(1.0)]``. ``Ekin`` is one value for all
-particles. There is no ``comm``: an ensemble is traced on one GPU per call.
-Options the kernels do not have (``abstol`` and ``reltol`` apart from ``tol``,
-the Poincaré-section arguments, the choice of solver) are not accepted.
+classifier) and nowhere else: this is the CPU tracer's
+``MaxToroidalFluxStoppingCriterion(1.0)``, and ``res_hits`` records it with
+index ``-1`` as the CPU does for its first criterion, but there is no
+``stopping_criteria`` argument, since nothing else can be asked for. ``Ekin``
+is one value for all particles. There is no ``comm``: an ensemble is traced on
+one GPU per call. Options the kernels do not have (``abstol`` and ``reltol``
+apart from ``tol``, the Poincaré-section arguments, the choice of solver) are
+not accepted either.
 
 Differences from the CPU tracers that remain: the last row of a lost
 particle is the state just past the crossing rather than the last state

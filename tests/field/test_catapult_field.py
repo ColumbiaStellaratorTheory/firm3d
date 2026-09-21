@@ -16,11 +16,7 @@ from firm3d.field.boozermagneticfield import (
     BoozerRadialInterpolant,
     ShearAlfvenWavesSuperposition,
 )
-from firm3d.field.tracing import (
-    MaxToroidalFluxStoppingCriterion,
-    MinToroidalFluxStoppingCriterion,
-    trace_particles_boozer,
-)
+from firm3d.field.tracing import trace_particles_boozer
 from firm3d.saw.ae3d import AE3DEigenvector
 
 TEST_DIR = (Path(__file__).parent / ".." / "test_files").resolve()
@@ -202,19 +198,9 @@ class TestCatapultPerturbedBoozerField(unittest.TestCase):
         perturbed = CatapultPerturbedBoozerField(self.saw, *RESOLUTION)
         stz = np.array([[0.5, 0.0, 0.0]])
         vpar = np.array([1e6])
-        self.assertEqual(MaxToroidalFluxStoppingCriterion(1.0).max_s, 1.0)
-        for criteria in (
-            [MinToroidalFluxStoppingCriterion(0.1)],
-            [MaxToroidalFluxStoppingCriterion(0.9)],
-            [
-                MaxToroidalFluxStoppingCriterion(1.0),
-                MinToroidalFluxStoppingCriterion(0.1),
-            ],
-        ):
-            with self.assertRaises(NotImplementedError):
-                trace_particles_boozer_gpu(
-                    cfield, stz, vpar, stopping_criteria=criteria
-                )
+        # the kernel stops at s = 1 and takes no stopping criteria
+        with self.assertRaises(TypeError):
+            trace_particles_boozer_gpu(cfield, stz, vpar, stopping_criteria=None)
         # trajectories need one tmax for all particles
         with self.assertRaises(NotImplementedError):
             trace_particles_boozer_gpu(

@@ -6,7 +6,6 @@ import pandas as pd
 
 from firm3d.catapult.field import CatapultBoozerField
 from firm3d.catapult.tracing import trace_particles_boozer_gpu
-from firm3d.field.tracing import MaxToroidalFluxStoppingCriterion
 from firm3d.field.boozermagneticfield import (
     BoozerRadialInterpolant,
     InterpolatedBoozerField,
@@ -73,7 +72,9 @@ field_flt = CatapultBoozerField(
 
 # Trace in double precision. As for the CPU tracer, res_tys holds each
 # particle's (t, s, theta, zeta, vpar) rows and res_hits its boundary crossing,
-# so the same post-processing serves both.
+# so the same post-processing serves both. The kernel stops particles at s = 1,
+# the CPU tracer's MaxToroidalFluxStoppingCriterion(1.0); it takes no
+# stopping_criteria argument.
 res_tys_dbl, res_hits_dbl = trace_particles_boozer_gpu(
     field_dbl,
     stz_inits,
@@ -83,7 +84,6 @@ res_tys_dbl, res_hits_dbl = trace_particles_boozer_gpu(
     charge=charge,
     Ekin=Ekin,
     tol=tol,
-    stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
     forget_exact_path=True,
 )
 
@@ -97,7 +97,6 @@ res_tys_flt, res_hits_flt = trace_particles_boozer_gpu(
     charge=charge,
     Ekin=Ekin,
     tol=tol,
-    stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
     forget_exact_path=True,
 )
 

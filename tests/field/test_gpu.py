@@ -59,7 +59,6 @@ from firm3d.catapult.tracing import (
     save_trajectories_boozer_gpu,
     trace_particles_boozer_gpu,
 )
-from firm3d.field.tracing import MaxToroidalFluxStoppingCriterion
 from firm3d.trajectory_helpers import compute_loss_fraction
 
 HAS_CUDA = hasattr(firm3dpp, "test_gpu_interpolation")
@@ -869,7 +868,6 @@ class TestGPUTracingBoozerVacuum(unittest.TestCase):
             "charge": CHARGE,
             "Ekin": ENERGY,
             "tol": 1e-8,
-            "stopping_criteria": [MaxToroidalFluxStoppingCriterion(1.0)],
         }
         cfield = CatapultBoozerField(field, res, res, res)
         state = advance_particles_boozer_gpu(
@@ -911,15 +909,6 @@ class TestGPUTracingBoozerVacuum(unittest.TestCase):
             if not lost[i]:
                 self.assertGreaterEqual(t[-1], tmax)
                 self.assertEqual(len(t), 1 + round(tmax / dt_save))
-
-        with self.assertRaises(NotImplementedError):
-            trace_particles_boozer_gpu(
-                cfield,
-                stz,
-                vpar,
-                tmax,
-                stopping_criteria=[MaxToroidalFluxStoppingCriterion(0.9)],
-            )
 
 
 @unittest.skipUnless(HAS_CUDA, "CUDA support not available")

@@ -17,7 +17,6 @@ from firm3d.catapult.field import (
     CatapultCartesianField,
     CatapultPerturbedBoozerField,
 )
-from firm3d.field.tracing import MaxToroidalFluxStoppingCriterion
 from firm3d.util.constants import (
     ALPHA_PARTICLE_CHARGE,
     ALPHA_PARTICLE_MASS,
@@ -697,25 +696,6 @@ def save_trajectories_cartesian_gpu(
     return _save_trajectories(trace_chunk, inits, parallel_speeds, tmax, dt_save, dt)
 
 
-def _check_stopping_criteria(stopping_criteria):
-    """
-    The kernels stop a particle when it leaves s < 1, and nothing else. Accept
-    that criterion, or none, so that a call written for the CPU tracers runs
-    unchanged; refuse anything the kernels cannot honor.
-    """
-    if stopping_criteria is None or len(stopping_criteria) == 0:
-        return
-    if len(stopping_criteria) == 1 and (
-        isinstance(stopping_criteria[0], MaxToroidalFluxStoppingCriterion)
-        and getattr(stopping_criteria[0], "max_s", None) == 1.0
-    ):
-        return
-    raise NotImplementedError(
-        "CATAPULT stops particles at s = 1 only; pass "
-        "stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)] or None"
-    )
-
-
 def _one_tmax(tmax):
     """The single tmax trajectory saving needs; per-particle values are refused."""
     if np.ptp(tmax) != 0:
@@ -746,9 +726,9 @@ def _cpu_format(inits, parallel_speeds, bodies, tmax):
 
     res_tys[i] has rows (t, x1, x2, x3, vpar): the initial state, then the
     rows of bodies[i]. res_hits[i] is a single row (t, -1, x1, x2, x3, vpar)
-    at the final state of a lost particle, matching a CPU run with
-    stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)], and an empty
-    array otherwise. Everything is returned in float64.
+    at the final state of a lost particle, as the CPU tracer records a hit on
+    its first stopping criterion, and an empty array otherwise. Everything is
+    returned in float64.
     """
     nparticles = inits.shape[0]
     first = np.column_stack(
@@ -780,7 +760,6 @@ def trace_particles_boozer_gpu(
     ns=None,
     ntheta=None,
     nzeta=None,
-    stopping_criteria=None,
     dt_save=1e-6,
     forget_exact_path=False,
     dt=None,
@@ -805,10 +784,6 @@ def trace_particles_boozer_gpu(
         relative tolerance
     ns, ntheta, nzeta: interpolant resolution, only when field is not a
         CatapultBoozerField
-    stopping_criteria: the kernel stops particles at s = 1 and nothing else,
-        so this must be None or [MaxToroidalFluxStoppingCriterion(1.0)]; the
-        argument is accepted so that a call written for the CPU tracer runs
-        unchanged
     dt_save: interval at which to record the trajectory when
         forget_exact_path is False
     forget_exact_path: if True, keep only the initial and final state of each
@@ -828,9 +803,12 @@ def trace_particles_boozer_gpu(
           in (-pi, pi], and zeta is wrapped to [0, 2 pi).
         - res_hits: a list with one array per particle: a single row
           (t, -1, s, theta, zeta, vpar) at the final state of a lost
-          particle, as for stopping_criteria[0] on the CPU, or an empty array.
+          particle, or an empty array. The kernel stops particles at s = 1
+          and nowhere else, which is the CPU tracer's
+          MaxToroidalFluxStoppingCriterion(1.0), so the row's index is -1 as
+          for a hit on the CPU's first stopping criterion; there is no
+          stopping_criteria argument.
     """
-    _check_stopping_criteria(stopping_criteria)
     cfield = _catapult_boozer(field, ns, ntheta, nzeta, np.asarray(stz_inits).dtype)
     nparticles = stz_inits.shape[0]
     tmax = _per_particle(tmax, nparticles, np.float64, None)
@@ -866,7 +844,6 @@ def trace_particles_boozer_perturbed_gpu(
     ns=None,
     ntheta=None,
     nzeta=None,
-    stopping_criteria=None,
     forget_exact_path=True,
 ):
     """
@@ -893,7 +870,6 @@ def trace_particles_boozer_perturbed_gpu(
     tol: tolerance for the ODE solver
     ns, ntheta, nzeta: interpolant resolution, only when perturbed_field is
         not a CatapultPerturbedBoozerField
-    stopping_criteria: as for trace_particles_boozer_gpu
     forget_exact_path: must be True. The kernel starts every launch at t = 0
         of the waves' phase, so trajectories cannot yet be saved in chunks
         as they are for equilibrium fields; the default differs from the CPU
@@ -903,7 +879,6 @@ def trace_particles_boozer_perturbed_gpu(
         (res_tys, res_hits) as for trace_particles_boozer_gpu, each res_tys
         entry holding the initial and final state.
     """
-    _check_stopping_criteria(stopping_criteria)
     if not forget_exact_path:
         raise NotImplementedError(
             "trajectories in a perturbed field cannot be saved in chunks, since "
