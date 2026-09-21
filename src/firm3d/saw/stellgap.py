@@ -13,8 +13,8 @@ class Continuum:
     r"""Configure a cosine-basis shear Alfvén continuum calculation.
 
     Inputs are validated and the coordinate splines are copied for local
-    sampling. A direct-quadrature matrix reference is available; fast assembly
-    and eigensolves will be added in subsequent steps.
+    sampling. FFT matrix assembly and a direct-quadrature reference are
+    available; convergence checks and eigensolves will follow.
 
     Args:
         field (BoozerRadialInterpolant): Stellarator-symmetric equilibrium with
@@ -585,6 +585,108 @@ class Continuum:
             zeta_indices = (-selected[:, 1] // self._nfp) % nzeta
             grid[kind + "_indices"] = (theta_indices, zeta_indices)
         return grid
+
+    def _fourier_moments(self, basis, grid, geometry):
+        """Extract the cosine moments needed for the retained basis.
+
+        Args:
+            basis (dict): The result of ``_plan_basis()`` for this calculation.
+            grid (dict): The corresponding ``_plan_angular_grid()`` result.
+            geometry (dict): Positive finite real ``A`` and ``W0`` arrays,
+                sampled on this grid over one field period.
+
+        Returns:
+            dict: Real (N, N) arrays ``A_difference``, ``A_sum``,
+            ``W0_difference``, and ``W0_sum``. Each entry is the normalized
+            full-torus average of the weight times cos(m*theta - n*zeta),
+            at the indicated pairwise mode. Forbidden moments are zero.
+
+        Raises:
+            ValueError: If weights have invalid values or shapes, or the
+                transform produces nonfinite values.
+        """
+        moments = {}
+        for name in ("A", "W0"):
+            weight = np.asarray(geometry[name])
+            if (
+                weight.shape != grid["shape"]
+                or not np.issubdtype(weight.dtype, np.number)
+                or np.iscomplexobj(weight)
+                or not np.all(np.isfinite(weight))
+                or np.any(weight <= 0)
+            ):
+                raise ValueError(
+                    f"{name} must be finite and positive with shape {grid['shape']}."
+                )
+            try:
+                with np.errstate(over="raise", invalid="raise", divide="raise"):
+                    coefficients = np.fft.fft2(weight / weight.size)
+            except FloatingPointError as error:
+                raise ValueError(
+                    f"{name} Fourier transform failed: {error}."
+                ) from error
+            if not np.all(np.isfinite(coefficients)):
+                raise ValueError(f"{name} Fourier transform produced nonfinite values.")
+            for kind in ("difference", "sum"):
+                allowed = basis[kind + "_allowed"]
+                values = np.zeros(allowed.shape)
+                values[allowed] = coefficients.real[grid[kind + "_indices"]]
+                moments[name + "_" + kind] = values
+            del coefficients
+        return moments
+
+    def _assemble_moments(self, basis, moments, iota):
+        """Assemble real matrices from cosine sum and difference moments.
+
+        Args:
+            basis (dict): The result of ``_plan_basis()`` for this calculation.
+            moments (dict): The corresponding ``_fourier_moments()`` result.
+            iota (float): Finite rotational transform on the sampled surface.
+
+        Returns:
+            tuple: Real (N, N) stiffness K and density-independent mass M0,
+            with units 1/m and m/T^2 and normalized full-torus averaging.
+
+        Raises:
+            ValueError: If moments or iota are invalid, or arithmetic produces
+                nonfinite matrices.
+
+        The cosine product gives M0_ij = a_i*a_j*(W0_difference + W0_sum)/2.
+        The sine derivative product gives
+        K_ij = a_i*a_j*kappa_i*kappa_j*(A_difference - A_sum)/2,
+        where kappa_j = iota*m_j - n_j. Both triangles use these formulas.
+        """
+        if not isinstance(iota, Real) or not np.isfinite(iota):
+            raise ValueError("iota must be a finite real scalar.")
+        shape = (len(self.modes), len(self.modes))
+        arrays = {}
+        for name in ("A_difference", "A_sum", "W0_difference", "W0_sum"):
+            values = np.asarray(moments[name])
+            if (
+                values.shape != shape
+                or not np.issubdtype(values.dtype, np.number)
+                or np.iscomplexobj(values)
+                or not np.all(np.isfinite(values))
+            ):
+                raise ValueError(
+                    f"{name} must be a finite real array of shape {shape}."
+                )
+            arrays[name] = values.astype(float, copy=False)
+        try:
+            with np.errstate(over="raise", invalid="raise", divide="raise"):
+                normalization = basis["normalization"]
+                factors = np.outer(normalization, normalization) / 2
+                parallel_numbers = iota * self.modes[:, 0] - self.modes[:, 1]
+                M0 = arrays["W0_difference"] + arrays["W0_sum"]
+                M0 *= factors
+                K = arrays["A_difference"] - arrays["A_sum"]
+                K *= factors
+                K *= np.outer(parallel_numbers, parallel_numbers)
+        except FloatingPointError as error:
+            raise ValueError(f"Fourier matrix assembly failed: {error}.") from error
+        if not np.all(np.isfinite(K)) or not np.all(np.isfinite(M0)):
+            raise ValueError("Fourier matrix assembly produced nonfinite matrices.")
+        return K, M0
 
     def _validate_surfaces(self, surfaces):
         """Return a copy of the requested surfaces without extrapolating."""
