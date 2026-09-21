@@ -13,7 +13,8 @@ class Continuum:
     r"""Configure a cosine-basis shear Alfvén continuum calculation.
 
     Inputs are validated and the coordinate splines are copied for local
-    sampling. Matrix assembly and eigensolves will be added in subsequent steps.
+    sampling. A direct-quadrature matrix reference is available; fast assembly
+    and eigensolves will be added in subsequent steps.
 
     Args:
         field (BoozerRadialInterpolant): Stellarator-symmetric equilibrium with
@@ -382,6 +383,91 @@ class Continuum:
             "orientation": orientation,
             "iota": iota,
         }
+
+    def _assemble_quadrature(self, theta, zeta, geometry):
+        """Assemble reference matrices using a uniform full-torus angular average.
+
+        Args:
+            theta (array-like): Uniform poloidal grid on [0, 2*pi), starting at
+                zero and excluding the upper endpoint.
+            zeta (array-like): Uniform toroidal grid on [0, 2*pi), also starting
+                at zero and excluding the upper endpoint. Use the full torus.
+            geometry (dict): Positive finite real ``A`` and ``W0`` arrays of
+                shape (len(theta), len(zeta)) and a finite scalar ``iota``, as
+                returned by ``_sample_geometry`` on these grids.
+
+        Returns:
+            tuple: Real (N, N) stiffness K and density-independent mass M0.
+            K uses the derivative d/dzeta + iota*d/dtheta of each normalized
+            cosine basis function. Both matrices use the average 1/Nq, where
+            Nq is the number of grid points; their units are 1/m and m/T^2.
+
+        Raises:
+            ValueError: If grids, weights, or iota are invalid, or arithmetic
+                produces nonfinite values.
+
+        This reference for small validation cases allocates Nq-by-N arrays.
+        An undersampled basis can give a singular mass matrix.
+        """
+        grids = []
+        for name, angles in (("theta", theta), ("zeta", zeta)):
+            angles = np.asarray(angles)
+            if (
+                angles.ndim != 1
+                or angles.size == 0
+                or not np.issubdtype(angles.dtype, np.number)
+                or np.iscomplexobj(angles)
+                or not np.all(np.isfinite(angles))
+            ):
+                raise ValueError(f"{name} must be a finite nonempty real 1D array.")
+            expected = 2 * np.pi * np.arange(angles.size) / angles.size
+            if not np.allclose(angles, expected, rtol=0, atol=1e-12):
+                raise ValueError(
+                    f"{name} must be a uniform full-torus grid on [0, 2*pi)."
+                )
+            grids.append(angles)
+        theta, zeta = grids
+        shape = (len(theta), len(zeta))
+        weights = {}
+        for name in ("A", "W0"):
+            array = np.asarray(geometry[name])
+            if (
+                array.shape != shape
+                or not np.issubdtype(array.dtype, np.number)
+                or np.iscomplexobj(array)
+                or not np.all(np.isfinite(array))
+                or np.any(array <= 0)
+            ):
+                raise ValueError(
+                    f"{name} must be finite and positive with shape {shape}."
+                )
+            weights[name] = array
+        iota = geometry["iota"]
+        if not isinstance(iota, Real) or not np.isfinite(iota):
+            raise ValueError("iota must be a finite real scalar.")
+
+        try:
+            with np.errstate(over="raise", invalid="raise", divide="raise"):
+                theta_mesh, zeta_mesh = np.meshgrid(theta, zeta, indexing="ij")
+                phase = theta_mesh.ravel()[:, None] * self.modes[:, 0]
+                phase -= zeta_mesh.ravel()[:, None] * self.modes[:, 1]
+                normalization = np.full(len(self.modes), np.sqrt(2.0))
+                normalization[np.all(self.modes == 0, axis=1)] = 1.0
+                parallel_numbers = iota * self.modes[:, 0] - self.modes[:, 1]
+                basis_values = np.cos(phase) * normalization
+                basis_derivatives = -np.sin(phase) * (normalization * parallel_numbers)
+
+                weighted_basis = np.sqrt(weights["W0"].ravel())[:, None] * basis_values
+                weighted_derivatives = (
+                    np.sqrt(weights["A"].ravel())[:, None] * basis_derivatives
+                )
+                M0 = (weighted_basis.T @ weighted_basis) / theta_mesh.size
+                K = (weighted_derivatives.T @ weighted_derivatives) / theta_mesh.size
+                if not np.all(np.isfinite(K)) or not np.all(np.isfinite(M0)):
+                    raise ValueError("Direct quadrature produced nonfinite matrices.")
+        except FloatingPointError as error:
+            raise ValueError(f"Direct quadrature failed: {error}.") from error
+        return K, M0
 
     def _plan_basis(self):
         """Plan cosine normalization and all pairwise Fourier moment indices.
