@@ -265,10 +265,14 @@ def save_trajectories_boozer_gpu(
     Trace particles in Boozer coordinates using CATAPULT, saving the
     trajectory of each particle every dt_save.
 
-    Arguments are as for trace_particles_boozer_gpu, plus dt_save, the
-    interval at which to record the state. Equilibrium fields only: the
-    kernel restarts time at each chunk, which a wave's phase cannot follow, so
-    a CatapultPerturbedBoozerField is refused.
+    This is how trace_particles_boozer_gpu saves a trajectory; it returns the
+    kernel's own rows rather than the CPU tracers' format. Arguments are as
+    for trace_particles_boozer_gpu, plus dt_save, the interval at which to
+    record the state, and dt and mu, the step and the magnetic moment to
+    start from, which continue a run that an earlier call stopped.
+
+    Equilibrium fields only: the kernel restarts time at each chunk, which a
+    wave's phase cannot follow, so a CatapultPerturbedBoozerField is refused.
 
     Returns:
         A list with one entry per particle: an array of shape (nsaved, 7)
@@ -330,8 +334,11 @@ def save_trajectories_cartesian_gpu(
     Trace particles in Cartesian coordinates using CATAPULT, saving the
     trajectory of each particle every dt_save.
 
-    Arguments are as for trace_particles_cartesian_gpu, plus dt_save, the
-    interval at which to record the state.
+    This is how trace_particles_cartesian_gpu saves a trajectory; it returns
+    the kernel's own rows rather than the CPU tracers' format. Arguments are
+    as for trace_particles_cartesian_gpu, plus dt_save, the interval at which
+    to record the state, and dt and mu, the step and the magnetic moment to
+    start from, which continue a run that an earlier call stopped.
 
     Returns:
         A list with one entry per particle: an array of shape (nsaved, 7)
@@ -432,8 +439,6 @@ def trace_particles_boozer_gpu(
     tol=1e-9,
     dt_save=1e-6,
     forget_exact_path=False,
-    dt=None,
-    mu=None,
 ):
     """
     Trace particles in an equilibrium field in Boozer coordinates using
@@ -457,11 +462,6 @@ def trace_particles_boozer_gpu(
         particle, in a single launch; if False, save the trajectory every
         dt_save (see save_trajectories_boozer_gpu for how the save times
         relate to the kernel's steps)
-    dt: the initial time step size for the solver (optional; chosen from the
-        maximum stable step size if not given)
-    mu: the magnetic moment of each particle (optional; computed from the
-        initial conditions if not given, which is what a particle starting
-        from rest in the perpendicular direction requires)
 
     Returns: 2 element tuple containing
         - res_tys: a list with one (ntimesteps, 5) array per particle of rows
@@ -492,19 +492,19 @@ def trace_particles_boozer_gpu(
         "charge": charge,
         "vtotal": _vtotal(Ekin, mass),
         "tol": tol,
-        "dt": dt,
-        "mu": mu,
     }
     if forget_exact_path:
         # one launch, in the pseudo-Cartesian coordinates the kernel
-        # integrates in, and back
+        # integrates in, and back. The step and the magnetic moment are the
+        # kernel's to choose: mu follows from Ekin and the parallel speed,
+        # as it does for trace_particles_boozer.
         final = _launch_boozer(
             field,
             _to_pseudo_cartesian(stz_inits, dtype),
             parallel_speeds,
             tmax,
-            _per_particle(dt, nparticles, dtype, -1.0),
-            _per_particle(mu, nparticles, dtype, -1.0),
+            _per_particle(None, nparticles, dtype, -1.0),
+            _per_particle(None, nparticles, dtype, -1.0),
             mass,
             charge,
             kwargs["vtotal"],
@@ -529,7 +529,6 @@ def trace_particles_boozer_perturbed_gpu(
     Ekin=None,
     tol=1e-9,
     forget_exact_path=True,
-    dt=None,
 ):
     """
     Trace particles in a field with shear Alfven waves in Boozer coordinates
@@ -600,7 +599,7 @@ def trace_particles_boozer_perturbed_gpu(
         _to_pseudo_cartesian(stz_inits, dtype),
         parallel_speeds,
         tmax,
-        _per_particle(dt, nparticles, dtype, -1.0),
+        _per_particle(None, nparticles, dtype, -1.0),
         mus,
         mass,
         charge,
@@ -621,8 +620,6 @@ def trace_particles_cartesian_gpu(
     tol=1e-9,
     dt_save=1e-6,
     forget_exact_path=False,
-    dt=None,
-    mu=None,
 ):
     """
     Trace particles in Cartesian coordinates using CATAPULT. The arguments
@@ -641,7 +638,7 @@ def trace_particles_cartesian_gpu(
     Ekin: kinetic energy in Joule, one value for all particles
     tol: tolerance for the ODE solver, used as both the absolute and the
         relative tolerance
-    dt_save, forget_exact_path, dt, mu: as for trace_particles_boozer_gpu
+    dt_save, forget_exact_path: as for trace_particles_boozer_gpu
 
     Returns: 2 element tuple containing
         - res_tys: a list with one (ntimesteps, 5) array per particle of rows
@@ -663,8 +660,6 @@ def trace_particles_cartesian_gpu(
         "charge": charge,
         "vtotal": _vtotal(Ekin, mass),
         "tol": tol,
-        "dt": dt,
-        "mu": mu,
     }
     if forget_exact_path:
         bodies = _launch_cartesian(
@@ -672,8 +667,8 @@ def trace_particles_cartesian_gpu(
             xyz_inits,
             parallel_speeds,
             tmax,
-            _per_particle(dt, nparticles, dtype, -1.0),
-            _per_particle(mu, nparticles, dtype, -1.0),
+            _per_particle(None, nparticles, dtype, -1.0),
+            _per_particle(None, nparticles, dtype, -1.0),
             mass,
             charge,
             kwargs["vtotal"],

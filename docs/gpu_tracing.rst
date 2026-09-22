@@ -65,11 +65,14 @@ save time that falls inside one step gets no row. Choose ``dt_save`` above the
 step size. Trajectories cannot yet be saved this way in a perturbed field,
 whose phase restarts with each chunk.
 
-``save_trajectories_*_gpu`` return the trajectories as the kernel writes
-them, ``(t, s, theta, zeta, vpar, dt, mu)`` per row: the last two columns are
-the state the solver would continue from, which the tracers drop to return
-the CPU format. The tracers take ``dt`` and ``mu`` for the same reason, so a
-run can be continued from where an earlier one stopped.
+``save_trajectories_*_gpu``, which is how the tracers save a trajectory,
+returns the kernel's own rows instead, ``(t, s, theta, zeta, vpar, dt, mu)``:
+the last two columns are the step and the magnetic moment the solver would
+continue from, and the same two can be passed in, so that a run picks up
+where an earlier one stopped. The tracers do not take them. As on the CPU,
+the magnetic moment is an argument only where the waves make the energy
+change, as ``mus`` of ``trace_particles_boozer_perturbed_gpu``; elsewhere it
+follows from ``Ekin`` and the parallel speed.
 
 Single precision
 ----------------

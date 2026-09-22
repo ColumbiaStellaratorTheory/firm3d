@@ -167,7 +167,7 @@ class TestCatapultPerturbedBoozerField(unittest.TestCase):
             )
         with self.assertRaises(ValueError):
             trace_particles_boozer_gpu(
-                equilibrium, stz, vpar, mu=np.ones(1), forget_exact_path=True
+                equilibrium, stz, vpar, tmax=np.ones(1), forget_exact_path=True
             )
         with self.assertRaises(ValueError):
             trace_particles_boozer_perturbed_gpu(perturbed, stz, vpar, mus[:1])
