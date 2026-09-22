@@ -15,6 +15,7 @@ from simsopt.util.constants import (
     FUSION_ALPHA_PARTICLE_ENERGY,
 )
 
+from firm3d.catapult.field import CatapultCartesianField
 from firm3d.catapult.tracing import trace_particles_cartesian_gpu
 from firm3d.field.tracing_helpers import (
     initialize_velocity_uniform,
@@ -23,6 +24,8 @@ from firm3d.field.tracing_helpers import (
 degree = 3  # degree of interpolant
 n = 16  # resolution of interpolant
 order = 12  # order of coil curves
+nparticles = 1000
+tmax = 1e-5
 
 filename = "../inputs/coils.curves_22_7_21"
 wout_filename = "../inputs/wout_aten_rescaled.nc"
@@ -55,42 +58,39 @@ bsh = InterpolatedField(
 )
 
 # sample particles from surface
-nparticles = 1000
 xyz, _ = draw_uniform_on_surface(surf_launch, nparticles, safetyfactor=10)
 
 vpar0 = np.sqrt(2 * FUSION_ALPHA_PARTICLE_ENERGY / ALPHA_PARTICLE_MASS)
 vpar_inits = initialize_velocity_uniform(vpar0, nparticles)
 
-tmax = 1e-5
-last_time = trace_particles_cartesian_gpu(
-    bsh,
-    sc_particle,
+# tabulate the field and the boundary distance for the GPU once
+field_gpu = CatapultCartesianField(bsh, sc_particle)
+res_tys, res_hits = trace_particles_cartesian_gpu(
+    field_gpu,
     xyz,
     vpar_inits,
     tmax=tmax,
     mass=ALPHA_PARTICLE_MASS,
     charge=ALPHA_PARTICLE_CHARGE,
-    vtotal=vpar0,
+    Ekin=FUSION_ALPHA_PARTICLE_ENERGY,
     tol=1e-8,
+    forget_exact_path=True,
 )
+final = np.array([traj[-1] for traj in res_tys])
 particle_data = pd.DataFrame(
     {
         "x_start": xyz[:, 0],
         "y_start": xyz[:, 1],
         "z_start": xyz[:, 2],
         "vpar_start": vpar_inits,
-        "x_end": last_time[:, 1],
-        "y_end": last_time[:, 2],
-        "z_end": last_time[:, 3],
-        "vpar_end": last_time[:, 4],
-        "last_time": last_time[:, 0],
-        "dt_end": last_time[:, 5],
+        "last_time": final[:, 0],
+        "x_end": final[:, 1],
+        "y_end": final[:, 2],
+        "z_end": final[:, 3],
+        "vpar_end": final[:, 4],
     }
 )
 particle_data.to_csv("./particle_data.csv")
 
-
-did_leave = [t < tmax for t in particle_data["last_time"]]
-loss_frac = sum(did_leave) / len(did_leave)
 print(f"Number of particles= {nparticles}")
-print(f"Loss fraction: {loss_frac:.3f}")
+print(f"Loss fraction: {np.mean([len(hits) > 0 for hits in res_hits]):.3f}")

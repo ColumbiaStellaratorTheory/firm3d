@@ -22,6 +22,7 @@ The core routines are based on `SIMSOPT <https://simsopt.readthedocs.io>`_, but 
    poincare_maps
    stopping_criteria
    trajectory_saving
+   gpu_tracing
    magnetic_axis
    solvers
    api

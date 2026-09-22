@@ -1,8 +1,6 @@
 # import time
 import unittest
-
 import numpy as np
-
 import firm3dpp
 
 try:
@@ -49,8 +47,79 @@ from firm3d.util.constants import (
 from firm3d.util.constants import (
     FUSION_ALPHA_PARTICLE_ENERGY as ENERGY,
 )
+from firm3d.catapult.field import (
+    CatapultBoozerField,
+    CatapultCartesianField,
+    CatapultPerturbedBoozerField,
+)
+from firm3d.catapult.tracing import (
+    save_trajectories_boozer_gpu,
+    trace_particles_boozer_gpu,
+    trace_particles_boozer_perturbed_gpu,
+    trace_particles_cartesian_gpu,
+)
+from firm3d.trajectory_helpers import compute_loss_fraction
 
 HAS_CUDA = hasattr(firm3dpp, "test_gpu_interpolation")
+n_test_pts = 10000
+
+
+def check_single_precision(testcase, run, tmax, columns, factor=3.0):
+    """
+    Single precision holds to the orbits' own sensitivity: run(precision, tol)
+    returns the (nparticles, 5) final states, and per column the median and
+    90th percentile of |single - double| are within factor of those of
+    |double at tol/10 - double|. That the single precision kernel ran at all
+    is checked by the states differing: were a float32 array converted to
+    double by the wrong binding, they would be identical.
+    """
+    out64 = run("double", 1e-8)
+    out32 = run("single", 1e-8)
+    tighter = run("double", 1e-9)
+    diff = out32[:, columns] - out64[:, columns]
+    reference = tighter[:, columns] - out64[:, columns]
+    testcase.assertTrue(np.any(diff != 0), "single precision matched double exactly")
+    survived = out64[:, 0] >= 0.999 * tmax
+    testcase.assertTrue(survived.any())
+    testcase.assertTrue(np.all(out32[survived, 0] >= 0.999 * tmax))
+    for c in range(diff.shape[1]):
+        for q in (50, 90):
+            got = np.percentile(np.abs(diff[:, c]), q)
+            ref = np.percentile(np.abs(reference[:, c]), q)
+            testcase.assertLessEqual(
+                got,
+                factor * ref + 1e-12,
+                f"column {columns[c]}, p{q}: {got:.3e} exceeds {factor} x {ref:.3e}",
+            )
+
+
+def pseudo_cartesian(stz):
+    """(s, theta, zeta) rows as the (s cos theta, s sin theta, zeta) the kernel uses."""
+    return np.column_stack(
+        (stz[:, 0] * np.cos(stz[:, 1]), stz[:, 0] * np.sin(stz[:, 1]), stz[:, 2])
+    )
+
+
+def final_states(res_tys, boozer=True):
+    """
+    The last row of each trajectory, (t, s, theta, zeta, vpar), with the
+    position in pseudo-Cartesian coordinates when boozer is True, so that
+    theta's branch cut cannot separate two nearby states.
+    """
+    final = np.array([traj[-1] for traj in res_tys])
+    if boozer:
+        final[:, 1:4] = pseudo_cartesian(final[:, 1:4])
+    return final
+
+
+def sample_test_points(n_test_pts):
+    np.random.seed(1)
+    # generate test points
+    s = np.random.uniform(low=0, high=1.1, size=(n_test_pts, 1))
+    t = np.random.uniform(low=0, high=2 * np.pi, size=(n_test_pts, 1))
+    z = np.random.uniform(low=0, high=2 * np.pi, size=(n_test_pts, 1))
+    stz = np.hstack((s, t, z))
+    return stz
 
 
 def get_field(boozmn_filename, n_metagrid_pts, vacuum):
@@ -67,36 +136,6 @@ def get_field(boozmn_filename, n_metagrid_pts, vacuum):
     # Even though bri isn't used further in this script, we need to return it,
     # or else it is garbage-collected, resulting in an error.
     return bri, field, nfp
-
-
-def construct_interpolant(field, nfp, saw_present=False):
-    ns, ntheta, nzeta = 15, 15, 15
-    if isinstance(field, ShearAlfvenWavesSuperposition):
-        field = field.B0
-        srange, trange, zrange, quad_info, maxJ = boozer_saw_interpolant(
-            field, nfp, ns, ntheta, nzeta
-        )
-    else:  # the field is an InterpolatedBoozerField (unperturbed)
-        if field.field_type == "vac":
-            srange, trange, zrange, quad_info, maxJ = boozer_interpolant(
-                field, nfp, ns, ntheta, nzeta, vacuum=True
-            )
-        elif field.field_type == "":  # implies finite beta
-            srange, trange, zrange, quad_info, maxJ = boozer_interpolant(
-                field, nfp, ns, ntheta, nzeta, vacuum=False
-            )
-
-    return srange, trange, zrange, quad_info, maxJ
-
-
-def sample_test_points(n_test_pts):
-    np.random.seed(1865)
-    # generate test points
-    s = np.random.uniform(low=0, high=1.1, size=(n_test_pts, 1))
-    t = np.random.uniform(low=0, high=2 * np.pi, size=(n_test_pts, 1))
-    z = np.random.uniform(low=0, high=2 * np.pi, size=(n_test_pts, 1))
-    stz = np.hstack((s, t, z))
-    return stz
 
 
 def cartesian_rhs(position, vpar, field, mass, charge, velocity):
@@ -122,409 +161,477 @@ def cartesian_rhs(position, vpar, field, mass, charge, velocity):
     return out
 
 
-def test_interpolant(
-    field, nfp, stz, saw_present=False, surf_classifier=None, tol=1e-8
-):
-    # if in Cartesian coordinates
-    if isinstance(field, InterpolatedField):
-        rrange, phirange, zrange, quad_info = cartesian_interpolant(
-            field, surf_classifier
-        )
-        field.set_points_cyl(stz)
-        # Quantities to interpolate
-        B = field.B_cyl()
-        GradAbsB = field.GradAbsB_cyl()
+class CATAPULTField:
+    def __init__(
+        self, field, ns, ntheta, nzeta, nfp, saw_filename=None, sc_classifier=None
+    ):
 
-        # Compare interpolation of B and GradAbsB
-        cpu_interpolation = np.hstack((B, GradAbsB))
-        gpu_interpolation = firm3dpp.test_gpu_interpolation(
-            quad_info,
-            rrange,
-            phirange,
-            zrange,
-            stz.copy(),
-            "cartesian_vacuum",
-            stz.shape[0],
-        )
-
-        gpu_interpolation = np.reshape(gpu_interpolation, (stz.shape[0], -1))
-        gpu_interpolation = gpu_interpolation[:, 0:6]
-
-    else:  # Boozer coordinates
-        srange, trange, zrange, quad_info, maxJ = construct_interpolant(
-            field, nfp, saw_present=saw_present
-        )
-
-        # evaluate interpolants
+        ### Set up interpolant grid
+        self.field_type = None
+        # if this is a SAW, get the underlying field
         if isinstance(field, ShearAlfvenWavesSuperposition):
-            field = field.B0
-            field.set_points(stz)
-            modB = field.modB()
-            modB_derivs = field.modB_derivs()
-            G = field.G()
-            dGds = field.dGds()
-            I = field.I()
-            dIds = field.dIds()
-            iota = field.iota()
-            diotads = field.diotads()
-            cpu_interpolation = np.hstack(
-                (modB, modB_derivs, G, dGds, I, dIds, iota, diotads)
-            )
-
-            ## evaluate GPU interpolant
-            stz = np.ascontiguousarray(stz)
-            gpu_interpolation = firm3dpp.test_gpu_interpolation(
-                quad_info,
-                srange,
-                trange,
-                zrange,
-                stz.copy(),
-                "boozer_saw_vacuum",
-                stz.shape[0],
-            )
-        else:
-            if field.field_type == "vac":
-                # evaluate CPU interpolant
-                field.set_points(stz)
-                modB = field.modB()
-                modB_derivs = field.modB_derivs()
-                G = field.G()
-                iota = field.iota()
-                cpu_interpolation = np.hstack((modB, modB_derivs, G, iota))
-
-                ## evaluate GPU interpolant
-                stz = np.ascontiguousarray(stz)
-                gpu_interpolation = firm3dpp.test_gpu_interpolation(
-                    quad_info,
-                    srange,
-                    trange,
-                    zrange,
-                    stz.copy(),
-                    "boozer_vacuum",
-                    stz.shape[0],
-                )
-            elif field.field_type == "":  # implies finite beta
-                # evaluate CPU interpolant
-                field.set_points(stz)
-                modB = field.modB()
-                modB_derivs = field.modB_derivs()
-                G = field.G()
-                dGds = field.dGds()
-                I = field.I()
-                dIds = field.dIds()
-                iota = field.iota()
-                K = field.K()
-                K_derivs = field.K_derivs()
-                cpu_interpolation = np.hstack(
-                    (modB, modB_derivs, G, dGds, I, dIds, iota, K, K_derivs)
-                )
-
-                # evaluate GPU interpolant
-                stz = np.ascontiguousarray(stz)
-                gpu_interpolation = firm3dpp.test_gpu_interpolation(
-                    quad_info,
-                    srange,
-                    trange,
-                    zrange,
-                    stz.copy(),
-                    "boozer",
-                    stz.shape[0],
-                )
-
-        gpu_interpolation = np.reshape(gpu_interpolation, (stz.shape[0], -1))
-
-    # compute error
-    error_is_small = np.isclose(
-        gpu_interpolation, cpu_interpolation, rtol=tol, atol=tol
-    ).all()
-    error = np.abs(cpu_interpolation - gpu_interpolation) / (
-        np.abs(cpu_interpolation) + 1
-    )
-    if error.max() > tol:
-        print("tolerance not satisfied in interpolant")
-        row_idx = np.unravel_index(np.argmax(error), error.shape)[0]
-        print("stz:", stz[row_idx, :])
-        print("cpu:", cpu_interpolation[row_idx, :])
-        print("gpu:", gpu_interpolation[row_idx, :])
-        print("error:", error[row_idx, :])
-
-    return error_is_small
-
-
-def test_derivatives(
-    field,
-    nfp,
-    stz,
-    vpar,
-    vtotal,
-    psi0=0,
-    time=None,
-    saw_present=False,
-    saw_filename=None,
-    surf_classifier=None,
-    tol=1e-8,
-):
-    if isinstance(field, InterpolatedField):  # Cartesian
-        rrange, phirange, zrange, quad_info = cartesian_interpolant(
-            field, surf_classifier
-        )
-        gpu_derivs = firm3dpp.test_derivatives_cartesian(
-            quad_info,
-            rrange,
-            phirange,
-            zrange,
-            stz,
-            vpar,
-            vtotal,
-            MASS,
-            CHARGE,
-            stz.shape[0],
-        )
-        gpu_derivs = np.reshape(gpu_derivs, (stz.shape[0], 4))
-        cpu_derivs = np.empty((stz.shape[0], 4))
-        for i in range(stz.shape[0]):
-            cpu_derivs[i, :] = cartesian_rhs(
-                stz[i, :], vpar[i], field, MASS, CHARGE, vtotal
-            )
-
-    else:
-        srange, trange, zrange, quad_info, maxJ = construct_interpolant(field, nfp)
-        ## evaluate derivatives
-        if isinstance(field, ShearAlfvenWavesSuperposition):
-            assert time is not None, (
-                "time array must be provided when testing derivatives with SAW"
-            )
             assert saw_filename is not None, (
-                "saw filename must be provided when testing derivatives with SAW"
+                "SAW filename must be provided when testing derivatives with SAW"
             )
-            # evaluate CPU derivatives
-            cpu_derivs = np.empty((stz.shape[0], 4))
 
-            if field.B0.field_type == "vac":
-                for i in range(stz.shape[0]):
-                    cpu_derivs[i, :] = firm3dpp.simsopt_derivs_saw(
-                        field,
-                        stz[i, :],
-                        MASS,
-                        CHARGE,
-                        vtotal,
-                        vpar[i],
-                        time[i],
-                        "vacuum_saw",
-                    )
-            elif field.B0.field_type == "nok":  # NoK tracing
-                for i in range(stz.shape[0]):
-                    cpu_derivs[i, :] = firm3dpp.simsopt_derivs_saw(
-                        field,
-                        stz[i, :],
-                        MASS,
-                        CHARGE,
-                        vtotal,
-                        vpar[i],
-                        time[i],
-                        "nok_saw",
-                    )
-            else:
-                ValueError("Field type not recognized for SAW derivatives")
-
-            saw_nharmonics = 5
+            self.saw_nharmonics = 5
             ## load saw data as arrays
             saw_data = np.load(saw_filename, allow_pickle=True)
             saw_data = saw_data[()]
-            saw_omega = field.get_wave(0).omega
+            self.saw_omega = field.get_wave(0).omega
             s = field.get_wave(0).phihat.get_s_basis()
-            saw_srange = (s[0], s[-1], len(s))
+            self.saw_srange = (s[0], s[-1], len(s))
 
-            saw_m = [field.get_wave(i).Phim for i in range(saw_nharmonics)]
-            saw_n = [field.get_wave(i).Phin for i in range(saw_nharmonics)]
-            saw_phihats = np.ascontiguousarray(
+            self.saw_m = [field.get_wave(i).Phim for i in range(self.saw_nharmonics)]
+            self.saw_n = [field.get_wave(i).Phin for i in range(self.saw_nharmonics)]
+            self.saw_phihats = np.ascontiguousarray(
                 np.column_stack(
                     [
                         np.array([field.get_wave(i).phihat(s_val) for s_val in s])
-                        for i in range(saw_nharmonics)
+                        for i in range(self.saw_nharmonics)
                     ]
                 )
             )
-            ## evaluate GPU interpolant
-            stz = np.ascontiguousarray(stz)
-            vpar = np.ascontiguousarray(vpar)
-
-            if field.B0.field_type == "vac":
-                gpu_derivs = firm3dpp.test_derivatives_saw(
-                    quad_info,
-                    srange,
-                    trange,
-                    zrange,
-                    saw_omega,
-                    saw_srange,
-                    saw_m,
-                    saw_n,
-                    saw_phihats,
-                    saw_nharmonics,
-                    stz,
-                    vpar,
-                    time,
-                    vtotal,
-                    MASS,
-                    CHARGE,
-                    psi0,
-                    stz.shape[0],
-                )
-            elif field.B0.field_type == "nok":
-                gpu_derivs = firm3dpp.test_derivatives_saw_nok(
-                    quad_info,
-                    srange,
-                    trange,
-                    zrange,
-                    saw_omega,
-                    saw_srange,
-                    saw_m,
-                    saw_n,
-                    saw_phihats,
-                    saw_nharmonics,
-                    stz,
-                    vpar,
-                    time,
-                    vtotal,
-                    MASS,
-                    CHARGE,
-                    psi0,
-                    stz.shape[0],
-                )
-            else:
-                ValueError("Field type not recognized for SAW derivatives")
-        else:
-            if field.field_type == "vac":
-                # evaluate CPU derivatives
-                cpu_derivs = np.empty((stz.shape[0], 4))
-                for i in range(stz.shape[0]):
-                    cpu_derivs[i, :] = firm3dpp.simsopt_derivs_boozer(
-                        field, stz[i, :], MASS, CHARGE, vtotal, vpar[i], vacuum=True
-                    )
-
-                ## evaluate GPU interpolant
-                stz = np.ascontiguousarray(stz)
-                vpar = np.ascontiguousarray(vpar)
-                gpu_derivs = firm3dpp.test_derivatives_boozer(
-                    quad_info,
-                    srange,
-                    trange,
-                    zrange,
-                    stz.copy(),
-                    vpar,
-                    vtotal,
-                    MASS,
-                    CHARGE,
-                    psi0,
-                    stz.shape[0],
-                    vacuum=True,
-                )
-            elif field.field_type == "":  # implies finite beta
-                # evaluate CPU derivatives
-                cpu_derivs = np.empty((stz.shape[0], 4))
-                # start_time = time.time()
-                for i in range(stz.shape[0]):
-                    cpu_derivs[i, :] = firm3dpp.simsopt_derivs_boozer(
-                        field, stz[i, :], MASS, CHARGE, vtotal, vpar[i], vacuum=False
-                    )
-
-                ## evaluate GPU interpolant
-                stz = np.ascontiguousarray(stz)
-                vpar = np.ascontiguousarray(vpar)
-                gpu_derivs = firm3dpp.test_derivatives_boozer(
-                    quad_info,
-                    srange,
-                    trange,
-                    zrange,
-                    stz.copy(),
-                    vpar,
-                    vtotal,
-                    MASS,
-                    CHARGE,
-                    psi0,
-                    stz.shape[0],
-                    vacuum=False,
-                )
-        gpu_derivs = np.reshape(gpu_derivs, (stz.shape[0], 4))
-
-    error_is_small = np.isclose(gpu_derivs, cpu_derivs, rtol=tol, atol=tol).all()
-    error = np.abs(cpu_derivs - gpu_derivs) / (np.abs(cpu_derivs) + 1)
-
-    if not error_is_small:
-        row_idx = np.unravel_index(np.argmax(error), error.shape)[0]
-        print("stz:", stz[row_idx, :])
-        print("cpu:", cpu_derivs[row_idx, :])
-        print("gpu:", gpu_derivs[row_idx, :])
-        print("rel error:", error[row_idx, :])
-
-    return error_is_small
-
-
-def test_timestep(
-    field,
-    nfp,
-    stz,
-    vpar,
-    vtotal,
-    psi0=0,
-    time=None,
-    saw_filename=None,
-    tol=1e-8,
-    surf_classifier=None,
-):
-    if isinstance(field, InterpolatedField):  # Cartesian
-        rrange, phirange, zrange, quad_info = cartesian_interpolant(
-            field, surf_classifier
-        )
-        last_time = firm3dpp.test_timestep_cartesian(
-            quad_pts=quad_info,
-            rrange=rrange,
-            phirange=phirange,
-            zrange=zrange,
-            loc_init=stz,
-            m=MASS,
-            q=CHARGE,
-            vtotal=np.sqrt(2 * ENERGY / MASS),
-            vtang=vpar,
-            tol=1e-9,
-            nparticles=stz.shape[0],
-        )
-        gpu_final_positions = np.reshape(last_time, (stz.shape[0], 5))
-
-        rphiz = stz
-        r = rphiz[:, 0].reshape(-1, 1)
-        phi = rphiz[:, 1].reshape(-1, 1)
-        z = rphiz[:, 2].reshape(-1, 1)
-        x = r * np.cos(phi)
-        y = r * np.sin(phi)
-        xyz = np.hstack((x, y, z))
-        gc_tys, gc_zeta_hits = trace_particles(
-            field,
-            xyz,
-            vpar,
-            tmax=1e-2,
-            mass=MASS,
-            charge=CHARGE,
-            Ekin=ENERGY,
-            tol=1e-9,
-            stopping_criteria=[SimsoptIterationStoppingCriterion(1)],
-            forget_exact_path=True,
-        )
-        cpu_positions = np.array([x[-1] for x in gc_tys])
-
-    else:
-        srange, trange, zrange, quad_info, maxJ = construct_interpolant(field, nfp)
-
-        if isinstance(field, ShearAlfvenWavesSuperposition):
-            assert saw_filename is not None, (
-                "saw filename must be provided when testing timesteps with SAW"
+            self.saw_field = field
+            field = field.B0
+            range0, range1, range2, quad_info, maxJ = boozer_saw_interpolant(
+                field, nfp, ns, ntheta, nzeta
             )
-            # evaluate CPU timestep
-            field.B0.set_points(stz)
-            mu_init = (vtotal**2 - vpar**2) / (2 * field.B0.modB()[:, 0])
+            self.field_type = (
+                "boozer_saw_vacuum" if field.field_type == "vac" else "boozer_saw_nok"
+            )
+        elif isinstance(field, InterpolatedField):  # cartesian field
+            range0, range1, range2, quad_info = cartesian_interpolant(
+                field, sc_classifier
+            )
+            self.field_type = "cartesian_vacuum"
+        else:  # the field is an InterpolatedBoozerField (unperturbed)
+            if field.field_type == "vac":
+                range0, range1, range2, quad_info, maxJ = boozer_interpolant(
+                    field, nfp, ns, ntheta, nzeta, vacuum=True
+                )
+                self.field_type = "boozer_vacuum"
+            elif field.field_type == "":  # implies finite beta
+                range0, range1, range2, quad_info, maxJ = boozer_interpolant(
+                    field, nfp, ns, ntheta, nzeta, vacuum=False
+                )
+                self.field_type = "boozer"
+            else:
+                raise ValueError("Field type not recognized")
 
+        # set psi0 if in Boozer coordinates
+        self.psi0 = None
+        if self.field_type != "cartesian_vacuum":
+            self.psi0 = field.psi0
+
+        self.field = field
+        self.ns = ns
+        self.ntheta = ntheta
+        self.nzeta = nzeta
+        self.nfp = nfp
+
+        self.range0 = range0
+        self.range1 = range1
+        self.range2 = range2
+
+        self.quad_info = quad_info  # record interpolant data
+
+    def compute_gpu_interpolant(self, stz, dtype=np.float64):
+        # dtype selects the single or double precision kernel; the interpolant
+        # data and evaluation points must both carry it (noconvert bindings).
+        # test_gpu_interpolation converts (s, theta) to pseudo-Cartesian IN
+        # PLACE in the array it is given, so always pass a copy.
+        gpu_interpolation = firm3dpp.test_gpu_interpolation(
+            self.quad_info.astype(dtype),
+            self.range0,
+            self.range1,
+            self.range2,
+            np.array(stz, dtype=dtype, order="C"),
+            self.field_type,
+            stz.shape[0],
+        )
+        gpu_interpolation = gpu_interpolation.reshape((stz.shape[0], -1))
+
+        # remove surface classifier column
+        if self.field_type == "cartesian_vacuum":
+            gpu_interpolation = gpu_interpolation[:, 0:6]
+
+        return gpu_interpolation
+
+    def compute_cpu_interpolant(self, stz):
+        self.field.set_points(stz)
+        if self.field_type == "cartesian_vacuum":
+            self.field.set_points_cyl(stz)
+            cpu_interpolation = np.hstack(
+                (self.field.B_cyl(), self.field.GradAbsB_cyl())
+            )
+        elif self.field_type in ["boozer_saw_vacuum", "boozer_saw_nok"]:
+            cpu_interpolation = np.hstack(
+                (
+                    self.field.modB(),
+                    self.field.modB_derivs(),
+                    self.field.G(),
+                    self.field.dGds(),
+                    self.field.I(),
+                    self.field.dIds(),
+                    self.field.iota(),
+                    self.field.diotads(),
+                )
+            )
+        elif self.field_type == "boozer_vacuum":
+            cpu_interpolation = np.hstack(
+                (
+                    self.field.modB(),
+                    self.field.modB_derivs(),
+                    self.field.G(),
+                    self.field.iota(),
+                )
+            )
+        elif self.field_type == "boozer":
+            cpu_interpolation = np.hstack(
+                (
+                    self.field.modB(),
+                    self.field.modB_derivs(),
+                    self.field.G(),
+                    self.field.dGds(),
+                    self.field.I(),
+                    self.field.dIds(),
+                    self.field.iota(),
+                    self.field.K(),
+                    self.field.K_derivs(),
+                )
+            )
+        else:
+            raise ValueError("Field type not recognized in cpu interpolant")
+
+        return cpu_interpolation
+
+    def test_interpolant(self, stz, tol):
+        gpu_interpolation = self.compute_gpu_interpolant(stz)
+        cpu_interpolation = self.compute_cpu_interpolant(stz)
+
+        gpu_error_is_small = np.allclose(
+            gpu_interpolation, cpu_interpolation, rtol=tol, atol=tol
+        )
+        error = np.abs(cpu_interpolation - gpu_interpolation) / (
+            np.abs(cpu_interpolation) + 1
+        )
+        if error.max() > tol:
+            print("tolerance not satisfied in interpolant")
+            row_idx = np.unravel_index(np.argmax(error), error.shape)[0]
+            print(row_idx)
+            print("stz:", stz[row_idx, :])
+            print("cpu:", cpu_interpolation[row_idx, :])
+            print("gpu:", gpu_interpolation[row_idx, :])
+            print("error:", error[row_idx, :])
+        return gpu_error_is_small
+
+    def compute_gpu_derivatives(self, stz, vpar, vtotal, time=None, dtype=np.float64):
+        # dtype selects the single or double precision kernel; every T-typed
+        # array (interpolant data, positions, vpar, time, SAW phihats) must
+        # carry it, since the bindings are noconvert
+        quad_info = self.quad_info.astype(dtype)
+        # np.array (not ascontiguousarray) so a float64 call never aliases the
+        # caller's array: the derivative kernels convert positions in place
+        stz = np.array(stz, dtype=dtype, order="C")
+        vpar = np.ascontiguousarray(vpar, dtype=dtype)
+        if time is not None:
+            time = np.ascontiguousarray(time, dtype=dtype)
+        saw_phihats = (
+            self.saw_phihats.astype(dtype) if hasattr(self, "saw_phihats") else None
+        )
+        if self.field_type == "boozer_vacuum" or self.field_type == "boozer":
+            gpu_derivs_dbl = firm3dpp.test_derivatives_boozer(
+                quad_info,
+                self.range0,
+                self.range1,
+                self.range2,
+                stz.copy(),
+                vpar,
+                vtotal,
+                MASS,
+                CHARGE,
+                self.psi0,
+                stz.shape[0],
+                vacuum=(self.field_type == "boozer_vacuum"),
+            )
+        elif self.field_type == "boozer_saw_vacuum":
+            gpu_derivs_dbl = firm3dpp.test_derivatives_saw(
+                quad_info,
+                self.range0,
+                self.range1,
+                self.range2,
+                self.saw_omega,
+                self.saw_srange,
+                self.saw_m,
+                self.saw_n,
+                saw_phihats,
+                self.saw_nharmonics,
+                stz,
+                vpar,
+                time,
+                vtotal,
+                MASS,
+                CHARGE,
+                self.psi0,
+                stz.shape[0],
+            )
+        elif self.field_type == "boozer_saw_nok":
+            gpu_derivs_dbl = firm3dpp.test_derivatives_saw_nok(
+                quad_info,
+                self.range0,
+                self.range1,
+                self.range2,
+                self.saw_omega,
+                self.saw_srange,
+                self.saw_m,
+                self.saw_n,
+                saw_phihats,
+                self.saw_nharmonics,
+                stz,
+                vpar,
+                time,
+                vtotal,
+                MASS,
+                CHARGE,
+                self.psi0,
+                stz.shape[0],
+            )
+        elif self.field_type == "cartesian_vacuum":
+            gpu_derivs_dbl = firm3dpp.test_derivatives_cartesian(
+                quad_info,
+                self.range0,
+                self.range1,
+                self.range2,
+                stz.copy(),
+                vpar,
+                vtotal,
+                MASS,
+                CHARGE,
+                stz.shape[0],
+            )
+        else:
+            raise ValueError(
+                f"GPU derivative computation not implemented for this field \
+                type: {self.field_type}"
+            )
+
+        return gpu_derivs_dbl.reshape((stz.shape[0], 4))
+
+    def compute_cpu_derivatives(self, stz, vpar, vtotal, time=None):
+        if self.field_type == "boozer_vacuum" or self.field_type == "boozer":
+            cpu_derivs = np.empty((stz.shape[0], 4))
+            for i in range(stz.shape[0]):
+                cpu_derivs[i, :] = firm3dpp.simsopt_derivs_boozer(
+                    self.field,
+                    stz[i, :],
+                    MASS,
+                    CHARGE,
+                    vtotal,
+                    vpar[i],
+                    vacuum=(self.field_type == "boozer_vacuum"),
+                )
+        elif self.field_type in ["boozer_saw_vacuum", "boozer_saw_nok"]:
+            assert time is not None, (
+                "time array must be provided when testing derivatives with SAW"
+            )
+            cpu_derivs = np.empty((stz.shape[0], 4))
+            for i in range(stz.shape[0]):
+                cpu_derivs[i, :] = firm3dpp.simsopt_derivs_saw(
+                    self.saw_field,
+                    stz[i, :],
+                    MASS,
+                    CHARGE,
+                    vtotal,
+                    vpar[i],
+                    time[i],
+                    "vacuum_saw"
+                    if self.field_type == "boozer_saw_vacuum"
+                    else "nok_saw",
+                )
+        elif self.field_type == "cartesian_vacuum":
+            cpu_derivs = np.empty((stz.shape[0], 4))
+            for i in range(stz.shape[0]):
+                cpu_derivs[i, :] = cartesian_rhs(
+                    stz[i, :], vpar[i], self.field, MASS, CHARGE, vtotal
+                )
+        else:
+            raise ValueError(
+                f"CPU derivative computation not implemented for this \
+                field type: {self.field_type}"
+            )
+
+        return cpu_derivs
+
+    def test_derivatives(self, stz, vpar, vtotal, tol, time=None):
+        gpu_derivs = self.compute_gpu_derivatives(stz, vpar, vtotal, time=time)
+        cpu_derivs = self.compute_cpu_derivatives(stz, vpar, vtotal, time=time)
+
+        gpu_error_is_small = np.allclose(gpu_derivs, cpu_derivs, rtol=tol, atol=tol)
+        error = np.abs(cpu_derivs - gpu_derivs) / (np.abs(cpu_derivs) + 1)
+        if not gpu_error_is_small:
+            row_idx = np.unravel_index(np.argmax(error), error.shape)[0]
+            print("stz:", stz[row_idx, :])
+            print("cpu:", cpu_derivs[row_idx, :])
+            print("gpu:", gpu_derivs[row_idx, :])
+            print("rel error:", error[row_idx, :])
+
+        return gpu_error_is_small
+
+    def test_precision(self, stz, vpar, vtotal, time=None, tol=1e-3):
+        """Single vs double precision kernels, column-scale normalized so
+        sign-changing components do not inflate the relative error at their
+        zero crossings. Measured on A100/CUDA 12.9: interpolant 2e-6 to 1e-5,
+        derivatives 4e-6 across all RHS paths, against float32 eps 1.2e-7."""
+        ok = True
+        for name, f64, f32 in (
+            (
+                "interpolant",
+                self.compute_gpu_interpolant(stz),
+                self.compute_gpu_interpolant(stz, dtype=np.float32),
+            ),
+            (
+                "derivatives",
+                self.compute_gpu_derivatives(stz, vpar, vtotal, time=time),
+                self.compute_gpu_derivatives(
+                    stz, vpar, vtotal, time=time, dtype=np.float32
+                ),
+            ),
+        ):
+            # a float64 result here means the float32 inputs were silently
+            # upcast by a double-only binding, which is what this guards
+            if f32.dtype != np.float32:
+                print(f"{name}: float32 call returned {f32.dtype}, bindings upcast")
+                ok = False
+            scale = np.max(np.abs(f64), axis=0) + 1e-16
+            error = np.abs(f64 - f32) / scale
+            print(f"max error in {name} precision comparison: {error.max()}")
+            if error.max() > tol:
+                row_idx = np.unravel_index(np.argmax(error), error.shape)[0]
+                print("stz:", stz[row_idx, :])
+                print("f64:", f64[row_idx, :])
+                print("f32:", f32[row_idx, :])
+                ok = False
+        return ok
+
+    def compute_gpu_timestep(self, stz, vpar, vtotal, time, psi0):
+        if self.field_type == "boozer_vacuum" or self.field_type == "boozer":
+            last_time = firm3dpp.test_timestep_boozer(
+                quad_pts=self.quad_info,
+                srange=self.range0,
+                trange=self.range1,
+                zrange=self.range2,
+                stz_init=stz,
+                m=MASS,
+                q=CHARGE,
+                vtotal=vtotal,
+                vtang=vpar,
+                tol=1e-9,
+                psi0=psi0,
+                nparticles=stz.shape[0],
+                vacuum=(self.field_type == "boozer_vacuum"),
+            )
+        elif self.field_type == "boozer_saw_vacuum":
+            assert time is not None, (
+                "time array must be provided when testing timesteps with SAW"
+            )
+            last_time = firm3dpp.test_timestep_saw(
+                quad_pts=self.quad_info,
+                srange=self.range0,
+                trange=self.range1,
+                zrange=self.range2,
+                saw_omega=self.saw_omega,
+                saw_srange=self.saw_srange,
+                saw_m=self.saw_m,
+                saw_n=self.saw_n,
+                saw_phihats=self.saw_phihats,
+                saw_nharmonics=self.saw_nharmonics,
+                stz_init=stz,
+                m=MASS,
+                q=CHARGE,
+                vtotal=vtotal,
+                vtang=vpar,
+                time=time,
+                tol=1e-9,
+                psi0=psi0,
+                nparticles=stz.shape[0],
+            )
+        elif self.field_type == "boozer_saw_nok":
+            assert time is not None, (
+                "time array must be provided when testing timesteps with SAW"
+            )
+            last_time = firm3dpp.test_timestep_saw_nok(
+                quad_pts=self.quad_info,
+                srange=self.range0,
+                trange=self.range1,
+                zrange=self.range2,
+                saw_omega=self.saw_omega,
+                saw_srange=self.saw_srange,
+                saw_m=self.saw_m,
+                saw_n=self.saw_n,
+                saw_phihats=self.saw_phihats,
+                saw_nharmonics=self.saw_nharmonics,
+                stz_init=stz,
+                m=MASS,
+                q=CHARGE,
+                vtotal=vtotal,
+                vtang=vpar,
+                time=time,
+                tol=1e-9,
+                psi0=psi0,
+                nparticles=stz.shape[0],
+            )
+        elif self.field_type == "cartesian_vacuum":
+            last_time = firm3dpp.test_timestep_cartesian(
+                quad_pts=self.quad_info,
+                rrange=self.range0,
+                phirange=self.range1,
+                zrange=self.range2,
+                loc_init=stz,
+                m=MASS,
+                q=CHARGE,
+                vtotal=vtotal,
+                vtang=vpar,
+                tol=1e-9,
+                nparticles=stz.shape[0],
+            )
+        else:
+            raise ValueError(
+                f"GPU timestep computation not implemented for this \
+                field type: {self.field_type}"
+            )
+
+        last_time = np.reshape(last_time, (stz.shape[0], 5))
+        if self.field_type != "cartesian_vacuum":
+            # transform to pseudocylindrical coordinates for comparison with CPU results
+            last_time = np.array(
+                [
+                    [x[0], x[1] * np.cos(x[2]), x[1] * np.sin(x[2]), x[3], x[4]]
+                    for x in last_time
+                ]
+            )
+        return last_time
+
+    def compute_cpu_timesteps(self, stz, vpar, vtotal, time, psi0):
+        if self.field_type == "boozer_vacuum" or self.field_type == "boozer":
+            cpu_positions = np.empty((stz.shape[0], 5))
+            gc_tys, gc_zeta_hits = trace_particles_boozer(
+                self.field,
+                stz,
+                vpar,
+                mass=MASS,
+                charge=CHARGE,
+                Ekin=ENERGY,
+                tol=1e-9,
+                stopping_criteria=[IterationStoppingCriterion(1)],
+                forget_exact_path=True,
+            )
+        elif self.field_type in ["boozer_saw_vacuum", "boozer_saw_nok"]:
+            cpu_positions = np.empty((stz.shape[0], 5))
+            self.field.set_points(stz)
+            mu_init = (vtotal**2 - vpar**2) / (2 * self.field.modB()[:, 0])
             gc_tys, gc_zeta_hits = trace_particles_boozer_perturbed(
-                field,
+                self.saw_field,
                 stz,
                 vpar,
                 mu_init,
@@ -535,358 +642,578 @@ def test_timestep(
                 stopping_criteria=[IterationStoppingCriterion(1)],
                 forget_exact_path=True,
             )
-
-            saw_nharmonics = 5
-            ## load saw data as arrays
-            saw_data = np.load(saw_filename, allow_pickle=True)
-            saw_data = saw_data[()]
-            saw_omega = field.get_wave(0).omega
-            s = field.get_wave(0).phihat.get_s_basis()
-            saw_srange = (s[0], s[-1], len(s))
-
-            saw_m = [field.get_wave(i).Phim for i in range(saw_nharmonics)]
-            saw_n = [field.get_wave(i).Phin for i in range(saw_nharmonics)]
-            saw_phihats = np.ascontiguousarray(
-                np.column_stack(
-                    [
-                        np.array([field.get_wave(i).phihat(s_val) for s_val in s])
-                        for i in range(saw_nharmonics)
-                    ]
-                )
+        elif self.field_type == "cartesian_vacuum":
+            # convert r, phi, z to x, y, z for CPU tracing
+            rphiz = stz
+            r = rphiz[:, 0].reshape(-1, 1)
+            phi = rphiz[:, 1].reshape(-1, 1)
+            z = rphiz[:, 2].reshape(-1, 1)
+            x = r * np.cos(phi)
+            y = r * np.sin(phi)
+            xyz = np.hstack((x, y, z))
+            gc_tys, gc_zeta_hits = trace_particles(
+                self.field,
+                xyz,
+                vpar,
+                mass=MASS,
+                charge=CHARGE,
+                Ekin=ENERGY,
+                tol=1e-9,
+                stopping_criteria=[SimsoptIterationStoppingCriterion(1)],
+                forget_exact_path=True,
             )
-            stz = np.ascontiguousarray(stz)
-            psi0 = field.B0.psi0
-
-            if field.B0.field_type == "vac":
-                last_time = firm3dpp.test_timestep_saw(
-                    quad_pts=quad_info,
-                    srange=srange,
-                    trange=trange,
-                    zrange=zrange,
-                    saw_omega=saw_omega,
-                    saw_srange=saw_srange,
-                    saw_m=saw_m,
-                    saw_n=saw_n,
-                    saw_phihats=saw_phihats,
-                    saw_nharmonics=saw_nharmonics,
-                    stz_init=stz,
-                    m=MASS,
-                    q=CHARGE,
-                    vtotal=np.sqrt(2 * ENERGY / MASS),
-                    vtang=vpar,
-                    time=time,
-                    tol=1e-9,
-                    psi0=psi0,
-                    nparticles=stz.shape[0],
-                )
-            elif field.B0.field_type == "nok":
-                last_time = firm3dpp.test_timestep_saw_nok(
-                    quad_pts=quad_info,
-                    srange=srange,
-                    trange=trange,
-                    zrange=zrange,
-                    saw_omega=saw_omega,
-                    saw_srange=saw_srange,
-                    saw_m=saw_m,
-                    saw_n=saw_n,
-                    saw_phihats=saw_phihats,
-                    saw_nharmonics=saw_nharmonics,
-                    stz_init=stz,
-                    m=MASS,
-                    q=CHARGE,
-                    vtotal=np.sqrt(2 * ENERGY / MASS),
-                    vtang=vpar,
-                    time=time,
-                    tol=1e-9,
-                    psi0=psi0,
-                    nparticles=stz.shape[0],
-                )
-            last_time = np.reshape(last_time, (stz.shape[0], 5))
         else:
-            if field.field_type == "vac":
-                gc_tys, gc_zeta_hits = trace_particles_boozer(
-                    field,
-                    stz,
-                    vpar,
-                    tmax=1e-2,
-                    mass=MASS,
-                    charge=CHARGE,
-                    Ekin=ENERGY,
-                    tol=1e-9,
-                    stopping_criteria=[IterationStoppingCriterion(1)],
-                    forget_exact_path=True,
-                )
+            raise ValueError(
+                f"CPU timestep computation not implemented for this \
+                field type: {self.field_type}"
+            )
 
-                stz = np.ascontiguousarray(stz)
-                psi0 = field.psi0
-                last_time = firm3dpp.test_timestep_boozer(
-                    quad_pts=quad_info,
-                    srange=srange,
-                    trange=trange,
-                    zrange=zrange,
-                    stz_init=stz,
-                    m=MASS,
-                    q=CHARGE,
-                    vtotal=np.sqrt(2 * ENERGY / MASS),
-                    vtang=vpar,
-                    tol=1e-9,
-                    psi0=psi0,
-                    nparticles=stz.shape[0],
-                    vacuum=True,
-                )
-                last_time = np.reshape(last_time, (stz.shape[0], 5))
-            elif field.field_type == "":  # implies finite beta
-                gc_tys, gc_zeta_hits = trace_particles_boozer(
-                    field,
-                    stz,
-                    vpar,
-                    tmax=1e-2,
-                    mass=MASS,
-                    charge=CHARGE,
-                    Ekin=ENERGY,
-                    tol=1e-9,
-                    stopping_criteria=[IterationStoppingCriterion(1)],
-                    forget_exact_path=True,
-                )
-
-                stz = np.ascontiguousarray(stz)
-                psi0 = field.psi0
-                last_time = firm3dpp.test_timestep_boozer(
-                    quad_pts=quad_info,
-                    srange=srange,
-                    trange=trange,
-                    zrange=zrange,
-                    stz_init=stz,
-                    m=MASS,
-                    q=CHARGE,
-                    vtotal=np.sqrt(2 * ENERGY / MASS),
-                    vtang=vpar,
-                    tol=1e-9,
-                    psi0=psi0,
-                    nparticles=stz.shape[0],
-                    vacuum=False,
-                )
-                last_time = np.reshape(last_time, (stz.shape[0], 5))
-
-        # map to pseudo-cylindrical coordinates
         cpu_positions = np.array([x[-1] for x in gc_tys])
-        cpu_positions = np.array(
-            [
-                [x[0], x[1] * np.cos(x[2]), x[1] * np.sin(x[2]), x[3], x[4]]
-                for x in cpu_positions
-            ]
-        )
-        gpu_final_positions = np.array(
-            [
-                [x[0], x[1] * np.cos(x[2]), x[1] * np.sin(x[2]), x[3], x[4]]
-                for x in last_time
-            ]
-        )
-    error_is_small = np.isclose(
-        gpu_final_positions, cpu_positions, rtol=tol, atol=tol
-    ).all()
-    error = np.abs(cpu_positions - gpu_final_positions) / (np.abs(cpu_positions) + 1)
 
-    if error.max() > tol:
-        row_idx = np.unravel_index(np.argmax(error), error.shape)[0]
-        print("stz:", stz[row_idx, :])
-        print("cpu:", cpu_positions[row_idx, :])
-        print("gpu:", gpu_final_positions[row_idx, :])
-        print("error:", error[row_idx, :])
+        if self.field_type != "cartesian_vacuum":
+            # transform to pseudocylindrical coordinates for comparison with GPU results
+            cpu_positions = np.array(
+                [
+                    [
+                        x[0],
+                        x[1] * np.cos(x[2]),
+                        x[1] * np.sin(x[2]),
+                        np.fmod(x[3], 2 * np.pi) + 2 * np.pi * (x[3] < 0),
+                        x[4],
+                    ]
+                    for x in cpu_positions
+                ]
+            )
+        return cpu_positions
 
-    return error_is_small
+    def test_timestep(self, stz, vpar, vtotal, time, psi0, tol):
+        gpu_final_positions = self.compute_gpu_timestep(stz, vpar, vtotal, time, psi0)
+
+        cpu_positions = self.compute_cpu_timesteps(stz, vpar, vtotal, time, psi0)
+
+        gpu_error_is_small = np.allclose(
+            gpu_final_positions, cpu_positions, rtol=tol, atol=tol
+        )
+        error = np.abs(cpu_positions - gpu_final_positions) / (
+            np.abs(cpu_positions) + 1
+        )
+        if not gpu_error_is_small:
+            row_idx = np.unravel_index(np.argmax(error), error.shape)[0]
+            print("stz:", stz[row_idx, :])
+            print("cpu:", cpu_positions[row_idx, :])
+            print("gpu:", gpu_final_positions[row_idx, :])
+            print("error:", error[row_idx, :])
+
+        return gpu_error_is_small
+
+    def compute_gpu_trajectories(self, stz, vpar, vtotal, tmax, dt_save, psi0):
+
+        if self.field_type == "boozer_vacuum":
+            trajectories = save_trajectories_boozer_gpu(
+                field=CatapultBoozerField(self.field, self.ns, self.ntheta, self.nzeta),
+                stz_inits=stz.copy(),
+                parallel_speeds=vpar.copy(),
+                tmax=tmax,
+                dt_save=dt_save,
+                mass=MASS,
+                charge=CHARGE,
+                vtotal=vtotal,
+                tol=1e-9,
+            )
+        else:
+            raise NotImplementedError(
+                f"GPU trajectory computation not implemented for \
+            this field type: {self.field_type}"
+            )
+        return trajectories
+
+    def compute_gpu_final_pos(self, stz, vpar, vtotal, tmax, psi0):
+
+        if self.field_type == "boozer_vacuum":
+            s = stz[:, 0]
+            theta = stz[:, 1]
+            x1 = s * np.cos(theta)
+            x2 = s * np.sin(theta)
+            stz[:, 0] = x1
+            stz[:, 1] = x2
+            final_pos = firm3dpp.boozer_gpu_tracing(
+                quad_pts=self.quad_info,
+                srange=self.range0,
+                trange=self.range1,
+                zrange=self.range2,
+                stz_init=stz.copy(),
+                m=MASS,
+                q=CHARGE,
+                vtotal=vtotal,
+                vtang=vpar.copy(),
+                tmax=[tmax] * stz.shape[0],
+                tol=1e-9,
+                psi0=psi0,
+                dt_in=-np.ones(stz.shape[0]),
+                mu_in=-np.ones(stz.shape[0]),
+                nparticles=stz.shape[0],
+                vacuum=True,
+            )
+        else:
+            raise NotImplementedError(
+                f"GPU final position computation not implemented\
+             for this field type: {self.field_type}"
+            )
+        final_pos = np.reshape(final_pos, (stz.shape[0], 7))
+        return final_pos
+
+    def test_trajectory_saving(self, stz, vpar, vtotal, tmax, dt_save, psi0):
+        gpu_trajectories = self.compute_gpu_trajectories(
+            stz, vpar, vtotal, tmax, dt_save, psi0
+        )
+        final_pos_traj = np.array([trajectory[-1] for trajectory in gpu_trajectories])
+
+        gpu_final_pos = self.compute_gpu_final_pos(stz, vpar, vtotal, tmax, psi0)
+        # save_trajectories_boozer_gpu returns Boozer coordinates, while
+        # boozer_gpu_tracing returns pseudo-Cartesian (x1, x2): compare in Boozer
+        x1, x2 = gpu_final_pos[:, 1].copy(), gpu_final_pos[:, 2].copy()
+        gpu_final_pos[:, 1] = np.hypot(x1, x2)
+        gpu_final_pos[:, 2] = np.arctan2(x2, x1)
+
+        gpu_error_is_small = np.allclose(
+            final_pos_traj[:, 0:5], gpu_final_pos[:, 0:5], rtol=1e-9, atol=1e-9
+        )
+        error = np.abs(final_pos_traj[:, 0:5] - gpu_final_pos[:, 0:5]) / (
+            np.abs(gpu_final_pos[:, 0:5]) + 1
+        )
+
+        if not gpu_error_is_small:
+            row_idx = np.unravel_index(np.argmax(error), error.shape)[0]
+            print("stz:", stz[row_idx, :])
+            print("vpar:", vpar[row_idx])
+            print("gpu final pos:", gpu_final_pos[row_idx, :])
+            print("gpu traj final pos:", final_pos_traj[row_idx, :])
+            print("error:", error[row_idx, :])
+
+        return gpu_error_is_small
 
 
 @unittest.skipUnless(HAS_CUDA, "CUDA support not available")
-class TestGPUTracing(unittest.TestCase):
-    def test_boozer_vacuum(self):
-        n_metagrid_pts = 15
+class TestGPUTracingBoozerVacuum(unittest.TestCase):
+    def setUp(self):
+        self.n_metagrid_pts = 15
+        self.filename = "examples/inputs/boozmn_aten_rescaled_low_res.nc"
+        self.vacuum = True
+        self.bri, self.field, self.nfp = get_field(
+            self.filename, self.n_metagrid_pts, self.vacuum
+        )
+        self.stz = sample_test_points(n_test_pts)
 
-        ### Vacuum case
-        boozmn_filename = "examples/inputs/boozmn_aten_rescaled_low_res.nc"
-        vacuum = True
-        bri, field, nfp = get_field(boozmn_filename, n_metagrid_pts, vacuum)
+        self.VELOCITY = np.sqrt(2 * ENERGY / MASS)
+        self.vpar_init = np.random.uniform(-self.VELOCITY, self.VELOCITY, (n_test_pts,))
 
-        n_test_pts = 10000
-        stz = sample_test_points(n_test_pts)
+        self.tol = 1e-8
 
-        tol = 1e-8
+        self.field = CATAPULTField(
+            self.field,
+            ns=self.n_metagrid_pts,
+            ntheta=self.n_metagrid_pts,
+            nzeta=self.n_metagrid_pts,
+            nfp=self.nfp,
+        )
 
-        ### test interpolant
-        is_small = test_interpolant(field, nfp, stz, tol=tol)
+    def test_interpolant(self):
+        is_small = self.field.test_interpolant(self.stz, 1e-8)
         self.assertTrue(is_small)
 
-        ### test derivatives
-        VELOCITY = np.sqrt(2 * ENERGY / MASS)
-        vpar_init = np.random.uniform(-VELOCITY, VELOCITY, (n_test_pts,))
-        is_small = test_derivatives(
-            field, nfp, stz, vpar_init, VELOCITY, field.psi0, tol
+    def test_derivatives(self):
+        is_small = self.field.test_derivatives(
+            self.stz, self.vpar_init, self.VELOCITY, 1e-8
         )
         self.assertTrue(is_small)
 
-        ### test timesteps
-        is_small = test_timestep(field, nfp, stz, vpar_init, VELOCITY, field.psi0, tol)
-        self.assertTrue(is_small)
+    def test_precision(self):
+        self.assertTrue(
+            self.field.test_precision(self.stz, self.vpar_init, self.VELOCITY)
+        )
 
-    def test_boozer_finite_beta(self):
-        n_metagrid_pts = 15
-
-        ### Vacuum case
-        boozmn_filename = "examples/inputs/boozmn_aten_rescaled_low_res.nc"
-        vacuum = False
-        bri, field, nfp = get_field(boozmn_filename, n_metagrid_pts, vacuum)
-
-        n_test_pts = 10000
-        stz = sample_test_points(n_test_pts)
-
-        tol = 1e-8
-
-        ### test interpolant
-        is_small = test_interpolant(field, nfp, stz, tol)
-        self.assertTrue(is_small)
-
-        ### test derivatives
-        VELOCITY = np.sqrt(2 * ENERGY / MASS)
-        vpar_init = np.random.uniform(-VELOCITY, VELOCITY, (n_test_pts,))
-        is_small = test_derivatives(
-            field, nfp, stz, vpar_init, VELOCITY, field.psi0, tol
+    def test_timestep(self):
+        is_small = self.field.test_timestep(
+            self.stz, self.vpar_init, self.VELOCITY, None, self.field.psi0, 1e-8
         )
         self.assertTrue(is_small)
 
-        ### test timesteps
-        is_small = test_timestep(field, nfp, stz, vpar_init, VELOCITY, field.psi0, tol)
+    def test_trajectory_saving(self):
+        tmax = 2e-8
+        dt_save = 1e-8
+
+        is_small = self.field.test_trajectory_saving(
+            self.stz, self.vpar_init, self.VELOCITY, tmax, dt_save, self.field.psi0
+        )
         self.assertTrue(is_small)
 
-    def test_boozer_vacuum_saw(self):
-        n_metagrid_pts = 15
+    def test_single_precision_tracing(self):
+        field = self.field.field
+        res = self.n_metagrid_pts
+        inside = self.stz[:, 0] < 1.0
+        stz = self.stz[inside][:200]
+        vpar = self.vpar_init[inside][:200]
 
-        ### Vacuum case
-        boozmn_filename = "examples/inputs/boozmn_aten_rescaled_low_res.nc"
-        vacuum = True
-        bri, field, nfp = get_field(boozmn_filename, n_metagrid_pts, vacuum)
+        def run(precision, tol):
+            cfield = CatapultBoozerField(field, res, res, res, precision=precision)
+            res_tys, _ = trace_particles_boozer_gpu(
+                cfield,
+                stz,
+                vpar,
+                tmax=1e-6,
+                mass=MASS,
+                charge=CHARGE,
+                Ekin=ENERGY,
+                tol=tol,
+                forget_exact_path=True,
+            )
+            return final_states(res_tys)
+
+        check_single_precision(self, run, 1e-6, [1, 2, 4])
+
+    def test_cpu_format(self):
+        # trace_particles_boozer_gpu returns what trace_particles_boozer
+        # does: per particle, (t, s, theta, zeta, vpar) rows from t = 0 to
+        # the final state, and a (t, -1, s, theta, zeta, vpar) hit when lost
+        field = self.field.field
+        res = self.n_metagrid_pts
+        stz = self.stz[:500]
+        vpar = self.vpar_init[:500]
+        tmax = 1e-5
+        kwargs = {
+            "mass": MASS,
+            "charge": CHARGE,
+            "Ekin": ENERGY,
+            "tol": 1e-8,
+        }
+        cfield = CatapultBoozerField(field, res, res, res)
+        # the kernel's own state, one row per particle, to check the rows against
+        state = np.array(
+            [
+                traj[-1]
+                for traj in save_trajectories_boozer_gpu(
+                    cfield, stz, vpar, tmax, tmax, MASS, CHARGE, self.VELOCITY, 1e-8
+                )
+            ]
+        )
+        lost = state[:, 0] < tmax
+
+        res_tys, res_hits = trace_particles_boozer_gpu(
+            cfield, stz, vpar, tmax, forget_exact_path=True, **kwargs
+        )
+        self.assertEqual(len(res_tys), len(stz))
+        for i in range(len(stz)):
+            self.assertEqual(res_tys[i].shape, (2, 5))
+            self.assertEqual(res_tys[i].dtype, np.float64)
+            np.testing.assert_array_equal(res_tys[i][0], [0, *stz[i], vpar[i]])
+            np.testing.assert_array_equal(res_tys[i][1], state[i, :5])
+            if lost[i]:
+                self.assertEqual(res_hits[i].shape, (1, 6))
+                self.assertEqual(res_hits[i][0, 1], -1)
+                np.testing.assert_array_equal(res_hits[i][0, 2:], state[i, 1:5])
+            else:
+                self.assertEqual(res_hits[i].shape, (0,))
+        self.assertTrue(lost.any() and not lost.all())
+        # and the CPU post-processing takes it as is
+        times, loss_frac = compute_loss_fraction(res_tys, tmin=1e-7, tmax=tmax)
+        self.assertAlmostEqual(loss_frac[-1], lost.mean())
+
+        # with trajectories: the same initial row, rows at successive save
+        # times, and the same final state
+        dt_save = 2e-6
+        res_tys, res_hits = trace_particles_boozer_gpu(
+            cfield, stz, vpar, tmax, dt_save=dt_save, **kwargs
+        )
+        for i in range(len(stz)):
+            t = res_tys[i][:, 0]
+            self.assertEqual(t[0], 0)
+            self.assertTrue(np.all(np.diff(t) > 0))
+            self.assertEqual(res_hits[i].shape, (1, 6) if lost[i] else (0,))
+            if not lost[i]:
+                self.assertGreaterEqual(t[-1], tmax)
+                self.assertEqual(len(t), 1 + round(tmax / dt_save))
+
+
+@unittest.skipUnless(HAS_CUDA, "CUDA support not available")
+class TestGPUTracingBoozerFiniteBeta(unittest.TestCase):
+    def setUp(self):
+        self.n_metagrid_pts = 15
+        self.filename = "examples/inputs/boozmn_aten_rescaled_low_res.nc"
+        self.vacuum = False
+        self.bri, self.field, self.nfp = get_field(
+            self.filename, self.n_metagrid_pts, self.vacuum
+        )
+        self.stz = sample_test_points(n_test_pts)
+
+        self.VELOCITY = np.sqrt(2 * ENERGY / MASS)
+        self.vpar_init = np.random.uniform(-self.VELOCITY, self.VELOCITY, (n_test_pts,))
+
+        self.tol = 1e-8
+
+        self.field = CATAPULTField(
+            self.field,
+            ns=self.n_metagrid_pts,
+            ntheta=self.n_metagrid_pts,
+            nzeta=self.n_metagrid_pts,
+            nfp=self.nfp,
+        )
+
+    def test_interpolant(self):
+        is_small = self.field.test_interpolant(self.stz, 1e-8)
+        self.assertTrue(is_small)
+
+    def test_derivatives(self):
+        is_small = self.field.test_derivatives(
+            self.stz, self.vpar_init, self.VELOCITY, 1e-8
+        )
+        self.assertTrue(is_small)
+
+    def test_precision(self):
+        self.assertTrue(
+            self.field.test_precision(self.stz, self.vpar_init, self.VELOCITY)
+        )
+
+    def test_timestep(self):
+        is_small = self.field.test_timestep(
+            self.stz, self.vpar_init, self.VELOCITY, None, self.field.psi0, 1e-8
+        )
+        self.assertTrue(is_small)
+
+    def test_single_precision_tracing(self):
+        field = self.field.field
+        self.assertEqual(field.field_type, "")
+        res = self.n_metagrid_pts
+        inside = self.stz[:, 0] < 1.0
+        stz = self.stz[inside][:200]
+        vpar = self.vpar_init[inside][:200]
+
+        def run(precision, tol):
+            cfield = CatapultBoozerField(field, res, res, res, precision=precision)
+            self.assertFalse(cfield.vacuum)
+            res_tys, _ = trace_particles_boozer_gpu(
+                cfield,
+                stz,
+                vpar,
+                tmax=1e-6,
+                mass=MASS,
+                charge=CHARGE,
+                Ekin=ENERGY,
+                tol=tol,
+                forget_exact_path=True,
+            )
+            return final_states(res_tys)
+
+        check_single_precision(self, run, 1e-6, [1, 2, 4])
+
+
+@unittest.skipUnless(HAS_CUDA, "CUDA support not available")
+class TestGPUTracingBoozerVacuumSAW(unittest.TestCase):
+    def setUp(self):
+        self.n_metagrid_pts = 15
+        self.filename = "examples/inputs/boozmn_aten_rescaled_low_res.nc"
+        self.vacuum = True
+        self.bri, self.field, self.nfp = get_field(
+            self.filename, self.n_metagrid_pts, self.vacuum
+        )
+        self.stz = sample_test_points(n_test_pts)
+
+        self.VELOCITY = np.sqrt(2 * ENERGY / MASS)
+        self.vpar_init = np.random.uniform(-self.VELOCITY, self.VELOCITY, (n_test_pts,))
+
+        self.time = np.random.uniform(low=0, high=1e-3, size=(n_test_pts,))
+        self.tol = 1e-8
 
         ### set up SAW
         saw_filename = "./examples/tracing_with_AE/ae.npy"
-        saw = ShearAlfvenWavesSuperposition.from_ae3d(
+        self.saw = ShearAlfvenWavesSuperposition.from_ae3d(
             eigenvector=AE3DEigenvector.load_from_numpy(
                 filename=saw_filename,
             ),
-            B0=field,
+            B0=self.field,
             max_dB_normal_by_B0=5e-3,
             minor_radius_meters=1.7,
         )
 
-        n_test_pts = 10000
-        stz = sample_test_points(n_test_pts)
-        tol = 1e-8
+        self.field = CATAPULTField(
+            self.saw,
+            ns=self.n_metagrid_pts,
+            ntheta=self.n_metagrid_pts,
+            nzeta=self.n_metagrid_pts,
+            nfp=self.nfp,
+            saw_filename="./examples/tracing_with_AE/ae.npy",
+        )
 
-        ### test interpolant
-        is_small = test_interpolant(saw, nfp, stz, saw_present=True, tol=tol)
+    def test_interpolant(self):
+        is_small = self.field.test_interpolant(self.stz, 1e-8)
         self.assertTrue(is_small)
 
-        ## test derivatives
-        VELOCITY = np.sqrt(2 * ENERGY / MASS)
-        vpar_init = np.random.uniform(-VELOCITY, VELOCITY, (n_test_pts,))
-        time = np.random.uniform(low=0, high=1e-3, size=(n_test_pts,))
-        is_small = test_derivatives(
-            saw,
-            nfp,
-            stz,
-            vpar_init,
-            VELOCITY,
-            field.psi0,
-            time=time,
-            saw_present=True,
-            saw_filename=saw_filename,
-            tol=tol,
+    def test_derivatives(self):
+        is_small = self.field.test_derivatives(
+            self.stz, self.vpar_init, self.VELOCITY, 1e-8, self.time
         )
         self.assertTrue(is_small)
 
-        ### test timesteps
-        is_small = test_timestep(
-            saw,
-            nfp,
-            stz,
-            vpar_init,
-            VELOCITY,
-            field.psi0,
-            time=time,
-            saw_filename=saw_filename,
-            tol=tol,
+    def test_precision(self):
+        self.assertTrue(
+            self.field.test_precision(
+                self.stz, self.vpar_init, self.VELOCITY, time=self.time
+            )
+        )
+
+    def test_timestep(self):
+        is_small = self.field.test_timestep(
+            self.stz, self.vpar_init, self.VELOCITY, self.time, self.field.psi0, 1e-8
         )
         self.assertTrue(is_small)
 
-    def test_boozer_nok_saw(self):
-        n_metagrid_pts = 15
+    def test_perturbed_tracer(self):
+        # the magnetic moments given are the ones the kernel uses
+        res = self.n_metagrid_pts
+        stz = self.stz[:200]
+        vpar = self.vpar_init[:200]
+        self.saw.B0.set_points(stz)
+        mus = (self.VELOCITY**2 - vpar**2) / (2 * self.saw.B0.modB()[:, 0])
+        cfield = CatapultPerturbedBoozerField(self.saw, res, res, res)
+        res_tys, _ = trace_particles_boozer_perturbed_gpu(
+            cfield, stz, vpar, mus, tmax=1e-6, mass=MASS, charge=CHARGE, tol=1e-8
+        )
+        # a conserved mu: the energy at the end is the energy at the start
+        self.saw.B0.set_points(stz)
+        final = np.array([traj[-1] for traj in res_tys])
+        self.saw.B0.set_points(np.ascontiguousarray(final[:, 1:4]))
+        v2 = final[:, 4] ** 2 + 2 * mus * self.saw.B0.modB()[:, 0]
+        np.testing.assert_allclose(np.sqrt(v2) / self.VELOCITY, 1.0, atol=2e-2)
 
-        ### Vacuum case
-        boozmn_filename = "examples/inputs/boozmn_aten_rescaled_low_res.nc"
-        vacuum = True
-        bri, field, nfp = get_field(boozmn_filename, n_metagrid_pts, vacuum)
+        # and in single precision, held to the orbits' own sensitivity
+        inside = stz[:, 0] < 1.0
+        vpar_in = vpar[inside]
+        mus_in = mus[inside]
+
+        def run(precision, tol):
+            cfield = CatapultPerturbedBoozerField(
+                self.saw, res, res, res, precision=precision
+            )
+            res_tys, _ = trace_particles_boozer_perturbed_gpu(
+                cfield,
+                stz[inside],
+                vpar_in,
+                mus_in,
+                tmax=1e-6,
+                mass=MASS,
+                charge=CHARGE,
+                tol=tol,
+            )
+            return final_states(res_tys)
+
+        check_single_precision(self, run, 1e-6, [1, 2, 4])
+
+
+@unittest.skipUnless(HAS_CUDA, "CUDA support not available")
+class TestGPUTracingBoozerNoKSAW(unittest.TestCase):
+    def setUp(self):
+        self.n_metagrid_pts = 15
+        self.filename = "examples/inputs/boozmn_aten_rescaled_low_res.nc"
+        self.vacuum = False
+        self.bri, self.field, self.nfp = get_field(
+            self.filename, self.n_metagrid_pts, self.vacuum
+        )
+        self.stz = sample_test_points(n_test_pts)
+
+        self.VELOCITY = np.sqrt(2 * ENERGY / MASS)
+        self.vpar_init = np.random.uniform(-self.VELOCITY, self.VELOCITY, (n_test_pts,))
+
+        self.time = np.random.uniform(low=0, high=1e-3, size=(n_test_pts,))
+        self.tol = 1e-8
 
         ### set up SAW
         saw_filename = "./examples/tracing_with_AE/ae.npy"
-        saw = ShearAlfvenWavesSuperposition.from_ae3d(
+        self.saw = ShearAlfvenWavesSuperposition.from_ae3d(
             eigenvector=AE3DEigenvector.load_from_numpy(
                 filename=saw_filename,
             ),
-            B0=field,
+            B0=self.field,
             max_dB_normal_by_B0=5e-3,
             minor_radius_meters=1.7,
         )
 
-        n_test_pts = 10000
-        stz = sample_test_points(n_test_pts)
-        tol = 1e-8
+        self.field = CATAPULTField(
+            self.saw,
+            ns=self.n_metagrid_pts,
+            ntheta=self.n_metagrid_pts,
+            nzeta=self.n_metagrid_pts,
+            nfp=self.nfp,
+            saw_filename="./examples/tracing_with_AE/ae.npy",
+        )
 
-        ### test interpolant
-        is_small = test_interpolant(saw, nfp, stz, saw_present=True, tol=tol)
+    def test_interpolant(self):
+        is_small = self.field.test_interpolant(self.stz, 1e-8)
         self.assertTrue(is_small)
 
-        ## test derivatives
-        VELOCITY = np.sqrt(2 * ENERGY / MASS)
-        vpar_init = np.random.uniform(-VELOCITY, VELOCITY, (n_test_pts,))
-        time = np.random.uniform(low=0, high=1e-3, size=(n_test_pts,))
-        is_small = test_derivatives(
-            saw,
-            nfp,
-            stz,
-            vpar_init,
-            VELOCITY,
-            field.psi0,
-            time=time,
-            saw_present=True,
-            saw_filename=saw_filename,
-            tol=tol,
+    def test_derivatives(self):
+        is_small = self.field.test_derivatives(
+            self.stz, self.vpar_init, self.VELOCITY, 1e-8, self.time
         )
         self.assertTrue(is_small)
 
-        ### test timesteps
-        is_small = test_timestep(
-            saw,
-            nfp,
-            stz,
-            vpar_init,
-            VELOCITY,
-            field.psi0,
-            time=time,
-            saw_filename=saw_filename,
-            tol=tol,
+    def test_precision(self):
+        self.assertTrue(
+            self.field.test_precision(
+                self.stz, self.vpar_init, self.VELOCITY, time=self.time
+            )
+        )
+
+    def test_timestep(self):
+        is_small = self.field.test_timestep(
+            self.stz, self.vpar_init, self.VELOCITY, self.time, self.field.psi0, 1e-8
         )
         self.assertTrue(is_small)
 
-    @unittest.skipUnless(HAS_SIMSOPT, "simsopt not available")
-    def test_cartesian_vacuum(self):
-        np.random.seed(0)
+    def test_single_precision_tracing(self):
+        # the no-K perturbed kernel, reached through a genuine "nok" equilibrium
+        res = self.n_metagrid_pts
+        bri = BoozerRadialInterpolant(self.filename, 3, no_K=True)
+        equilibrium = InterpolatedBoozerField(
+            bri, 3, ns_interp=res, ntheta_interp=res, nzeta_interp=res
+        )
+        self.assertEqual(equilibrium.field_type, "nok")
+        saw = ShearAlfvenWavesSuperposition.from_ae3d(
+            eigenvector=AE3DEigenvector.load_from_numpy(
+                filename="./examples/tracing_with_AE/ae.npy"
+            ),
+            B0=equilibrium,
+            max_dB_normal_by_B0=5e-3,
+            minor_radius_meters=1.7,
+        )
+        inside = self.stz[:, 0] < 1.0
+        stz = self.stz[inside][:200]
+        vpar = self.vpar_init[inside][:200]
+        equilibrium.set_points(stz)
+        mus = (self.VELOCITY**2 - vpar**2) / (2 * equilibrium.modB()[:, 0])
+
+        def run(precision, tol):
+            cfield = CatapultPerturbedBoozerField(
+                saw, res, res, res, precision=precision
+            )
+            self.assertEqual(cfield.field_type, "nok")
+            res_tys, _ = trace_particles_boozer_perturbed_gpu(
+                cfield, stz, vpar, mus, tmax=1e-6, mass=MASS, charge=CHARGE, tol=tol
+            )
+            return final_states(res_tys)
+
+        check_single_precision(self, run, 1e-6, [1, 2, 4])
+
+
+@unittest.skipUnless(HAS_SIMSOPT and HAS_CUDA, "simsopt or CUDA not available")
+class TestGPUTracingCartesian(unittest.TestCase):
+    def setUp(self):
         degree = 3  # degree of interpolant
-        n = 16  # resolution of interpolant
+        self.n_metagrid_pts = 16  # resolution of interpolant
         order = 12  # order of coil curves
 
         filename = "examples/inputs/coils.curves_22_7_21"
         wout_filename = "examples/inputs/wout_aten_rescaled.nc"
 
         surf = SurfaceRZFourier.from_wout(wout_filename)
-
         coils = load_coils_from_makegrid_file(filename, order, ppp=20, group_names=None)
 
         curves = []
@@ -902,22 +1229,28 @@ class TestGPUTracing(unittest.TestCase):
         rs = np.linalg.norm(surf.gamma()[:, :, 0:2], axis=2)
         zs = surf.gamma()[:, :, 2]
 
-        rrange = (np.min(rs), np.max(rs), n)
-        phirange = (0, 2 * np.pi / surf.nfp, n * 2)
+        self.range0 = (np.min(rs), np.max(rs), self.n_metagrid_pts)
+        self.range1 = (0, 2 * np.pi / surf.nfp, self.n_metagrid_pts * 2)
         # exploit stellarator symmetry and only consider positive z values:
-        zrange = (0, np.max(zs), n // 2)
+        self.range2 = (0, np.max(zs), self.n_metagrid_pts // 2)
         bsh = InterpolatedField(
-            bs, degree, rrange, phirange, zrange, True, nfp=surf.nfp, stellsym=True
+            bs,
+            degree,
+            self.range0,
+            self.range1,
+            self.range2,
+            True,
+            nfp=surf.nfp,
+            stellsym=True,
         )
 
-        # rejection sample points inside the surface uniformly
-        nparticles = 10000
-        rphiz = np.empty((nparticles, 3))
-        for i in range(nparticles):
+        ### rejection sample points inside the loss surface
+        rphiz = np.empty((n_test_pts, 3))
+        for i in range(n_test_pts):
             pt = np.random.uniform(low=0, high=1, size=(1, 3))
-            pt[0, 0] = pt[0, 0] * (rrange[1] - rrange[0]) + rrange[0]
+            pt[0, 0] = pt[0, 0] * (self.range0[1] - self.range0[0]) + self.range0[0]
             pt[0, 1] *= 2 * np.pi
-            pt[0, 2] = (pt[0, 2] - 0.5) * 2 * zrange[1]
+            pt[0, 2] = (pt[0, 2] - 0.5) * 2 * self.range2[1]
 
             # particle is outside the surface or too close to the surface
             max_iters = 1000
@@ -925,48 +1258,71 @@ class TestGPUTracing(unittest.TestCase):
                 if sc_particle.evaluate_rphiz(pt) > 0.2:
                     break
                 pt = np.random.uniform(low=0, high=1, size=(1, 3))
-                pt[0, 0] = pt[0, 0] * (rrange[1] - rrange[0]) + rrange[0]
+                pt[0, 0] = pt[0, 0] * (self.range0[1] - self.range0[0]) + self.range0[0]
                 pt[0, 1] *= 2 * np.pi
-                pt[0, 2] = (pt[0, 2] - 0.5) * 2 * zrange[1]
+                pt[0, 2] = (pt[0, 2] - 0.5) * 2 * self.range2[1]
             else:
                 raise RuntimeError("Could not sample a valid point inside the surface")
             rphiz[i, :] = pt
-        xyz = np.empty((nparticles, 3))
-        xyz[:, 0] = rphiz[:, 0] * np.cos(rphiz[:, 1])
-        xyz[:, 1] = rphiz[:, 0] * np.sin(rphiz[:, 1])
-        xyz[:, 2] = rphiz[:, 2]
 
-        # test interpolant
-        is_small = test_interpolant(
-            bsh, surf.nfp, rphiz, surf_classifier=sc_particle, tol=1e-8
+        self.stz = rphiz
+        self.bsh = bsh
+        self.sc_particle = sc_particle
+
+        self.field = CATAPULTField(
+            bsh,
+            ns=self.n_metagrid_pts,
+            ntheta=self.n_metagrid_pts * 2,
+            nzeta=self.n_metagrid_pts // 2,
+            nfp=surf.nfp,
+            sc_classifier=sc_particle,
         )
+
+    def test_interpolant(self):
+        is_small = self.field.test_interpolant(self.stz, tol=1e-8)
         self.assertTrue(is_small)
 
-        # test rhs
+    def test_derivatives(self):
         VELOCITY = np.sqrt(2 * ENERGY / MASS)
-        vpar_init = np.random.uniform(-VELOCITY, VELOCITY, (nparticles,))
-        is_small = test_derivatives(
-            bsh,
-            surf.nfp,
-            rphiz,
-            vpar_init,
-            VELOCITY,
-            surf_classifier=sc_particle,
-            tol=1e-8,
-        )
+        vpar_init = np.random.uniform(-VELOCITY, VELOCITY, (n_test_pts,))
+        is_small = self.field.test_derivatives(self.stz, vpar_init, VELOCITY, tol=1e-8)
         self.assertTrue(is_small)
 
-        # test timestep
-        is_small = test_timestep(
-            bsh,
-            surf.nfp,
-            rphiz,
-            vpar_init,
-            VELOCITY,
-            surf_classifier=sc_particle,
-            tol=1e-8,
+    def test_precision(self):
+        VELOCITY = np.sqrt(2 * ENERGY / MASS)
+        vpar_init = np.random.uniform(-VELOCITY, VELOCITY, (n_test_pts,))
+        self.assertTrue(self.field.test_precision(self.stz, vpar_init, VELOCITY))
+
+    def test_single_precision_tracing(self):
+        VELOCITY = np.sqrt(2 * ENERGY / MASS)
+        rphiz = self.stz[:200]
+        xyz = np.column_stack(
+            (
+                rphiz[:, 0] * np.cos(rphiz[:, 1]),
+                rphiz[:, 0] * np.sin(rphiz[:, 1]),
+                rphiz[:, 2],
+            )
         )
-        self.assertTrue(is_small)
+        vpar = np.random.uniform(-VELOCITY, VELOCITY, (len(xyz),))
+
+        def run(precision, tol):
+            cfield = CatapultCartesianField(
+                self.bsh, self.sc_particle, precision=precision
+            )
+            res_tys, _ = trace_particles_cartesian_gpu(
+                cfield,
+                xyz,
+                vpar,
+                tmax=1e-6,
+                mass=MASS,
+                charge=CHARGE,
+                Ekin=ENERGY,
+                tol=tol,
+                forget_exact_path=True,
+            )
+            return final_states(res_tys, boozer=False)
+
+        check_single_precision(self, run, 1e-6, [1, 2, 3, 4])
 
 
 if __name__ == "__main__":
