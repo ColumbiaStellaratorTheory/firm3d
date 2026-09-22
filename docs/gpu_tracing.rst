@@ -65,9 +65,11 @@ save time that falls inside one step gets no row. Choose ``dt_save`` above the
 step size. Trajectories cannot yet be saved this way in a perturbed field,
 whose phase restarts with each chunk.
 
-``advance_particles_*_gpu`` are the kernel-level calls the tracers are built
-on: one launch, returning the state ``(t, s, theta, zeta, vpar, dt, mu)`` of
-each particle, which can be fed back in to continue it.
+``save_trajectories_*_gpu`` return the trajectories as the kernel writes
+them, ``(t, s, theta, zeta, vpar, dt, mu)`` per row: the last two columns are
+the state the solver would continue from, which the tracers drop to return
+the CPU format. The tracers take ``dt`` and ``mu`` for the same reason, so a
+run can be continued from where an earlier one stopped.
 
 Single precision
 ----------------

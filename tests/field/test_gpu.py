@@ -53,11 +53,10 @@ from firm3d.catapult.field import (
     CatapultPerturbedBoozerField,
 )
 from firm3d.catapult.tracing import (
-    advance_particles_boozer_gpu,
-    advance_particles_boozer_perturbed_gpu,
-    advance_particles_cartesian_gpu,
     save_trajectories_boozer_gpu,
     trace_particles_boozer_gpu,
+    trace_particles_boozer_perturbed_gpu,
+    trace_particles_cartesian_gpu,
 )
 from firm3d.trajectory_helpers import compute_loss_fraction
 
@@ -68,20 +67,21 @@ n_test_pts = 10000
 def check_single_precision(testcase, run, tmax, columns, factor=3.0):
     """
     Single precision holds to the orbits' own sensitivity: run(precision, tol)
-    returns the (nparticles, 7) kernel state, and per column the median and
+    returns the (nparticles, 5) final states, and per column the median and
     90th percentile of |single - double| are within factor of those of
-    |double at tol/10 - double|. Also checks the dtype, and that survivors
-    reach tmax in single precision as in double.
+    |double at tol/10 - double|. That the single precision kernel ran at all
+    is checked by the states differing: were a float32 array converted to
+    double by the wrong binding, they would be identical.
     """
     out64 = run("double", 1e-8)
     out32 = run("single", 1e-8)
     tighter = run("double", 1e-9)
-    testcase.assertEqual(out32.dtype, np.float32)
+    diff = out32[:, columns] - out64[:, columns]
+    reference = tighter[:, columns] - out64[:, columns]
+    testcase.assertTrue(np.any(diff != 0), "single precision matched double exactly")
     survived = out64[:, 0] >= 0.999 * tmax
     testcase.assertTrue(survived.any())
     testcase.assertTrue(np.all(out32[survived, 0] >= 0.999 * tmax))
-    diff = out32[:, columns].astype(np.float64) - out64[:, columns]
-    reference = tighter[:, columns] - out64[:, columns]
     for c in range(diff.shape[1]):
         for q in (50, 90):
             got = np.percentile(np.abs(diff[:, c]), q)
@@ -98,6 +98,18 @@ def pseudo_cartesian(stz):
     return np.column_stack(
         (stz[:, 0] * np.cos(stz[:, 1]), stz[:, 0] * np.sin(stz[:, 1]), stz[:, 2])
     )
+
+
+def final_states(res_tys, boozer=True):
+    """
+    The last row of each trajectory, (t, s, theta, zeta, vpar), with the
+    position in pseudo-Cartesian coordinates when boozer is True, so that
+    theta's branch cut cannot separate two nearby states.
+    """
+    final = np.array([traj[-1] for traj in res_tys])
+    if boozer:
+        final[:, 1:4] = pseudo_cartesian(final[:, 1:4])
+    return final
 
 
 def sample_test_points(n_test_pts):
@@ -839,14 +851,23 @@ class TestGPUTracingBoozerVacuum(unittest.TestCase):
         field = self.field.field
         res = self.n_metagrid_pts
         inside = self.stz[:, 0] < 1.0
-        x = pseudo_cartesian(self.stz[inside][:200])
+        stz = self.stz[inside][:200]
         vpar = self.vpar_init[inside][:200]
 
         def run(precision, tol):
             cfield = CatapultBoozerField(field, res, res, res, precision=precision)
-            return advance_particles_boozer_gpu(
-                cfield, x, vpar, 1e-6, MASS, CHARGE, self.VELOCITY, tol, in_boozer=False
+            res_tys, _ = trace_particles_boozer_gpu(
+                cfield,
+                stz,
+                vpar,
+                tmax=1e-6,
+                mass=MASS,
+                charge=CHARGE,
+                Ekin=ENERGY,
+                tol=tol,
+                forget_exact_path=True,
             )
+            return final_states(res_tys)
 
         check_single_precision(self, run, 1e-6, [1, 2, 4])
 
@@ -866,8 +887,14 @@ class TestGPUTracingBoozerVacuum(unittest.TestCase):
             "tol": 1e-8,
         }
         cfield = CatapultBoozerField(field, res, res, res)
-        state = advance_particles_boozer_gpu(
-            cfield, stz, vpar, tmax, MASS, CHARGE, self.VELOCITY, 1e-8
+        # the kernel's own state, one row per particle, to check the rows against
+        state = np.array(
+            [
+                traj[-1]
+                for traj in save_trajectories_boozer_gpu(
+                    cfield, stz, vpar, tmax, tmax, MASS, CHARGE, self.VELOCITY, 1e-8
+                )
+            ]
         )
         lost = state[:, 0] < tmax
 
@@ -957,15 +984,24 @@ class TestGPUTracingBoozerFiniteBeta(unittest.TestCase):
         self.assertEqual(field.field_type, "")
         res = self.n_metagrid_pts
         inside = self.stz[:, 0] < 1.0
-        x = pseudo_cartesian(self.stz[inside][:200])
+        stz = self.stz[inside][:200]
         vpar = self.vpar_init[inside][:200]
 
         def run(precision, tol):
             cfield = CatapultBoozerField(field, res, res, res, precision=precision)
             self.assertFalse(cfield.vacuum)
-            return advance_particles_boozer_gpu(
-                cfield, x, vpar, 1e-6, MASS, CHARGE, self.VELOCITY, tol, in_boozer=False
+            res_tys, _ = trace_particles_boozer_gpu(
+                cfield,
+                stz,
+                vpar,
+                tmax=1e-6,
+                mass=MASS,
+                charge=CHARGE,
+                Ekin=ENERGY,
+                tol=tol,
+                forget_exact_path=True,
             )
+            return final_states(res_tys)
 
         check_single_precision(self, run, 1e-6, [1, 2, 4])
 
@@ -1038,14 +1074,18 @@ class TestGPUTracingBoozerVacuumSAW(unittest.TestCase):
         self.saw.B0.set_points(stz)
         mus = (self.VELOCITY**2 - vpar**2) / (2 * self.saw.B0.modB()[:, 0])
         cfield = CatapultPerturbedBoozerField(self.saw, res, res, res)
-        out = advance_particles_boozer_perturbed_gpu(
+        res_tys, _ = trace_particles_boozer_perturbed_gpu(
             cfield, stz, vpar, mus, tmax=1e-6, mass=MASS, charge=CHARGE, tol=1e-8
         )
-        np.testing.assert_array_equal(out[:, 6], mus)
+        # a conserved mu: the energy at the end is the energy at the start
+        self.saw.B0.set_points(stz)
+        final = np.array([traj[-1] for traj in res_tys])
+        self.saw.B0.set_points(np.ascontiguousarray(final[:, 1:4]))
+        v2 = final[:, 4] ** 2 + 2 * mus * self.saw.B0.modB()[:, 0]
+        np.testing.assert_allclose(np.sqrt(v2) / self.VELOCITY, 1.0, atol=2e-2)
 
         # and in single precision, held to the orbits' own sensitivity
         inside = stz[:, 0] < 1.0
-        x = pseudo_cartesian(stz[inside])
         vpar_in = vpar[inside]
         mus_in = mus[inside]
 
@@ -1053,17 +1093,17 @@ class TestGPUTracingBoozerVacuumSAW(unittest.TestCase):
             cfield = CatapultPerturbedBoozerField(
                 self.saw, res, res, res, precision=precision
             )
-            return advance_particles_boozer_perturbed_gpu(
+            res_tys, _ = trace_particles_boozer_perturbed_gpu(
                 cfield,
-                x,
+                stz[inside],
                 vpar_in,
                 mus_in,
                 tmax=1e-6,
                 mass=MASS,
                 charge=CHARGE,
                 tol=tol,
-                in_boozer=False,
             )
+            return final_states(res_tys)
 
         check_single_precision(self, run, 1e-6, [1, 2, 4])
 
@@ -1149,24 +1189,16 @@ class TestGPUTracingBoozerNoKSAW(unittest.TestCase):
         vpar = self.vpar_init[inside][:200]
         equilibrium.set_points(stz)
         mus = (self.VELOCITY**2 - vpar**2) / (2 * equilibrium.modB()[:, 0])
-        x = pseudo_cartesian(stz)
 
         def run(precision, tol):
             cfield = CatapultPerturbedBoozerField(
                 saw, res, res, res, precision=precision
             )
             self.assertEqual(cfield.field_type, "nok")
-            return advance_particles_boozer_perturbed_gpu(
-                cfield,
-                x,
-                vpar,
-                mus,
-                tmax=1e-6,
-                mass=MASS,
-                charge=CHARGE,
-                tol=tol,
-                in_boozer=False,
+            res_tys, _ = trace_particles_boozer_perturbed_gpu(
+                cfield, stz, vpar, mus, tmax=1e-6, mass=MASS, charge=CHARGE, tol=tol
             )
+            return final_states(res_tys)
 
         check_single_precision(self, run, 1e-6, [1, 2, 4])
 
@@ -1277,9 +1309,18 @@ class TestGPUTracingCartesian(unittest.TestCase):
             cfield = CatapultCartesianField(
                 self.bsh, self.sc_particle, precision=precision
             )
-            return advance_particles_cartesian_gpu(
-                cfield, None, xyz, vpar, 1e-6, MASS, CHARGE, VELOCITY, tol
+            res_tys, _ = trace_particles_cartesian_gpu(
+                cfield,
+                xyz,
+                vpar,
+                tmax=1e-6,
+                mass=MASS,
+                charge=CHARGE,
+                Ekin=ENERGY,
+                tol=tol,
+                forget_exact_path=True,
             )
+            return final_states(res_tys, boozer=False)
 
         check_single_precision(self, run, 1e-6, [1, 2, 3, 4])
 

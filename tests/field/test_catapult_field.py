@@ -5,8 +5,6 @@ import numpy as np
 
 from firm3d.catapult.field import CatapultBoozerField, CatapultPerturbedBoozerField
 from firm3d.catapult.tracing import (
-    advance_particles_boozer_gpu,
-    advance_particles_boozer_perturbed_gpu,
     save_trajectories_boozer_gpu,
     trace_particles_boozer_gpu,
     trace_particles_boozer_perturbed_gpu,
@@ -144,13 +142,14 @@ class TestCatapultPerturbedBoozerField(unittest.TestCase):
         stz = np.array([[0.5, 0.0, 0.0], [0.4, 1.0, 2.0]])
         vpar = np.array([1e6, -1e6])
         mus = np.array([1e6, 1e6])
-        args = (1e-6, 1.0, 1.0, 1e6, 1e-8)
 
         # each tracer and saver keeps to its kind of field, on both backends
         with self.assertRaises(TypeError):
             trace_particles_boozer_gpu(perturbed, stz, vpar)
         with self.assertRaises(TypeError):
-            save_trajectories_boozer_gpu(perturbed, stz, vpar, 1e-6, 1e-7, *args[1:])
+            save_trajectories_boozer_gpu(
+                perturbed, stz, vpar, 1e-6, 1e-7, 1.0, 1.0, 1e6, 1e-8
+            )
         with self.assertRaises(TypeError):
             trace_particles_boozer_perturbed_gpu(equilibrium, stz, vpar, mus)
         with self.assertRaises(TypeError):
@@ -159,27 +158,33 @@ class TestCatapultPerturbedBoozerField(unittest.TestCase):
         # a per-particle array of the wrong length would be read past its
         # end by the kernel: one case per path that checks it
         with self.assertRaises(ValueError):
-            advance_particles_boozer_gpu(equilibrium, stz, vpar[:1], *args)
-        with self.assertRaises(ValueError):
-            advance_particles_boozer_gpu(equilibrium, stz[:, :2], vpar, *args)
-        with self.assertRaises(ValueError):
-            advance_particles_boozer_perturbed_gpu(perturbed, stz, vpar, mus[:1])
-        with self.assertRaises(ValueError):
             trace_particles_boozer_gpu(
                 equilibrium, stz, vpar[:1], forget_exact_path=True
             )
+        with self.assertRaises(ValueError):
+            trace_particles_boozer_gpu(
+                equilibrium, stz[:, :2], vpar, forget_exact_path=True
+            )
+        with self.assertRaises(ValueError):
+            trace_particles_boozer_gpu(
+                equilibrium, stz, vpar, mu=np.ones(1), forget_exact_path=True
+            )
+        with self.assertRaises(ValueError):
+            trace_particles_boozer_perturbed_gpu(perturbed, stz, vpar, mus[:1])
 
         # and anything non-finite, which would crash the kernel: one case per
         # check (a per-particle array, the positions, the speed)
         with self.assertRaises(ValueError):
-            advance_particles_boozer_gpu(
-                equilibrium, stz, np.array([1e6, np.nan]), *args
+            trace_particles_boozer_gpu(
+                equilibrium, stz, np.array([1e6, np.nan]), forget_exact_path=True
             )
         with self.assertRaises(ValueError):
-            advance_particles_boozer_gpu(equilibrium, stz * np.nan, vpar, *args)
+            trace_particles_boozer_gpu(
+                equilibrium, stz * np.nan, vpar, forget_exact_path=True
+            )
         with self.assertRaises(ValueError):
-            advance_particles_boozer_gpu(
-                equilibrium, stz, vpar, 1e-6, 1.0, 1.0, np.nan, 1e-8
+            trace_particles_boozer_gpu(
+                equilibrium, stz, vpar, Ekin=np.nan, forget_exact_path=True
             )
 
         # trajectories need one tmax for all particles, and cannot yet be
