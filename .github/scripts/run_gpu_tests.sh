@@ -40,7 +40,7 @@ cd "$FIRM3D_DIR"
 echo "--- Installing firm3d ---"
 env CC=cc CXX=CC pip install -v --no-build-isolation -e ".[dev]" 2>&1 | tee "$WORK_DIR/build.log"
 
-if ! grep -q "GPU bindings will be compiled with" "$WORK_DIR/build.log"; then
+if ! grep -q "CUDA found. GPU bindings will be compiled." "$WORK_DIR/build.log"; then
     echo "ERROR: GPU bindings were not compiled." >&2
     echo "1" > "$EXIT_CODE_FILE"
     exit 1
@@ -63,4 +63,32 @@ python -m coverage xml -o "$WORK_DIR/coverage.xml" || true
 
 echo "$TEST_EXIT" > "$EXIT_CODE_FILE"
 echo "Finished: $(date)  (exit $TEST_EXIT)"
-exit $TEST_EXIT
+if  [ "$TEST_EXIT" -ne 0 ]; then
+    exit $TEST_EXIT
+fi
+
+# if the correctness tests were successful, run the regression tests
+
+set +e
+(cd examples/gpu_boozer_tracing && python gpu_boozer_tracing.py)
+BOOZER_EXIT=$?
+cp examples/gpu_boozer_tracing/gpu_boozer_tracing_results.json "$WORK_DIR/gpu_boozer_tracing_results.json"
+(cd examples/gpu_saw_tracing && python gpu_saw_tracing.py)
+SAW_EXIT=$?
+(cd examples/gpu_cartesian_tracing && python gpu_cartesian_tracing.py)
+CARTESIAN_EXIT=$?
+set -e
+
+echo "boozer_tracing exit    : $BOOZER_EXIT"
+echo "saw_tracing exit       : $SAW_EXIT"
+echo "cartesian_tracing exit : $CARTESIAN_EXIT"
+
+if [ "$BOOZER_EXIT" -ne 0 ] || [ "$SAW_EXIT" -ne 0 ] || [ "$CARTESIAN_EXIT" -ne 0 ]; then
+  EXAMPLES_EXIT=1
+else
+  EXAMPLES_EXIT=0
+fi
+
+echo "$EXAMPLES_EXIT" > "$EXIT_CODE_FILE"
+echo "Finished: $(date)  (exit $EXAMPLES_EXIT)"
+exit $EXAMPLES_EXIT

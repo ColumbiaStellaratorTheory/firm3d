@@ -19,6 +19,9 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'GPU CI')
     runs-on: [perlmutter]
     timeout-minutes: 360
+    permissions:
+      pull-requests: write
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -79,6 +82,30 @@ jobs:
           file: ${{ runner.temp }}/firm3d-${{ github.sha }}/coverage.xml
           flags: unittests
           name: codecov-perlmutter
+
+      - name: Format results comment
+        if: always() && github.event_name == 'pull_request'
+        run: |
+          WORK_DIR="${{ runner.temp }}/firm3d-${{ github.sha }}"
+          {
+            echo "### GPU Regression Test Results"
+            echo ""
+            if [ -f "$WORK_DIR/gpu_boozer_tracing_results.json" ]; then
+              echo "**boozer_tracing**"
+              echo '```json'
+              cat "$WORK_DIR/gpu_boozer_tracing_results.json"
+              echo '```'
+            else
+              echo "**boozer_tracing**: no results (test failed or skipped)"
+            fi
+          } > "$WORK_DIR/pr_comment.md"
+
+      - name: Comment PR with results
+        if: always() && github.event_name == 'pull_request'
+        uses: thollander/actions-comment-pull-request@v3
+        with:
+          file-path: ${{ runner.temp }}/firm3d-${{ github.sha }}/pr_comment.md
+          comment-tag: gpu-regression-results
 
       - name: Clean up work directory
         if: always()
