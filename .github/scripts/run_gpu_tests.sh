@@ -40,7 +40,7 @@ cd "$FIRM3D_DIR"
 echo "--- Installing firm3d ---"
 env CC=cc CXX=CC pip install -v --no-build-isolation -e ".[dev]" 2>&1 | tee "$WORK_DIR/build.log"
 
-if ! grep -q "CUDA found. GPU bindings will be compiled." "$WORK_DIR/build.log"; then
+if ! grep -q "GPU bindings will be compiled with" "$WORK_DIR/build.log"; then
     echo "ERROR: GPU bindings were not compiled." >&2
     echo "1" > "$EXIT_CODE_FILE"
     exit 1
