@@ -45,34 +45,9 @@ defaults, and return the same ``(res_tys, res_hits)``:
     times, loss_fraction = compute_loss_fraction(res_tys)
 
 The kernels stop a particle at :math:`s = 1` (or at the surface of the
-classifier) and nowhere else: this is the CPU tracer's
+classifier). This is equivalent to the CPU tracer's
 ``MaxToroidalFluxStoppingCriterion(1.0)``, and ``res_hits`` records it with
-index ``-1`` as the CPU does for its first criterion, but there is no
-``stopping_criteria`` argument, since nothing else can be asked for. ``Ekin``
-is one value for all particles. There is no ``comm``: an ensemble is traced on
-one GPU per call. Options the kernels do not have (``abstol`` and ``reltol``
-apart from ``tol``, the Poincaré-section arguments, the choice of solver) are
-not accepted either.
-
-Differences from the CPU tracers that remain: the last row of a lost
-particle is the state just past the crossing rather than the last state
-inside; a survivor's final time can exceed ``tmax`` by up to one step;
-:math:`\theta` is returned in :math:`(-\pi, \pi]` and :math:`\zeta` wrapped
-to :math:`[0, 2\pi)`. Trajectories (``forget_exact_path=False``) are saved
-by tracing in chunks of ``dt_save``: each row is the state at the first step
-boundary at or after its save time, so its time is up to one step late, and a
-save time that falls inside one step gets no row. Choose ``dt_save`` above the
-step size. Trajectories cannot yet be saved this way in a perturbed field,
-whose phase restarts with each chunk.
-
-``save_trajectories_*_gpu``, which is how the tracers save a trajectory,
-returns the kernel's own rows instead, ``(t, s, theta, zeta, vpar, dt, mu)``:
-the last two columns are the step and the magnetic moment the solver would
-continue from, and the same two can be passed in, so that a run picks up
-where an earlier one stopped. The tracers do not take them. As on the CPU,
-the magnetic moment is an argument only where the waves make the energy
-change, as ``mus`` of ``trace_particles_boozer_perturbed_gpu``; elsewhere it
-follows from ``Ekin`` and the parallel speed.
+index ``-1`` as the CPU does for its first criterion.
 
 Single precision
 ----------------
@@ -93,8 +68,3 @@ single precision for statistics over an ensemble, such as loss fractions and
 confinement times, and not for following a particular particle, for orbit
 classification of individual markers, or for anything that compares one
 trajectory to another.
-
-The GPU test suite holds these statements: the derivative comparison for
-every field type, and single-against-double tracing for the equilibrium,
-finite-beta, perturbed and Cartesian kernels against the tolerance envelope
-described above.
