@@ -24,70 +24,6 @@ from firm3d.util.constants import (
 )
 
 
-def _catapult_boozer(field, ns, ntheta, nzeta, dtype):
-    """
-    Return the CatapultBoozerField to trace in: field itself if it is one, else
-    one built from field at the given resolution, in the given dtype.
-    """
-    if isinstance(field, CatapultPerturbedBoozerField):
-        raise TypeError(
-            "this traces equilibrium fields; use trace_particles_boozer_perturbed_gpu "
-            "for a CatapultPerturbedBoozerField"
-        )
-    if isinstance(field, CatapultBoozerField):
-        if not (ns is None and ntheta is None and nzeta is None):
-            raise ValueError(
-                "ns, ntheta and nzeta are fixed by the CatapultBoozerField; "
-                "do not pass them as well"
-            )
-        return field
-    if ns is None or ntheta is None or nzeta is None:
-        raise ValueError(
-            "pass a CatapultBoozerField, or a field together with ns, ntheta and nzeta"
-        )
-    return CatapultBoozerField(field, ns, ntheta, nzeta, precision=dtype)
-
-
-def _catapult_perturbed(perturbed_field, ns, ntheta, nzeta):
-    """
-    Return the CatapultPerturbedBoozerField to trace in: perturbed_field itself
-    if it is one, else one built from it at the given resolution.
-    """
-    if isinstance(perturbed_field, CatapultBoozerField):
-        raise TypeError(
-            "this traces perturbed fields; use trace_particles_boozer_gpu for a "
-            "CatapultBoozerField"
-        )
-    if isinstance(perturbed_field, CatapultPerturbedBoozerField):
-        if not (ns is None and ntheta is None and nzeta is None):
-            raise ValueError(
-                "ns, ntheta and nzeta are fixed by the CatapultPerturbedBoozerField; "
-                "do not pass them as well"
-            )
-        return perturbed_field
-    if ns is None or ntheta is None or nzeta is None:
-        raise ValueError(
-            "pass a CatapultPerturbedBoozerField, or a ShearAlfvenWavesSuperposition "
-            "together with ns, ntheta and nzeta"
-        )
-    return CatapultPerturbedBoozerField(perturbed_field, ns, ntheta, nzeta)
-
-
-def _catapult_cartesian(field, surface_classifier, dtype):
-    """
-    Return the CatapultCartesianField to trace in: field itself if it is one,
-    else one built from field and surface_classifier in the given dtype.
-    """
-    if isinstance(field, CatapultCartesianField):
-        if surface_classifier is not None:
-            raise ValueError(
-                "the surface classifier is fixed by the CatapultCartesianField; "
-                "pass surface_classifier=None"
-            )
-        return field
-    return CatapultCartesianField(field, surface_classifier, precision=dtype)
-
-
 def _check_per_particle(nparticles, **arrays):
     """
     Refuse a per-particle array of the wrong length, which the kernel would
@@ -109,12 +45,17 @@ def _check_finite_scalar(name, value):
         raise ValueError(f"{name} must be finite and positive, got {value}")
 
 
-def _launch_kwargs(
+def _launch_boozer(
     cfield, x_inits, parallel_speeds, tmax, dt, mu, mass, charge, vtotal, tol
 ):
     """
-    The arguments common to the Boozer kernels, with every T-typed array cast
-    to the field's dtype, which the bindings require.
+    One CATAPULT launch in a CatapultBoozerField or a
+    CatapultPerturbedBoozerField, from pseudo-Cartesian initial conditions
+    x_inits of shape (nparticles, 3). Every T-typed array is cast to the
+    field's dtype, which the bindings require, and the arguments are checked
+    before a binding is looked up, so that a malformed call fails the same way
+    with or without the GPU bindings. Returns the (nparticles, 7) array
+    (t, x1, x2, zeta, vpar, dt, mu) in that dtype.
     """
     dtype = cfield.dtype
     x_inits = np.ascontiguousarray(x_inits, dtype=dtype)
@@ -125,14 +66,15 @@ def _launch_kwargs(
     if not np.all(np.isfinite(x_inits)):
         raise ValueError("initial positions contain NaN or infinite values")
     _check_finite_scalar("vtotal", vtotal)
+    nparticles = x_inits.shape[0]
     parallel_speeds = np.ascontiguousarray(parallel_speeds, dtype=dtype)
     tmax = np.ascontiguousarray(tmax, dtype=np.float64)
     dt = np.ascontiguousarray(dt, dtype=dtype)
     mu = np.ascontiguousarray(mu, dtype=dtype)
     _check_per_particle(
-        x_inits.shape[0], parallel_speeds=parallel_speeds, tmax=tmax, dt=dt, mu=mu
+        nparticles, parallel_speeds=parallel_speeds, tmax=tmax, dt=dt, mu=mu
     )
-    return {
+    kwargs = {
         "quad_pts": cfield.quad_info,
         "srange": cfield.srange,
         "trange": cfield.trange,
@@ -147,49 +89,28 @@ def _launch_kwargs(
         "dt_in": dt,
         "mu_in": mu,
         "psi0": cfield.psi0,
-        "nparticles": x_inits.shape[0],
+        "nparticles": nparticles,
     }
-
-
-def _launch_boozer(
-    cfield, x_inits, parallel_speeds, tmax, dt, mu, mass, charge, vtotal, tol
-):
-    """
-    One CATAPULT launch in a CatapultBoozerField, from pseudo-Cartesian initial
-    conditions x_inits of shape (nparticles, 3). Returns the (nparticles, 7)
-    array (t, x1, x2, zeta, vpar, dt, mu) in the field's dtype.
-    """
-    # the arguments are checked before the binding is looked up, so that a
-    # malformed call fails the same way with or without the GPU bindings
-    kwargs = _launch_kwargs(
-        cfield, x_inits, parallel_speeds, tmax, dt, mu, mass, charge, vtotal, tol
-    )
-    out = firm3dpp.boozer_gpu_tracing(**kwargs, vacuum=cfield.vacuum)
-    return np.asarray(out, dtype=cfield.dtype).reshape(x_inits.shape[0], 7)
-
-
-def _launch_perturbed(
-    cfield, x_inits, parallel_speeds, tmax, dt, mu, mass, charge, vtotal, tol
-):
-    """
-    One CATAPULT launch in a CatapultPerturbedBoozerField; as _launch_boozer.
-    """
-    kwargs = _launch_kwargs(
-        cfield, x_inits, parallel_speeds, tmax, dt, mu, mass, charge, vtotal, tol
-    )
-    kwargs.update(
-        saw_omega=cfield.saw_omega,
-        saw_srange=cfield.saw_srange,
-        saw_m=cfield.saw_m,
-        saw_n=cfield.saw_n,
-        saw_phihats=cfield.saw_phihats,
-        saw_nharmonics=cfield.saw_nharmonics,
-    )
-    if cfield.field_type == "vac":
-        out = firm3dpp.boozer_saw_gpu_tracing(**kwargs)
+    # the waves are extra arguments to their own kernels; an equilibrium field
+    # instead tells the one kernel whether to assume a vacuum
+    if isinstance(cfield, CatapultPerturbedBoozerField):
+        kwargs.update(
+            saw_omega=cfield.saw_omega,
+            saw_srange=cfield.saw_srange,
+            saw_m=cfield.saw_m,
+            saw_n=cfield.saw_n,
+            saw_phihats=cfield.saw_phihats,
+            saw_nharmonics=cfield.saw_nharmonics,
+        )
+        trace = (
+            firm3dpp.boozer_saw_gpu_tracing
+            if cfield.vacuum
+            else firm3dpp.boozer_saw_nok_gpu_tracing
+        )
     else:
-        out = firm3dpp.boozer_saw_nok_gpu_tracing(**kwargs)
-    return np.asarray(out, dtype=cfield.dtype).reshape(x_inits.shape[0], 7)
+        kwargs["vacuum"] = cfield.vacuum
+        trace = firm3dpp.boozer_gpu_tracing
+    return np.asarray(trace(**kwargs), dtype=dtype).reshape(nparticles, 7)
 
 
 def _launch_cartesian(
@@ -275,9 +196,6 @@ def advance_particles_boozer_gpu(
     charge,
     vtotal,
     tol,
-    ns=None,
-    ntheta=None,
-    nzeta=None,
     dt=None,
     mu=None,
     in_boozer=True,  # if in Boozer coordinates, else in pseudo-Cartesian coordinates
@@ -290,10 +208,8 @@ def advance_particles_boozer_gpu(
     particles from a previous state. For a field with shear Alfven waves use
     advance_particles_boozer_perturbed_gpu.
 
-    field: a CatapultBoozerField, built once at the resolution and precision
-        to trace in; or a magnetic field object in Boozer coordinates, in
-        which case ns, ntheta and nzeta are required, the interpolant is
-        built for this call, and the precision follows the dtype of stz_inits
+    field: a CatapultBoozerField, holding the field tabulated at the
+        resolution and precision to trace in
     stz_inits: initial conditions for particles, shape (nparticles, 3), in
         (s, theta, zeta) coordinates if in_boozer is True, else in the
         pseudo-Cartesian coordinates (x1, x2, zeta) that CATAPULT integrates
@@ -305,8 +221,6 @@ def advance_particles_boozer_gpu(
     charge: charge of each particle
     vtotal: total velocity of each particle
     tol: tolerance for the ODE solver
-    ns, ntheta, nzeta: interpolant resolution, only when field is not a
-        CatapultBoozerField
     dt: the initial time step size for the solver (optional; chosen from the
         maximum stable step size if not given)
     mu: the magnetic moment of each particle (optional; computed from the
@@ -330,8 +244,13 @@ def advance_particles_boozer_gpu(
         call, and the dt and mu columns fed back in through the dt and mu
         arguments, to continue tracing.
     """
-    cfield = _catapult_boozer(field, ns, ntheta, nzeta, np.asarray(stz_inits).dtype)
-    dtype = cfield.dtype
+    if not isinstance(field, CatapultBoozerField):
+        raise TypeError(
+            f"field must be a CatapultBoozerField, got {type(field).__name__}; "
+            "a field with waves is traced by "
+            "advance_particles_boozer_perturbed_gpu"
+        )
+    dtype = field.dtype
     nparticles = stz_inits.shape[0]
     x_inits = (
         _to_pseudo_cartesian(stz_inits, dtype)
@@ -339,7 +258,7 @@ def advance_particles_boozer_gpu(
         else np.array(stz_inits, dtype=dtype, order="C")
     )
     last_time = _launch_boozer(
-        cfield,
+        field,
         x_inits,
         parallel_speeds,
         _per_particle(tmax, nparticles, np.float64, None),
@@ -363,9 +282,6 @@ def advance_particles_boozer_perturbed_gpu(
     charge=ALPHA_PARTICLE_CHARGE,
     Ekin=None,
     tol=1e-9,
-    ns=None,
-    ntheta=None,
-    nzeta=None,
     dt=None,
     in_boozer=True,
 ):
@@ -377,10 +293,8 @@ def advance_particles_boozer_perturbed_gpu(
     the magnetic moment, which they conserve, is given per particle and the
     energy is not.
 
-    perturbed_field: a CatapultPerturbedBoozerField, built once at the
-        resolution to trace in; or a ShearAlfvenWavesSuperposition, in which
-        case ns, ntheta and nzeta are required and the interpolant is built
-        for this call
+    perturbed_field: a CatapultPerturbedBoozerField, holding the equilibrium
+        tabulated at the resolution to trace in, and the waves
     stz_inits: initial conditions for particles, shape (nparticles, 3), in
         (s, theta, zeta) coordinates if in_boozer is True, else in the
         pseudo-Cartesian coordinates (x1, x2, zeta) that CATAPULT integrates
@@ -395,8 +309,6 @@ def advance_particles_boozer_perturbed_gpu(
         maximum step and tolerances by; if None, the initial energy of the
         first particle is used, as in trace_particles_boozer_perturbed
     tol: tolerance for the ODE solver
-    ns, ntheta, nzeta: interpolant resolution, only when perturbed_field is
-        not a CatapultPerturbedBoozerField
     dt: the initial time step size for the solver (optional; chosen from the
         maximum stable step size if not given)
     in_boozer: as for trace_particles_boozer_gpu
@@ -408,8 +320,13 @@ def advance_particles_boozer_perturbed_gpu(
         follow-on call from the returned state does not continue the same
         wave.
     """
-    cfield = _catapult_perturbed(perturbed_field, ns, ntheta, nzeta)
-    dtype = cfield.dtype
+    if not isinstance(perturbed_field, CatapultPerturbedBoozerField):
+        raise TypeError(
+            "perturbed_field must be a CatapultPerturbedBoozerField, got "
+            f"{type(perturbed_field).__name__}; an equilibrium field is traced "
+            "by advance_particles_boozer_gpu"
+        )
+    dtype = perturbed_field.dtype
     nparticles = stz_inits.shape[0]
     mus = np.ascontiguousarray(mus, dtype=dtype)
     if mus.shape != (nparticles,):
@@ -423,8 +340,8 @@ def advance_particles_boozer_perturbed_gpu(
         else:
             x1, x2, zeta = np.asarray(stz_inits[0], dtype=np.float64)
             stz0 = np.array([[np.hypot(x1, x2), np.arctan2(x2, x1), zeta]])
-        cfield.B0.set_points(stz0)
-        modB = cfield.B0.modB()[0, 0]
+        perturbed_field.B0.set_points(stz0)
+        modB = perturbed_field.B0.modB()[0, 0]
         v2 = parallel_speeds[0] ** 2 + 2 * mus[0] * modB
         if not np.isfinite(v2) or v2 <= 0:
             raise ValueError(
@@ -440,8 +357,8 @@ def advance_particles_boozer_perturbed_gpu(
         if in_boozer
         else np.array(stz_inits, dtype=dtype, order="C")
     )
-    last_time = _launch_perturbed(
-        cfield,
+    last_time = _launch_boozer(
+        perturbed_field,
         x_inits,
         parallel_speeds,
         _per_particle(tmax, nparticles, np.float64, None),
@@ -457,7 +374,6 @@ def advance_particles_boozer_perturbed_gpu(
 
 def advance_particles_cartesian_gpu(
     field,
-    surface_classifier,
     xyz_inits,
     parallel_speeds,
     tmax,
@@ -473,11 +389,9 @@ def advance_particles_cartesian_gpu(
     returning the full kernel state; the call trace_particles_cartesian_gpu
     and save_trajectories_cartesian_gpu are built on.
 
-    field: a CatapultCartesianField, built once; or a magnetic field object
-        in Cartesian coordinates, in which case surface_classifier is
-        required and the interpolant is built for this call
-    surface_classifier: a simsopt surface classifier object for detecting a
-        surface; None when field is a CatapultCartesianField
+    field: a CatapultCartesianField, holding the field and the surface
+        classifier tabulated at the precision to trace in; particles are
+        stopped when they cross that surface
     xyz_inits: initial conditions for particles, shape (nparticles, 3), in
         (x, y, z) coordinates
     parallel_speeds: initial parallel speeds of the particles
@@ -499,11 +413,14 @@ def advance_particles_cartesian_gpu(
         initial conditions of a follow-on call, and the dt and mu columns fed
         back in through the dt and mu arguments, to continue tracing.
     """
-    cfield = _catapult_cartesian(field, surface_classifier, np.asarray(xyz_inits).dtype)
-    dtype = cfield.dtype
+    if not isinstance(field, CatapultCartesianField):
+        raise TypeError(
+            f"field must be a CatapultCartesianField, got {type(field).__name__}"
+        )
+    dtype = field.dtype
     nparticles = xyz_inits.shape[0]
     return _launch_cartesian(
-        cfield,
+        field,
         xyz_inits,
         parallel_speeds,
         _per_particle(tmax, nparticles, np.float64, None),
@@ -588,9 +505,6 @@ def save_trajectories_boozer_gpu(
     charge,
     vtotal,
     tol,
-    ns=None,
-    ntheta=None,
-    nzeta=None,
     dt=None,
 ):
     """
@@ -598,9 +512,7 @@ def save_trajectories_boozer_gpu(
     trajectory of each particle every dt_save.
 
     Arguments are as for advance_particles_boozer_gpu, plus dt_save, the
-    interval at which to record the state. Give a CatapultBoozerField to
-    build the interpolant once (it is otherwise built for this call, and the
-    precision follows the dtype of stz_inits). Equilibrium fields only: the
+    interval at which to record the state. Equilibrium fields only: the
     kernel restarts time at each chunk, which a wave's phase cannot follow, so
     a CatapultPerturbedBoozerField is refused.
 
@@ -615,8 +527,13 @@ def save_trajectories_boozer_gpu(
         transit time (G/|B|) pi/2 / v) for a regular cadence. A lost particle
         has fewer rows. zeta is wrapped to [0, 2 pi).
     """
-    cfield = _catapult_boozer(field, ns, ntheta, nzeta, np.asarray(stz_inits).dtype)
-    dtype = cfield.dtype
+    if not isinstance(field, CatapultBoozerField):
+        raise TypeError(
+            f"field must be a CatapultBoozerField, got {type(field).__name__}; "
+            "a field with waves is traced by "
+            "advance_particles_boozer_perturbed_gpu"
+        )
+    dtype = field.dtype
 
     # the loop works in the pseudo-Cartesian coordinates CATAPULT integrates
     # in, so a chunk's output feeds the next chunk's input directly
@@ -625,7 +542,7 @@ def save_trajectories_boozer_gpu(
 
     def trace_chunk(inits, parallel_speeds, local_tmax, dt, mu):
         return _launch_boozer(
-            cfield,
+            field,
             inits,
             parallel_speeds,
             local_tmax,
@@ -645,7 +562,6 @@ def save_trajectories_boozer_gpu(
 
 def save_trajectories_cartesian_gpu(
     field,
-    surface_classifier,
     xyz_inits,
     parallel_speeds,
     tmax,
@@ -661,9 +577,7 @@ def save_trajectories_cartesian_gpu(
     trajectory of each particle every dt_save.
 
     Arguments are as for advance_particles_cartesian_gpu, plus dt_save, the
-    interval at which to record the state. Give a CatapultCartesianField
-    (with surface_classifier=None) to build the interpolant once; it is
-    otherwise built for this call.
+    interval at which to record the state.
 
     Returns:
         A list with one entry per particle: an array of shape (nsaved, 7)
@@ -674,14 +588,17 @@ def save_trajectories_cartesian_gpu(
         r pi/2 / v), and a save time that a single step jumped over gets no
         row. A lost particle has fewer rows.
     """
-    cfield = _catapult_cartesian(field, surface_classifier, np.asarray(xyz_inits).dtype)
-    dtype = cfield.dtype
+    if not isinstance(field, CatapultCartesianField):
+        raise TypeError(
+            f"field must be a CatapultCartesianField, got {type(field).__name__}"
+        )
+    dtype = field.dtype
     inits = np.ascontiguousarray(xyz_inits, dtype=dtype)
     parallel_speeds = np.ascontiguousarray(parallel_speeds, dtype=dtype)
 
     def trace_chunk(inits, parallel_speeds, local_tmax, dt, mu):
         return _launch_cartesian(
-            cfield,
+            field,
             inits,
             parallel_speeds,
             local_tmax,
@@ -757,9 +674,6 @@ def trace_particles_boozer_gpu(
     charge=ALPHA_PARTICLE_CHARGE,
     Ekin=FUSION_ALPHA_PARTICLE_ENERGY,
     tol=1e-9,
-    ns=None,
-    ntheta=None,
-    nzeta=None,
     dt_save=1e-6,
     forget_exact_path=False,
     dt=None,
@@ -769,10 +683,8 @@ def trace_particles_boozer_gpu(
     CATAPULT. The arguments and the result follow trace_particles_boozer,
     where CATAPULT has the same option.
 
-    field: a CatapultBoozerField, built once at the resolution and precision
-        to trace in; or a magnetic field object in Boozer coordinates, in
-        which case ns, ntheta and nzeta are required, the interpolant is
-        built for this call, and the precision follows the dtype of stz_inits
+    field: a CatapultBoozerField, holding the field tabulated at the
+        resolution and precision to trace in
     stz_inits: initial positions, shape (nparticles, 3), in (s, theta, zeta)
     parallel_speeds: initial parallel speeds of the particles
     tmax: maximum time to trace particles, either a scalar applied to every
@@ -782,8 +694,6 @@ def trace_particles_boozer_gpu(
     Ekin: kinetic energy in Joule, one value for all particles
     tol: tolerance for the ODE solver, used as both the absolute and the
         relative tolerance
-    ns, ntheta, nzeta: interpolant resolution, only when field is not a
-        CatapultBoozerField
     dt_save: interval at which to record the trajectory when
         forget_exact_path is False
     forget_exact_path: if True, keep only the initial and final state of each
@@ -809,7 +719,6 @@ def trace_particles_boozer_gpu(
           for a hit on the CPU's first stopping criterion; there is no
           stopping_criteria argument.
     """
-    cfield = _catapult_boozer(field, ns, ntheta, nzeta, np.asarray(stz_inits).dtype)
     nparticles = stz_inits.shape[0]
     tmax = _per_particle(tmax, nparticles, np.float64, None)
     kwargs = {
@@ -821,12 +730,12 @@ def trace_particles_boozer_gpu(
     }
     if forget_exact_path:
         final = advance_particles_boozer_gpu(
-            cfield, stz_inits, parallel_speeds, tmax, **kwargs
+            field, stz_inits, parallel_speeds, tmax, **kwargs
         )
         bodies = final[:, None, :]
     else:
         bodies = save_trajectories_boozer_gpu(
-            cfield, stz_inits, parallel_speeds, _one_tmax(tmax), dt_save, **kwargs
+            field, stz_inits, parallel_speeds, _one_tmax(tmax), dt_save, **kwargs
         )
     return _cpu_format(stz_inits, parallel_speeds, bodies, tmax)
 
@@ -841,9 +750,6 @@ def trace_particles_boozer_perturbed_gpu(
     charge=ALPHA_PARTICLE_CHARGE,
     Ekin=None,
     tol=1e-9,
-    ns=None,
-    ntheta=None,
-    nzeta=None,
     forget_exact_path=True,
 ):
     """
@@ -853,10 +759,8 @@ def trace_particles_boozer_perturbed_gpu(
     magnetic moment, which they conserve, is given per particle and the
     energy is not.
 
-    perturbed_field: a CatapultPerturbedBoozerField, built once at the
-        resolution to trace in; or a ShearAlfvenWavesSuperposition, in which
-        case ns, ntheta and nzeta are required and the interpolant is built
-        for this call
+    perturbed_field: a CatapultPerturbedBoozerField, holding the equilibrium
+        tabulated at the resolution to trace in, and the waves
     stz_inits: initial positions, shape (nparticles, 3), in (s, theta, zeta)
     parallel_speeds: initial parallel speeds of the particles
     mus: magnetic moment of each particle, shape (nparticles,)
@@ -868,8 +772,6 @@ def trace_particles_boozer_perturbed_gpu(
         maximum step and tolerances by; if None, the initial energy of the
         first particle is used, as in trace_particles_boozer_perturbed
     tol: tolerance for the ODE solver
-    ns, ntheta, nzeta: interpolant resolution, only when perturbed_field is
-        not a CatapultPerturbedBoozerField
     forget_exact_path: must be True. The kernel starts every launch at t = 0
         of the waves' phase, so trajectories cannot yet be saved in chunks
         as they are for equilibrium fields; the default differs from the CPU
@@ -885,11 +787,10 @@ def trace_particles_boozer_perturbed_gpu(
             "the kernel restarts the waves' phase at each launch; pass "
             "forget_exact_path=True"
         )
-    cfield = _catapult_perturbed(perturbed_field, ns, ntheta, nzeta)
     nparticles = stz_inits.shape[0]
     tmax = _per_particle(tmax, nparticles, np.float64, None)
     final = advance_particles_boozer_perturbed_gpu(
-        cfield,
+        perturbed_field,
         stz_inits,
         parallel_speeds,
         mus,
@@ -904,7 +805,6 @@ def trace_particles_boozer_perturbed_gpu(
 
 def trace_particles_cartesian_gpu(
     field,
-    surface_classifier,
     xyz_inits,
     parallel_speeds,
     tmax=1e-4,
@@ -921,12 +821,9 @@ def trace_particles_cartesian_gpu(
     and the result follow simsopt's trace_particles, where CATAPULT has the
     same option.
 
-    field: a CatapultCartesianField, built once; or a magnetic field object
-        in Cartesian coordinates, in which case surface_classifier is
-        required and the interpolant is built for this call
-    surface_classifier: a simsopt surface classifier object for detecting a
-        surface; None when field is a CatapultCartesianField. Particles are
-        stopped when they cross it.
+    field: a CatapultCartesianField, holding the field and the surface
+        classifier tabulated at the precision to trace in; particles are
+        stopped when they cross that surface
     xyz_inits: initial positions, shape (nparticles, 3), in (x, y, z)
     parallel_speeds: initial parallel speeds of the particles
     tmax: maximum time to trace particles, either a scalar applied to every
@@ -946,7 +843,6 @@ def trace_particles_cartesian_gpu(
           (t, -1, x, y, z, vpar) at the final state of a particle that
           crossed the surface, or an empty array
     """
-    cfield = _catapult_cartesian(field, surface_classifier, np.asarray(xyz_inits).dtype)
     nparticles = xyz_inits.shape[0]
     tmax = _per_particle(tmax, nparticles, np.float64, None)
     kwargs = {
@@ -958,11 +854,11 @@ def trace_particles_cartesian_gpu(
     }
     if forget_exact_path:
         final = advance_particles_cartesian_gpu(
-            cfield, None, xyz_inits, parallel_speeds, tmax, **kwargs
+            field, xyz_inits, parallel_speeds, tmax, **kwargs
         )
         bodies = final[:, None, :]
     else:
         bodies = save_trajectories_cartesian_gpu(
-            cfield, None, xyz_inits, parallel_speeds, _one_tmax(tmax), dt_save, **kwargs
+            field, xyz_inits, parallel_speeds, _one_tmax(tmax), dt_save, **kwargs
         )
     return _cpu_format(xyz_inits, parallel_speeds, bodies, tmax)

@@ -90,11 +90,8 @@ class TestCatapultBoozerField(unittest.TestCase):
         cfield = CatapultBoozerField(self.field, *RESOLUTION)
         stz = np.array([[0.5, 0.0, 0.0]])
         vpar = np.array([1e6])
-        # the resolution is fixed by the field object
-        with self.assertRaises(ValueError):
-            trace_particles_boozer_gpu(cfield, stz, vpar, ns=2)
-        # a bare field needs one
-        with self.assertRaises(ValueError):
+        # the tracers take a tabulated field, not the field it was built from
+        with self.assertRaises(TypeError):
             trace_particles_boozer_gpu(self.field, stz, vpar)
         # CATAPULT takes one kinetic energy for all particles
         with self.assertRaises(ValueError):

@@ -698,7 +698,7 @@ class CATAPULTField:
 
         if self.field_type == "boozer_vacuum":
             trajectories = save_trajectories_boozer_gpu(
-                field=self.field,
+                field=CatapultBoozerField(self.field, self.ns, self.ntheta, self.nzeta),
                 stz_inits=stz.copy(),
                 parallel_speeds=vpar.copy(),
                 tmax=tmax,
@@ -707,9 +707,6 @@ class CATAPULTField:
                 charge=CHARGE,
                 vtotal=vtotal,
                 tol=1e-9,
-                ns=self.ns,
-                ntheta=self.ntheta,
-                nzeta=self.nzeta,
             )
         else:
             raise NotImplementedError(
@@ -837,18 +834,6 @@ class TestGPUTracingBoozerVacuum(unittest.TestCase):
             self.stz, self.vpar_init, self.VELOCITY, tmax, dt_save, self.field.psi0
         )
         self.assertTrue(is_small)
-
-    def test_catapult_field(self):
-        # a prebuilt CatapultBoozerField traces exactly as a bare field with
-        # the resolution passed
-        field = self.field.field
-        res = self.n_metagrid_pts
-        stz = self.stz[:200]
-        vpar = self.vpar_init[:200]
-        args = (stz, vpar, 1e-6, MASS, CHARGE, self.VELOCITY, 1e-8)
-        bare = advance_particles_boozer_gpu(field, *args, ns=res, ntheta=res, nzeta=res)
-        cfield = CatapultBoozerField(field, res, res, res)
-        np.testing.assert_array_equal(advance_particles_boozer_gpu(cfield, *args), bare)
 
     def test_single_precision_tracing(self):
         field = self.field.field
@@ -1046,21 +1031,16 @@ class TestGPUTracingBoozerVacuumSAW(unittest.TestCase):
         self.assertTrue(is_small)
 
     def test_perturbed_tracer(self):
-        # tracing through a prebuilt CatapultPerturbedBoozerField matches
-        # tracing with the superposition and a resolution, and the given
-        # magnetic moments are the ones the kernel uses
+        # the magnetic moments given are the ones the kernel uses
         res = self.n_metagrid_pts
         stz = self.stz[:200]
         vpar = self.vpar_init[:200]
         self.saw.B0.set_points(stz)
         mus = (self.VELOCITY**2 - vpar**2) / (2 * self.saw.B0.modB()[:, 0])
-        kwargs = {"tmax": 1e-6, "mass": MASS, "charge": CHARGE, "tol": 1e-8}
-        bare = advance_particles_boozer_perturbed_gpu(
-            self.saw, stz, vpar, mus, ns=res, ntheta=res, nzeta=res, **kwargs
-        )
         cfield = CatapultPerturbedBoozerField(self.saw, res, res, res)
-        out = advance_particles_boozer_perturbed_gpu(cfield, stz, vpar, mus, **kwargs)
-        np.testing.assert_array_equal(out, bare)
+        out = advance_particles_boozer_perturbed_gpu(
+            cfield, stz, vpar, mus, tmax=1e-6, mass=MASS, charge=CHARGE, tol=1e-8
+        )
         np.testing.assert_array_equal(out[:, 6], mus)
 
         # and in single precision, held to the orbits' own sensitivity

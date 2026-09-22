@@ -76,7 +76,6 @@ field_gpu = CatapultCartesianField(bsh, sc_particle)
 
 res_tys, res_hits = trace_particles_cartesian_gpu(
     field_gpu,
-    None,
     xyz_inits,
     vpar_inits,
     tmax=tmax,
@@ -104,7 +103,6 @@ with h5py.File("trajectories.h5", "w") as f:
 # at the level of the integration error.
 res_tys_single, res_hits_single = trace_particles_cartesian_gpu(
     field_gpu,
-    None,
     xyz_inits,
     vpar_inits,
     tmax=tmax,

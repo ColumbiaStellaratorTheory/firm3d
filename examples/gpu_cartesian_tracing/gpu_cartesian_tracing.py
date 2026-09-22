@@ -67,7 +67,6 @@ vpar_inits = initialize_velocity_uniform(vpar0, nparticles)
 field_gpu = CatapultCartesianField(bsh, sc_particle)
 res_tys, res_hits = trace_particles_cartesian_gpu(
     field_gpu,
-    None,
     xyz,
     vpar_inits,
     tmax=tmax,
