@@ -13,7 +13,6 @@ from ..util.constants import (
     ALPHA_PARTICLE_MASS,
     FUSION_ALPHA_PARTICLE_ENERGY,
 )
-from ..util.functions import proc0_print
 
 __all__ = [
     "MinToroidalFluxStoppingCriterion",
@@ -21,9 +20,6 @@ __all__ = [
     "IterationStoppingCriterion",
     "ToroidalTransitStoppingCriterion",
     "StepSizeStoppingCriterion",
-    "compute_resonances",
-    "compute_poloidal_transits",
-    "compute_toroidal_transits",
     "trace_particles_boozer",
 ]
 
@@ -442,6 +438,11 @@ def trace_particles_boozer(
             If `idx<0`, then `stopping_criteria[int(-idx)-1]` was hit.
             The state vector is `[s, theta, zeta, v_par]`.
     """
+    if isinstance(field, ShearAlfvenWave):
+        raise TypeError(
+            "trace_particles_boozer traces equilibrium fields; use "
+            "trace_particles_boozer_perturbed for a field with shear Alfven waves"
+        )
     if stopping_criteria is None:
         stopping_criteria = []
     if vpars is None:
@@ -567,133 +568,6 @@ def trace_particles_boozer(
         res_tys = [i for o in comm.allgather(res_tys) for i in o]
         res_hits = [i for o in comm.allgather(res_hits) for i in o]
     return res_tys, res_hits
-
-
-def compute_resonances(res_tys, res_hits, delta=1e-2):
-    r"""
-    Computes resonant particle orbits given the output of
-    :func:`trace_particles_boozer`, ``res_tys`` and
-    ``res_hits``, with ``forget_exact_path=False``. Resonance indicates a
-    trajectory which returns to the same position
-    at the :math:`\zeta = 0` plane after ``mpol`` poloidal turns and
-    ``ntor`` toroidal turns.
-
-    Args:
-        res_tys: trajectory solution computed from :func:`trace_particles` or
-                :func:`trace_particles_boozer` with ``forget_exact_path=False``
-        res_hits: output of :func:`trace_particles_boozer` with `zetas = [0]`
-        delta: the distance tolerance in the poloidal plane used to compute
-                a resonant orbit. (defaults to 1e-2)
-
-    Returns:
-        resonances: list of 7d arrays containing resonant particle orbits. The
-                elements of each array is
-                ``[s0, theta0, zeta0, vpar0, t, mpol, ntor]``.
-                Here ``(s0, theta0, zeta0, vpar0)`` indicates the
-                initial position and parallel velocity of the particle, ``t``
-                indicates the time of the  resonance, ``mpol`` is the number of
-                poloidal turns of the orbit, and ``ntor`` is the number of
-                toroidal turns.
-    """
-    nparticles = len(res_tys)
-    resonances = []
-    # Iterate over particles
-    for ip in range(nparticles):
-        nhits = len(res_hits[ip])
-        s0 = res_tys[ip][0, 1]
-        theta0 = res_tys[ip][0, 2]
-        zeta0 = res_tys[ip][0, 3]
-        theta0_mod = theta0 % (2 * np.pi)
-        x0 = s0 * np.cos(theta0)
-        y0 = s0 * np.sin(theta0)
-        vpar0 = res_tys[ip][0, 4]
-        for it in range(1, nhits):
-            # Check whether phi hit or stopping criteria achieved
-            if int(res_hits[ip][it, 1]) >= 0:
-                s = res_hits[ip][it, 2]
-                theta = res_hits[ip][it, 3]
-                zeta = res_hits[ip][it, 4]
-                theta_mod = theta % 2 * np.pi
-                x = s * np.cos(theta)
-                y = s * np.sin(theta)
-                dist = np.sqrt((x - x0) ** 2 + (y - y0) ** 2)
-                t = res_hits[ip][it, 0]
-                if dist < delta:
-                    proc0_print("Resonance found.")
-                    proc0_print(
-                        f"theta = {theta_mod}, theta0 = {theta0_mod}, "
-                        f"s = {s}, s0 = {s0}"
-                    )
-                    mpol = np.rint((theta - theta0) / (2 * np.pi))
-                    ntor = np.rint((zeta - zeta0) / (2 * np.pi))
-                    resonances.append(
-                        np.asarray([s0, theta0, zeta0, vpar0, t, mpol, ntor])
-                    )
-    return resonances
-
-
-def compute_toroidal_transits(res_tys):
-    r"""
-    Computes the number of toroidal transits of an orbit.
-
-    Args:
-        res_tys: trajectory solution computed from :func:`trace_particles_boozer`
-            with ``forget_exact_path=False``.
-
-    Returns:
-        ntransits: array with length ``len(res_tys)``. Each element contains the
-                number of toroidal transits of the orbit.
-    """
-    nparticles = len(res_tys)
-    ntransits = np.zeros((nparticles,))
-    for ip in range(nparticles):
-        ntraj = len(res_tys[ip][:, 0])
-        phi_init = res_tys[ip][0, 3]
-        for it in range(1, ntraj):
-            phi = res_tys[ip][it, 3]
-        if ntraj > 1:
-            ntransits[ip] = np.round((phi - phi_init) / (2 * np.pi))
-    return ntransits
-
-
-def compute_poloidal_transits(res_tys, ma=None, flux=True):
-    r"""
-    Computes the number of poloidal transits of an orbit. For the case of
-    particles traced in a :class:`MagneticField` (not a :class:`BoozerMagneticField`),
-    the poloidal angle is computed using the arctangent angle in the poloidal plane with
-    respect to the coordinate axis, ``ma``,
-
-    .. math::
-        \theta = \tan^{-1} \left( \frac{R(\phi)-R_{\mathrm{ma}}(\phi)}
-        {Z(\phi)-Z_{\mathrm{ma}}(\phi)} \right),
-
-    where :math:`(R,\phi,Z)` are the cylindrical coordinates of the trajectory
-    and :math:`(R_{\mathrm{ma}}(\phi),Z_{\mathrm{ma}(\phi)})` is the position
-    of the coordinate axis.
-
-    Args:
-        res_tys: trajectory solution computed from :func:`trace_particles` or
-                :func:`trace_particles_boozer` with ``forget_exact_path=False``.
-        ma: an instance of :class:`Curve` representing the coordinate axis with
-                respect to which the poloidal angle is computed. If orbit is
-                computed in Boozer coordinates, ``ma`` should be ``None``.
-        flux: if ``True``, ``res_tys`` represents the position in flux coordinates
-                (should be ``True`` if computed from :func:`trace_particles_boozer`).
-                If ``True``, ``ma`` is not used.
-    Returns:
-        ntransits: array with length ``len(res_tys)``. Each element contains the
-                number of poloidal transits of the orbit.
-    """
-    nparticles = len(res_tys)
-    ntransits = np.zeros((nparticles,))
-    for ip in range(nparticles):
-        ntraj = len(res_tys[ip][:, 0])
-        theta_init = res_tys[ip][0, 2]
-        for it in range(1, ntraj):
-            theta = res_tys[ip][it, 2]
-        if ntraj > 1:
-            ntransits[ip] = np.round((theta - theta_init) / (2 * np.pi))
-    return ntransits
 
 
 class MinToroidalFluxStoppingCriterion(sopp.MinToroidalFluxStoppingCriterion):

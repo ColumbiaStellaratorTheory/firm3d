@@ -1,5 +1,6 @@
 import builtins
 import logging
+import math
 import os
 import sys
 
@@ -71,3 +72,21 @@ def setup_logging(filename):
             original_print(*args, **kwargs, flush=True)
 
     builtins.print = logged_print
+
+
+def sigmav(T):
+    r"""
+    Approximate the D-T fusion reactivity <sigma v> as a function of ion
+    temperature, using the fitting formula from Bosch & Hale (1992), reduced
+    to its leading-order (Gamow-peak) behavior.
+
+    Args:
+        T : Ion temperature in keV.
+
+    Returns:
+        sigmav : Approximate fusion reactivity (up to an overall constant),
+                 or 0 if T <= 0.
+    """
+    if T > 0:
+        return T ** (-2 / 3) * math.exp(-19.94 * T ** (-1 / 3))
+    return 0

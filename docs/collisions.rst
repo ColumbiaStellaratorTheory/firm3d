@@ -220,10 +220,12 @@ Entry Points
        ``(parallel_speeds, mus)``.
    * - ``trace_particles_boozer_with_collisions_gpu``
      - ``firm3d.catapult.tracing``
-     - Final state only, no stopping criteria, scalar ``vtotal``.
+     - Final state only, no stopping criteria, scalar ``Ekin``. Takes a
+       ``CatapultBoozerField``.
    * - ``trace_particles_cartesian_with_collisions_gpu``
      - ``firm3d.catapult.tracing``
-     - As above, in Cartesian coordinates; takes a ``flux_label`` callable.
+     - As above, in Cartesian coordinates; takes a
+       ``CatapultCartesianField`` built with a ``flux_label``.
 
 All four accept a single ``ThermalBackground`` or a list of them.
 
@@ -392,21 +394,23 @@ GPU Collisional Tracing
 
 .. code-block:: python
 
+   from firm3d.catapult.field import CatapultBoozerField
    from firm3d.catapult.tracing import trace_particles_boozer_with_collisions_gpu
 
+   # the field is tabulated for the GPU once; collisions run in double
+   # precision, which is CatapultBoozerField's default
+   field_gpu = CatapultBoozerField(field, 48, 48, 48)
+
    final_states = trace_particles_boozer_with_collisions_gpu(
-       field=field,
+       field=field_gpu,
        stz_inits=points,
        parallel_speeds=vpar_init,
        backgrounds=[deuterium, tritium, electrons],
        tmax=1e-2,
        mass=ALPHA_PARTICLE_MASS,
        charge=ALPHA_PARTICLE_CHARGE,
-       vtotal=v0,
+       Ekin=FUSION_ALPHA_PARTICLE_ENERGY,
        tol=1e-8,
-       ns=48,
-       ntheta=48,
-       nzeta=48,
        rng_seed=42,
    )
 
@@ -414,8 +418,9 @@ GPU Collisional Tracing
    s_final = final_states[:, 1]
    v_final = final_states[:, 5]
 
-Note that ``vtotal`` is a single scalar that sets the initial speed of every
-particle, and :math:`\mu` is derived from it as
+Note that ``Ekin`` is a single scalar that sets the initial speed
+:math:`v_\mathrm{total} = \sqrt{2 E_\mathrm{kin}/m}` of every particle, and
+:math:`\mu` is derived from it as
 :math:`(v_\mathrm{total}^2 - v_\parallel^2)/(2|B|)`. Passing
 :math:`|v_\parallel| > v_\mathrm{total}` would give a negative :math:`\mu` and
 is rejected. The GPU tracer requires ``field.field_type`` to be ``"vac"`` or
@@ -425,31 +430,37 @@ GPU Collisional Tracing in Cartesian Coordinates
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The thermal profiles are functions of the flux label :math:`s`, which the
-Cartesian state does not carry. ``trace_particles_cartesian_with_collisions_gpu``
-therefore takes a ``flux_label`` callable mapping cylindrical points
-``(r, phi, z)`` to :math:`s`; its values are interpolated on the same grid as
-the magnetic field and evaluated at the particle position after each accepted
-orbit step, so the same 1D profiles serve both coordinate systems. With an
-equilibrium available, the label can be built from
+Cartesian state does not carry. The ``CatapultCartesianField`` that
+``trace_particles_cartesian_with_collisions_gpu`` traces in therefore takes a
+``flux_label`` callable mapping cylindrical points ``(r, phi, z)`` to
+:math:`s`; its values are tabulated on the same grid as the magnetic field
+and evaluated at the particle position after each accepted orbit step, so the
+same 1D profiles serve both coordinate systems. With an equilibrium
+available, the label can be built from
 :class:`~firm3d.field.coordinates.BoozerCoordinateTransformer`; it must
 return finite values on the whole grid box, and values above 1 outside the
 last closed flux surface are clamped by the profile lookup.
 
 .. code-block:: python
 
+   from firm3d.catapult.field import CatapultCartesianField
    from firm3d.catapult.tracing import trace_particles_cartesian_with_collisions_gpu
 
+   field_gpu = CatapultCartesianField(
+       bsh,                       # simsopt InterpolatedField
+       sc_particle,               # simsopt SurfaceClassifier
+       flux_label=s_of_rphiz,     # (N, 3) cylindrical points -> s
+   )
+
    final_states = trace_particles_cartesian_with_collisions_gpu(
-       field=bsh,                        # simsopt InterpolatedField
-       surface_classifier=sc_particle,   # simsopt SurfaceClassifier
-       flux_label=s_of_rphiz,            # (N, 3) cylindrical points -> s
+       field=field_gpu,
        xyz_inits=xyz,
        parallel_speeds=vpar_init,
        backgrounds=[deuterium, tritium, electrons],
        tmax=1e-2,
        mass=ALPHA_PARTICLE_MASS,
        charge=ALPHA_PARTICLE_CHARGE,
-       vtotal=v0,
+       Ekin=FUSION_ALPHA_PARTICLE_ENERGY,
        tol=1e-8,
        rng_seed=42,
    )

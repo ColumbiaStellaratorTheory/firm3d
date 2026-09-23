@@ -135,9 +135,9 @@ regular grid in :math:`(s,\theta,\zeta)` using the C++ ``RegularGridInterpolant3
 The interpolant is built by sampling each quantity at two reference times
 (:math:`t=0` and a quarter-period offset) and reconstructing the full time
 dependence at evaluation time via trigonometric identities. Use it in tracing loops where repeated wave evaluations dominate
-runtime, especially for a large number of harmonics. 
+runtime, especially for a large number of harmonics.
 
-Usage Example 
+Usage Example
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
@@ -168,7 +168,7 @@ Usage Example
        minor_radius_meters=1.7,
    )
 
-   # Interpolant for fast tracing 
+   # Interpolant for fast tracing
    saw_interp = InterpolatedShearAlfvenWave(
        saw,
        degree=3,

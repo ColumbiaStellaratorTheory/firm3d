@@ -181,3 +181,16 @@ Class Hierarchy
 #    firm3d.saw
 #    firm3d.saw.ae3d
 #    firm3d.saw.stellgap
+
+GPU tracing (CATAPULT)
+----------------------
+
+.. automodule:: firm3d.catapult.field
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: firm3d.catapult.tracing
+   :members:
+   :undoc-members:
+   :show-inheritance:

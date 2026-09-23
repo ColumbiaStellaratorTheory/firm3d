@@ -841,32 +841,58 @@ class TestUnphysicalCoulombLog(unittest.TestCase):
         self.assertTrue(issubclass(hits[0].category, RuntimeWarning))
 
 
+class _StubField:
+    """A 2x2x2 cylindrical field, enough to tabulate an interpolant from."""
+
+    r_range = (1.0, 2.0, 2)
+    phi_range = (0.0, np.pi, 2)
+    z_range = (0.0, 0.5, 2)
+
+    def set_points_cyl(self, pts):
+        self._pts = pts
+
+    def B_cyl(self):
+        return np.zeros((self._pts.shape[0], 3))
+
+    def GradAbsB_cyl(self):
+        return np.zeros((self._pts.shape[0], 3))
+
+
+class _StubClassifier:
+    def evaluate_rphiz(self, pts):
+        return np.ones((pts.shape[0], 1))
+
+
 class TestCartesianCollisionValidation(unittest.TestCase):
     """
     Python-layer validation of the Cartesian collisional GPU entry point.
 
     Every check here fires before any GPU call, so these run without CUDA;
-    the field and classifier arguments are placeholders that must never be
-    touched.
+    the field is a stub tabulated on a 2x2x2 grid and is never traced in.
     """
 
     @staticmethod
-    def _trace(**overrides):
+    def _field(flux_label=lambda pts: np.full(pts.shape[0], 0.5)):
+        from firm3d.catapult.field import CatapultCartesianField
+
+        return CatapultCartesianField(
+            _StubField(), _StubClassifier(), flux_label=flux_label
+        )
+
+    def _trace(self, **overrides):
         from firm3d.catapult.tracing import (
             trace_particles_cartesian_with_collisions_gpu,
         )
 
         kw = {
-            "field": None,
-            "surface_classifier": None,
-            "flux_label": lambda pts: np.full(pts.shape[0], 0.5),
+            "field": self._field(),
             "xyz_inits": np.zeros((4, 3)),
             "parallel_speeds": np.zeros(4),
             "backgrounds": _hot_background(),
             "tmax": 1e-8,
             "mass": ALPHA_PARTICLE_MASS,
             "charge": ALPHA_PARTICLE_CHARGE,
-            "vtotal": 1e6,
+            "Ekin": 0.5 * ALPHA_PARTICLE_MASS * 1e12,
             "tol": 1e-8,
         }
         kw.update(overrides)
@@ -875,10 +901,11 @@ class TestCartesianCollisionValidation(unittest.TestCase):
     def test_missing_flux_label_is_refused(self):
         """
         Without the label column the kernel would read the 8-column layout
-        off a 7-column array, so None must be refused before any tracing.
+        off a 7-column array, so a field without one must be refused before
+        any tracing.
         """
         with self.assertRaises(ValueError) as cm:
-            self._trace(flux_label=None)
+            self._trace(field=self._field(flux_label=None))
         self.assertIn("flux_label", str(cm.exception))
 
     def test_empty_backgrounds_are_refused(self):
@@ -900,30 +927,10 @@ class TestCartesianFluxLabelColumn(unittest.TestCase):
     count and the rejection of bad label output are covered here.
     """
 
-    class _StubField:
-        r_range = (1.0, 2.0, 2)
-        phi_range = (0.0, np.pi, 2)
-        z_range = (0.0, 0.5, 2)
-
-        def set_points_cyl(self, pts):
-            self._pts = pts
-
-        def B_cyl(self):
-            return np.zeros((self._pts.shape[0], 3))
-
-        def GradAbsB_cyl(self):
-            return np.zeros((self._pts.shape[0], 3))
-
-    class _StubClassifier:
-        def evaluate_rphiz(self, pts):
-            return np.ones((pts.shape[0], 1))
-
     def _interpolant(self, **kwargs):
         from firm3d.catapult.utils import cartesian_interpolant
 
-        return cartesian_interpolant(
-            self._StubField(), self._StubClassifier(), **kwargs
-        )
+        return cartesian_interpolant(_StubField(), _StubClassifier(), **kwargs)
 
     def test_label_column_count_and_validation(self):
         _, _, _, quad = self._interpolant(flux_label=lambda pts: np.ones(len(pts)))

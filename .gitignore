@@ -66,3 +66,10 @@ tests/boundary*
 
 # Version file
 src/firm3d/_version.py
+
+# Nsight Reports
+*.ncu-rep
+
+# outputs written by the GPU examples
+examples/**/particle_data.csv
+examples/**/trajectories.h5

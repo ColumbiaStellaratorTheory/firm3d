@@ -10,6 +10,7 @@ from simsopt.field import (
 )
 from simsopt.geo import SurfaceRZFourier
 
+from firm3d.catapult.field import CatapultCartesianField
 from firm3d.catapult.tracing import trace_particles_cartesian_with_collisions_gpu
 from firm3d.field.boozermagneticfield import (
     BoozerRadialInterpolant,
@@ -157,17 +158,20 @@ xyz = np.column_stack(
 v0 = np.sqrt(2 * FUSION_ALPHA_PARTICLE_ENERGY / ALPHA_PARTICLE_MASS)
 vpar_inits = initialize_velocity_uniform(v0, nparticles)
 
+# The field, the boundary distance and the flux label are tabulated for the
+# GPU once; the label is what the collision kick evaluates the thermal
+# profiles at, since the Cartesian state does not carry it.
+field_gpu = CatapultCartesianField(bsh, sc_particle, flux_label=flux_label)
+
 last_time = trace_particles_cartesian_with_collisions_gpu(
-    bsh,
-    sc_particle,
-    flux_label,
+    field_gpu,
     xyz,
     vpar_inits,
     backgrounds=backgrounds,
     tmax=tmax,
     mass=ALPHA_PARTICLE_MASS,
     charge=ALPHA_PARTICLE_CHARGE,
-    vtotal=v0,
+    Ekin=FUSION_ALPHA_PARTICLE_ENERGY,
     tol=tol,
     rng_seed=0,
 )

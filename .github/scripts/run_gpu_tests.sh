@@ -40,7 +40,7 @@ cd "$FIRM3D_DIR"
 echo "--- Installing firm3d ---"
 env CC=cc CXX=CC pip install -v --no-build-isolation -e ".[dev]" 2>&1 | tee "$WORK_DIR/build.log"
 
-if ! grep -q "CUDA found. GPU bindings will be compiled." "$WORK_DIR/build.log"; then
+if ! grep -q "GPU bindings will be compiled with" "$WORK_DIR/build.log"; then
     echo "ERROR: GPU bindings were not compiled." >&2
     echo "1" > "$EXIT_CODE_FILE"
     exit 1
@@ -55,7 +55,7 @@ python -c "import firm3dpp; print('firm3dpp loaded OK')"
 # and always write EXIT_CODE_FILE even when tests fail.
 echo "--- Running GPU tests ---"
 set +e
-python -m coverage run -m unittest tests.field.test_gpu
+python -m coverage run -m unittest tests.field.test_gpu tests.field.test_gpu_collisions
 TEST_EXIT=$?
 set -e
 

@@ -15,7 +15,7 @@ from firm3d.field.tracing_helpers import (
     initialize_position_uniform_vol,
     initialize_velocity_uniform,
 )
-from firm3d.field.trajectory_helpers import compute_peta
+from firm3d.trajectory_helpers import compute_peta
 from firm3d.util.constants import (
     ALPHA_PARTICLE_CHARGE,
     ALPHA_PARTICLE_MASS,

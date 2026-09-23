@@ -1,20 +1,20 @@
 import numpy as np
 
-from firm3d.catapult.tracing import trace_particles_boozer_gpu
-from firm3d.catapult.utils import boozer_saw_interpolant
+from firm3d.catapult.field import CatapultPerturbedBoozerField
+from firm3d.catapult.tracing import trace_particles_boozer_perturbed_gpu
 from firm3d.field.boozermagneticfield import (
     BoozerRadialInterpolant,
     InterpolatedBoozerField,
     ShearAlfvenWavesSuperposition,
 )
+from firm3d.field.tracing_helpers import initialize_position_profile
 
 # for SAW wave
 from firm3d.saw.ae3d import AE3DEigenvector
 from firm3d.util.constants import ALPHA_PARTICLE_CHARGE as CHARGE
 from firm3d.util.constants import ALPHA_PARTICLE_MASS as MASS
 from firm3d.util.constants import FUSION_ALPHA_PARTICLE_ENERGY as ENERGY
-from firm3d.util.functions import in_github_actions
-from firm3d.util.sampling import sample_stz
+from firm3d.util.functions import in_github_actions, sigmav
 
 np.random.seed(1800)
 
@@ -55,30 +55,42 @@ saw = ShearAlfvenWavesSuperposition.from_ae3d(
 )
 
 
-# set up interpolant data
-srange, trange, zrange, quad_info, maxJ = boozer_saw_interpolant(
-    field, nfp, n_metagrid_pts, n_metagrid_pts, n_metagrid_pts
-)
+# Define fusion birth distribution
+# Bader, A., et al. "Modeling of energetic particle transport in optimized
+# stellarators." Nuclear Fusion 61.11 (2021): 116060.
+nD = lambda s: 1 - s**5  # Normalized density
+nT = nD
+T = lambda s: 11.5 * (1 - s)  # Temperature in keV
 
-stz_inits = np.vstack([sample_stz(field, maxJ) for i in range(nparticles)])
+# Reactivity profile
+reactivity = lambda s: nD(s) * nT(s) * sigmav(T(s))
+
+stz = initialize_position_profile(field, nparticles, reactivity)
+
+# tabulate the perturbed field for the GPU once
+field_gpu = CatapultPerturbedBoozerField(
+    saw, n_metagrid_pts, n_metagrid_pts, n_metagrid_pts
+)
 VELOCITY = np.sqrt(2 * ENERGY / MASS)
 vpar_init = np.random.uniform(-VELOCITY, VELOCITY, (nparticles,))
-stz = np.ascontiguousarray(stz_inits)
+
+# The waves do work on the particles, so, as for trace_particles_boozer_perturbed,
+# the magnetic moment is given per particle rather than the energy.
+field.set_points(stz)
+mu_init = (VELOCITY**2 - vpar_init**2) / (2 * field.modB()[:, 0])
 
 tol = 1e-4 if in_github_actions else 1e-9  # Tolerance for ODE solver
-last_time = trace_particles_boozer_gpu(
-    saw,
+res_tys, res_hits = trace_particles_boozer_perturbed_gpu(
+    field_gpu,
     stz,
     vpar_init,
-    tmax,
-    MASS,
-    CHARGE,
-    np.sqrt(2 * ENERGY / MASS),
-    tol,
-    n_metagrid_pts,
-    n_metagrid_pts,
-    n_metagrid_pts,
+    mu_init,
+    tmax=tmax,
+    mass=MASS,
+    charge=CHARGE,
+    Ekin=ENERGY,
+    tol=tol,
 )
-loss_times = last_time[:, 0]
+loss_times = np.array([traj[-1, 0] for traj in res_tys])
 print("loss times: ", loss_times)
-print("loss frac: ", np.mean(loss_times < tmax))
+print("loss frac: ", np.mean([len(hits) > 0 for hits in res_hits]))

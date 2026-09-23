@@ -524,7 +524,7 @@ public:
         // Dense output interpolation using 5th order polynomial
         // This allows evaluation at any point within the last step
         
-        if (t < t_old_ - 1e-14 || t > this->current_time_ + 1e-14) {
+        if (t < t_old_ - 1e-13 || t > this->current_time_ + 1e-13) {
             std::ostringstream oss;
             oss << std::scientific << "DormandPrinceSolver::calc_state: t outside last step interval. t - t_old_ = " << (t - t_old_) << ", current_time_ - t = " << (this->current_time_ - t);
             throw std::runtime_error(oss.str());

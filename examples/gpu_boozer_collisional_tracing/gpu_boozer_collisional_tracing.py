@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 
+from firm3d.catapult.field import CatapultBoozerField
 from firm3d.catapult.tracing import trace_particles_boozer_with_collisions_gpu
 from firm3d.field.boozermagneticfield import (
     BoozerRadialInterpolant,
@@ -98,19 +99,20 @@ backgrounds = [
     ),
 ]
 
+# The field is tabulated for the GPU once; collisions are traced in double
+# precision, so the field is built that way.
+field_gpu = CatapultBoozerField(field, resolution, resolution, resolution)
+
 last_time = trace_particles_boozer_with_collisions_gpu(
-    field,
+    field_gpu,
     stz_inits,
     vpar_inits,
     backgrounds=backgrounds,
     tmax=tmax,
     mass=mass,
     charge=charge,
-    vtotal=v0,
+    Ekin=Ekin,
     tol=tol,
-    ns=resolution,
-    ntheta=resolution,
-    nzeta=resolution,
     rng_seed=0,
 )
 # The collisional output has seven columns rather than six: the total speed

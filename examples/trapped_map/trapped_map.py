@@ -5,7 +5,7 @@ import numpy as np
 from firm3d.field.boozermagneticfield import (
     InterpolatedBoozerField,
 )
-from firm3d.field.trajectory_helpers import TrappedPoincare
+from firm3d.trajectory_helpers import TrappedPoincare
 from firm3d.util.constants import (
     ALPHA_PARTICLE_CHARGE,
     ALPHA_PARTICLE_MASS,
@@ -23,7 +23,7 @@ Ekin = FUSION_ALPHA_PARTICLE_ENERGY
 resolution = 10 if in_github_actions else 48  # Resolution for field interpolation
 neta_poinc = 5  # Number of eta initial conditions for poincare
 ns_poinc = 5 if in_github_actions else 120  # Number of s initial conditions
-Nmaps = 5 if in_github_actions else 1000  # Number of Poincare return maps to compute
+Nmaps = 5 if in_github_actions else 1500  # Number of Poincare return maps to compute
 ns_interp = resolution  # number of radial grid points for interpolation
 ntheta_interp = resolution  # number of poloidal grid points for interpolation
 nzeta_interp = resolution  # number of toroidal grid points for interpolation
@@ -62,6 +62,7 @@ poinc = TrappedPoincare(
     zeta_mirror,
     ns_poinc=ns_poinc,
     neta_poinc=neta_poinc,
+    chaos_detection=True,
     Nmaps=Nmaps,
     comm=comm_world,
     solver_options={"reltol": tol, "abstol": tol, "axis": 0},

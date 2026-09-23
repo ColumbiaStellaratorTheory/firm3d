@@ -15,12 +15,17 @@ echo "Adding conda-forge channel..."
 conda config --add channels conda-forge
 check_success "Failed to add conda-forge channel"
 
-echo "Enter the name for the new conda environment (e.g., firm3d):"
+echo "Enter the name or full path for the new conda environment (e.g., firm3d or /path/to/envs/firm3d):"
 read -p "Your input: " env_name
+# A path (contains a slash) is a conda prefix; anything else is an env name.
+case "$env_name" in
+    */*) env_flag=(--prefix "$env_name") ;;
+    *)   env_flag=(--name "$env_name") ;;
+esac
 
 echo "Creating conda environment: $env_name"
 # At 2025-12-02, NERSC Conda had Python 3.11.7:
-conda create -n "$env_name" python=3.11.7
+conda create "${env_flag[@]}" python=3.11.7
 check_success "Failed to create conda environment $env_name"
 
 echo "Activating conda environment: $env_name"
@@ -29,7 +34,7 @@ check_success "Failed to activate conda environment $env_name"
 
 # Install Dependencies
 echo "Installing FIRM3D dependencies..."
-conda install -y compilers netcdf-fortran openmpi-mpicc openmpi-mpifort openblas scalapack gsl matplotlib --name "$env_name"
+conda install -y compilers netcdf-fortran openmpi-mpicc openmpi-mpifort openblas scalapack gsl matplotlib "${env_flag[@]}"
 pip install mpi4py
 check_success "Failed to install FIRM3D dependencies"
 
