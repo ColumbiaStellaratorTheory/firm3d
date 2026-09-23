@@ -83,22 +83,71 @@ jobs:
           flags: unittests
           name: codecov-perlmutter
 
-      - name: Format results comment
+
+      ### build master for timing comparison
+      - name: Checkout master
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          path: master-checkout
+
+      - name: Submit SLURM job and wait (master)
+        id: slurm_master
+        if: github.event_name == 'pull_request'
+        env:
+          NERSC_ACCOUNT: ${{ secrets.NERSC_ACCOUNT }}
+          WORK_DIR: ${{ runner.temp }}/firm3d-master-${{ github.sha }}
+        run: |
+            mkdir -p "$WORK_DIR"
+            cp .github/scripts/run_gpu_tests.sh "$WORK_DIR/run_gpu_tests.sh"
+
+            JOB_ID=$(sbatch \
+              --account="$NERSC_ACCOUNT" \
+              --output="$WORK_DIR/slurm-%j.out" \
+              "$WORK_DIR/run_gpu_tests.sh" "$WORK_DIR" "$GITHUB_WORKSPACE" \
+              | awk '{print $NF}')
+            echo "Submitted SLURM job $JOB_ID"
+
+            echo "Polling job $JOB_ID every 60 s..."
+            while true; do
+              # Touch a file so the login node doesn't consider this session idle.
+              touch "$WORK_DIR/.runner-keepalive"
+              STATE=$(squeue -j "$JOB_ID" -h -o '%T' 2>/dev/null || true)
+              echo "  $(date '+%H:%M:%S')  state: ${STATE:-DONE}"
+              case "$STATE" in
+                PENDING|CONFIGURING|RUNNING|COMPLETING) sleep 60 ;;
+                FAILED|TIMEOUT|CANCELLED|OUT_OF_MEMORY)
+                  cat "$WORK_DIR/slurm-$JOB_ID.out" || true
+                  echo "::error::SLURM job ended in state: $STATE"
+                  exit 1 ;;
+                *) break ;;
+              esac
+            done
+
+            cat "$WORK_DIR/slurm-$JOB_ID.out"
+
+            if [ ! -f "$WORK_DIR/test_exit_code.txt" ]; then
+              echo "::error::SLURM job did not produce test_exit_code.txt — job likely crashed before tests ran"
+              exit 1
+            fi
+            EXIT_CODE=$(tr -d '[:space:]' < "$WORK_DIR/test_exit_code.txt")
+            if [ "$EXIT_CODE" != "0" ]; then
+              echo "::error::GPU tests failed (exit $EXIT_CODE)"
+              exit 1
+            fi
+            echo "All GPU tests passed."
+
+            # Record whether coverage was produced for the next step.
+            [ -f "$WORK_DIR/coverage.xml" ] && echo "coverage=true" >> "$GITHUB_OUTPUT" || true
+      - name: Compare against master
         if: always() && github.event_name == 'pull_request'
         run: |
-          WORK_DIR="${{ runner.temp }}/firm3d-${{ github.sha }}"
-          {
-            echo "### GPU Regression Test Results"
-            echo ""
-            if [ -f "$WORK_DIR/gpu_boozer_tracing_results.json" ]; then
-              echo "**boozer_tracing**"
-              echo '```json'
-              cat "$WORK_DIR/gpu_boozer_tracing_results.json"
-              echo '```'
-            else
-              echo "**boozer_tracing**: no results (test failed or skipped)"
-            fi
-          } > "$WORK_DIR/pr_comment.md"
+          python .github/scripts/compare_timing.py \
+            "${{ runner.temp }}/firm3d-master-${{ github.sha }}/gpu_boozer_tracing_results.json" \
+            "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_boozer_tracing_results.json" \
+            boozer_tracing \
+            "${{ runner.temp }}/firm3d-${{ github.sha }}/pr_comment.md"
 
       - name: Comment PR with results
         if: always() && github.event_name == 'pull_request'
@@ -110,3 +159,4 @@ jobs:
       - name: Clean up work directory
         if: always()
         run: rm -rf "${{ runner.temp }}/firm3d-${{ github.sha }}"
+             rm -rf "${{ runner.temp }}/firm3d-master-${{ github.sha }}"
