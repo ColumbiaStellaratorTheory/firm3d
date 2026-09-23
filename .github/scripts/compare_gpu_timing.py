@@ -6,6 +6,7 @@ Usage:
 
 If output.md is omitted, prints to stdout.
 """
+
 import json
 import sys
 
