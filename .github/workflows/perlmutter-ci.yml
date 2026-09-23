@@ -141,14 +141,6 @@ jobs:
             # Record whether coverage was produced for the next step.
             [ -f "$WORK_DIR/coverage.xml" ] && echo "coverage=true" >> "$GITHUB_OUTPUT" || true
 
-      - name: Debug - list checkout contents
-        if: always() && github.event_name == 'pull_request'
-        run: |
-          echo "--- HEAD SHA ---"
-          git -C "$GITHUB_WORKSPACE" rev-parse HEAD
-          echo "--- .github/scripts contents ---"
-          ls -la "$GITHUB_WORKSPACE/.github/scripts/"
-
       - name: Compare against master
         if: always() && github.event_name == 'pull_request'  && steps.slurm.outcome == 'success'
         run: |
@@ -156,7 +148,7 @@ jobs:
           CONDA_BASE=$(conda info --base 2>/dev/null || echo "$HOME/.conda")
           source "$CONDA_BASE/etc/profile.d/conda.sh"
           conda activate firm3d-ci
-          python .github/scripts/compare_timing.py \
+          python .github/scripts/compare_gpu_timing.py \
             "${{ runner.temp }}/firm3d-master-${{ github.sha }}/gpu_boozer_tracing_results.json" \
             "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_boozer_tracing_results.json" \
             boozer_tracing \
