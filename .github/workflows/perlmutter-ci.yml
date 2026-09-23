@@ -94,7 +94,7 @@ jobs:
 
       - name: Submit SLURM job and wait (master)
         id: slurm_master
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.slurm.outcome == 'success'
         env:
           NERSC_ACCOUNT: ${{ secrets.NERSC_ACCOUNT }}
           WORK_DIR: ${{ runner.temp }}/firm3d-master-${{ github.sha }}
@@ -105,7 +105,7 @@ jobs:
             JOB_ID=$(sbatch \
               --account="$NERSC_ACCOUNT" \
               --output="$WORK_DIR/slurm-%j.out" \
-              "$WORK_DIR/run_gpu_tests.sh" "$WORK_DIR" "$GITHUB_WORKSPACE" \
+              "$WORK_DIR/run_gpu_tests.sh" "$WORK_DIR" "$GITHUB_WORKSPACE/master-checkout" \
               | awk '{print $NF}')
             echo "Submitted SLURM job $JOB_ID"
 
@@ -141,8 +141,12 @@ jobs:
             # Record whether coverage was produced for the next step.
             [ -f "$WORK_DIR/coverage.xml" ] && echo "coverage=true" >> "$GITHUB_OUTPUT" || true
       - name: Compare against master
-        if: always() && github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request'  && steps.slurm.outcome == 'success'
         run: |
+          module load cudatoolkit python cray-hdf5/1.14.3.7 cray-netcdf/4.9.2.1
+          CONDA_BASE=$(conda info --base 2>/dev/null || echo "$HOME/.conda")
+          source "$CONDA_BASE/etc/profile.d/conda.sh"
+          conda activate firm3d-ci
           python .github/scripts/compare_timing.py \
             "${{ runner.temp }}/firm3d-master-${{ github.sha }}/gpu_boozer_tracing_results.json" \
             "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_boozer_tracing_results.json" \
@@ -158,5 +162,6 @@ jobs:
 
       - name: Clean up work directory
         if: always()
-        run: rm -rf "${{ runner.temp }}/firm3d-${{ github.sha }}"
-             rm -rf "${{ runner.temp }}/firm3d-master-${{ github.sha }}"
+        run: |
+            rm -rf "${{ runner.temp }}/firm3d-${{ github.sha }}"
+            rm -rf "${{ runner.temp }}/firm3d-master-${{ github.sha }}"
