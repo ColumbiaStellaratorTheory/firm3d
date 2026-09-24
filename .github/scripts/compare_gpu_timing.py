@@ -24,7 +24,6 @@ def fmt(val, precision=4):
         return f"{val:.{precision}f}"
     return str(val)
 
-
 def format_metadata_table(master, pr):
     keys = [
         "nparticles",
@@ -47,6 +46,9 @@ def format_timing_table(master, pr):
     pr_times = pr.get("times", {})
     all_keys = sorted(set(master_times) | set(pr_times))
 
+    no_master = not master
+    no_pr = not pr
+
     lines = [
         "| Test Name | %Δ | Master (s) | PR (s) | Δ (s) |",
         "| --- | --- | --- | --- | --- |",
@@ -56,7 +58,13 @@ def format_timing_table(master, pr):
         p_time = pr_times.get(key)
 
         if m_time is None or p_time is None:
-            lines.append(f"| {key} | NEW | {fmt(m_time)} | {fmt(p_time)} | — |")
+            if no_master:
+                label = "NO MASTER"
+            elif no_pr:
+                label = "NO PR"
+            else:
+                label = "NEW"
+            lines.append(f"| {key} | {label} | {fmt(m_time)} | {fmt(p_time)} | — |")
             continue
 
         delta = p_time - m_time
@@ -84,25 +92,30 @@ def main():
     except FileNotFoundError:
         pr = {}
 
+    missing_note = ""
     if not master or not pr:
-        output = (
-            f"### {example_name}\n\n"
-            f"!!! Missing results — master: {'found' if master else 'MISSING'}, "
-            f"PR: {'found' if pr else 'MISSING'}. Skipping comparison.\n"
+        missing = []
+        if not master:
+            missing.append("master")
+        if not pr:
+            missing.append("PR")
+        missing_note = (
+            f"!!! Missing results file(s): {', '.join(missing)}. "
+            "Showing available values only.\n\n"
         )
-    else:
-        output = (
-            f"### {example_name}\n\n"
-            f"**Metadata**\n{format_metadata_table(master, pr)}\n\n"
-            f"{format_timing_table(master, pr)}\n"
-        )
+
+    output = (
+        f"### {example_name}\n\n"
+        f"{missing_note}"
+        f"**Metadata**\n{format_metadata_table(master, pr)}\n\n"
+        f"{format_timing_table(master, pr)}\n"
+    )
 
     if output_path:
         with open(output_path, "w") as f:
             f.write(output)
     else:
         print(output)
-
 
 if __name__ == "__main__":
     main()
