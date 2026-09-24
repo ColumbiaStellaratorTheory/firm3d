@@ -1,19 +1,28 @@
 """
-Compare timing results between a master run and a PR run for one tracing example.
+Compare timing results between master and PR runs for one or more tracing examples.
 
 Usage:
-    python compare_timing.py <master.json> <pr.json> <example_name> [output.md]
+    python compare_timing.py <master1.json> <pr1.json> <name1> [<master2.json> <pr2.json> <name2> ...] [-o output.md]
 
-If output.md is omitted, prints to stdout.
+Each example is a (master_json, pr_json, example_name) triple. Any number of
+triples may be given. If -o/--output is omitted, prints to stdout.
+
+Example:
+    python compare_timing.py master_a.json pr_a.json "Example A" \\
+                              master_b.json pr_b.json "Example B" \\
+                              -o timing_report.md
 """
 
+import argparse
 import json
-import sys
 
 
 def load(path):
-    with open(path) as f:
-        return json.load(f)
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
 
 
 def fmt(val, precision=4):
@@ -24,8 +33,10 @@ def fmt(val, precision=4):
         return f"{val:.{precision}f}"
     return str(val)
 
+
 def format_metadata_table(master, pr):
     keys = [
+        "tmax",
         "nparticles",
         "tolerance",
         "resolution",
@@ -75,22 +86,10 @@ def format_timing_table(master, pr):
     return "\n".join(lines)
 
 
-def main():
-    if len(sys.argv) < 4:
-        print(__doc__)
-        sys.exit(1)
-
-    master_path, pr_path, example_name = sys.argv[1], sys.argv[2], sys.argv[3]
-    output_path = sys.argv[4] if len(sys.argv) > 4 else None
-
-    try:
-        master = load(master_path)
-    except FileNotFoundError:
-        master = {}
-    try:
-        pr = load(pr_path)
-    except FileNotFoundError:
-        pr = {}
+def format_example(master_path, pr_path, example_name):
+    """Build the markdown section for a single example."""
+    master = load(master_path)
+    pr = load(pr_path)
 
     missing_note = ""
     if not master or not pr:
@@ -104,18 +103,60 @@ def main():
             "Showing available values only.\n\n"
         )
 
-    output = (
+    return (
         f"### {example_name}\n\n"
         f"{missing_note}"
         f"**Metadata**\n{format_metadata_table(master, pr)}\n\n"
         f"{format_timing_table(master, pr)}\n"
     )
 
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Compare timing results for one or more tracing examples.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument(
+        "triples",
+        nargs="+",
+        metavar="master.json pr.json example_name",
+        help="One or more (master_json, pr_json, example_name) triples.",
+    )
+    parser.add_argument(
+        "-o", "--output",
+        metavar="output.md",
+        help="Write combined report to this file instead of stdout.",
+    )
+    args = parser.parse_args()
+
+    if len(args.triples) % 3 != 0:
+        parser.error(
+            f"Expected triples of (master.json, pr.json, example_name), "
+            f"got {len(args.triples)} positional arguments."
+        )
+
+    examples = [
+        args.triples[i:i + 3] for i in range(0, len(args.triples), 3)
+    ]
+    return examples, args.output
+
+
+def main():
+    examples, output_path = parse_args()
+
+    sections = [
+        format_example(master_path, pr_path, example_name)
+        for master_path, pr_path, example_name in examples
+    ]
+    output = "# Timing Comparison\n\n" + "\n---\n\n".join(sections)
+
     if output_path:
         with open(output_path, "w") as f:
             f.write(output)
     else:
         print(output)
+
 
 if __name__ == "__main__":
     main()

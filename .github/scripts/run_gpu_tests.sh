@@ -74,6 +74,7 @@ set +e
 BOOZER_EXIT=$?
 cp examples/gpu_boozer_tracing/gpu_boozer_tracing_results.json "$WORK_DIR/gpu_boozer_tracing_results.json"
 (cd examples/gpu_saw_tracing && python gpu_saw_tracing.py)
+cp examples/gpu_cartesian_tracing/gpu_cartesian_tracing_results.json "$WORK_DIR/gpu_cartesian_tracing_results.json"
 SAW_EXIT=$?
 (cd examples/gpu_cartesian_tracing && python gpu_cartesian_tracing.py)
 CARTESIAN_EXIT=$?

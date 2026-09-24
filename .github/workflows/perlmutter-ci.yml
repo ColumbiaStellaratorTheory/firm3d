@@ -151,7 +151,10 @@ jobs:
           python .github/scripts/compare_gpu_timing.py \
             "${{ runner.temp }}/firm3d-master-${{ github.sha }}/gpu_boozer_tracing_results.json" \
             "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_boozer_tracing_results.json" \
-            boozer_tracing \
+            "GC Boozer Vacuum" \
+            "${{ runner.temp }}/firm3d-master-${{ github.sha }}/gpu_cartesian_tracing_results.json" \
+            "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_cartesian_tracing_results.json" \
+            "GC Cartesian Vacuum" \
             "${{ runner.temp }}/firm3d-${{ github.sha }}/pr_comment.md"
 
       - name: Comment PR with results

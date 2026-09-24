@@ -25,7 +25,7 @@ import time
 resolution = 15  # Resolution for field interpolation
 nparticles = 100000  # Number of particles to trace
 tol = 1e-6  # Tolerance for ODE solver
-tmax = 1e-3
+tmax = 1e-2
 
 ### CREATE A FIELD FOR TRACING
 boozmn_filename = "../inputs/boozmn_ariescs_low_res.nc"
@@ -140,6 +140,7 @@ timing_result = {
     "resolution": resolution,
     "loss_fraction_dbl": loss_fraction_dbl,
     "loss_fraction_flt": loss_fraction_flt,
+    "tmax": tmax,
     "times": {
         "bri_setup": bri_time,
         "field_interpolation": ibf_time,
