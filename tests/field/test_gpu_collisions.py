@@ -268,8 +268,18 @@ class TestGPUCollisionsBoozer(unittest.TestCase):
             cfield, stz.copy(), vpar, forget_exact_path=True, **kw
         )
         without = final_states(res_tys)
+        # The collisionless kernel stops at the first step boundary at or past
+        # tmax; the collisional one shortens its last step to land on tmax.
+        # Handing it the times the collisionless run actually reached removes
+        # that difference, leaving the kick as the only thing under test.
+        kw_matched = dict(kw, tmax=without[:, 0])
         no_kick = trace_particles_boozer_with_collisions_gpu(
-            cfield, stz.copy(), vpar, backgrounds=zero_background(), rng_seed=0, **kw
+            cfield,
+            stz.copy(),
+            vpar,
+            backgrounds=zero_background(),
+            rng_seed=0,
+            **kw_matched,
         )
 
         self.assertEqual(no_kick.shape, (n, 7))
@@ -504,21 +514,30 @@ class TestGPUCollisionsCartesian(unittest.TestCase):
             plain, xyz.copy(), vpar, forget_exact_path=True, **kw
         )
         without = final_states(res_tys)
+        # as in the Boozer case, compare the two kernels at the times the
+        # collisionless one reached rather than at tmax
+        kw_matched = dict(kw, tmax=without[:, 0])
         no_kick = trace_particles_cartesian_with_collisions_gpu(
             labelled,
             xyz.copy(),
             vpar,
             backgrounds=zero_background(),
             rng_seed=0,
-            **kw,
+            **kw_matched,
         )
 
         self.assertEqual(no_kick.shape, (n, 7))
         self.assertTrue(np.all(np.isfinite(no_kick)), "non-finite GPU results")
 
-        done = np.isclose(without[:, 0], kw["tmax"], rtol=1e-12) & np.isclose(
-            no_kick[:, 0], kw["tmax"], rtol=1e-12
+        np.testing.assert_allclose(
+            no_kick[:, 0],
+            without[:, 0],
+            rtol=1e-12,
+            err_msg="the collisional run did not stop where it was asked to",
         )
+        # the collisionless kernel can pass tmax by up to one step, so a
+        # survivor is one that got there, not one that stopped exactly on it
+        done = without[:, 0] >= kw["tmax"] * (1 - 1e-6)
         self.assertGreater(np.mean(done), 0.9, "too many particles lost to compare")
 
         scale = np.linalg.norm(xyz, axis=1)[done]

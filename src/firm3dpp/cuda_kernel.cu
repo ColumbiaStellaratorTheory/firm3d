@@ -1192,6 +1192,14 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
             // draws do not depend on which block picked it up
             curand_init(coll_seed_d, (unsigned long long)idx, 0ULL, &rng_state[threadIdx.x]);
             v_tot[threadIdx.x] = T(v_total_d);
+            // setup_kernel sized this step from the orbit alone, so the first
+            // one can already reach past tmax; adjust_time only bounds the
+            // steps after it. Clamp it here so the kick never covers an
+            // interval the caller did not ask for.
+            if(block_t[threadIdx.x] < block_tmax[threadIdx.x]){
+                block_dt[threadIdx.x] = min(block_dt[threadIdx.x],
+                    T(block_tmax[threadIdx.x] - block_t[threadIdx.x]));
+            }
         }
 
         // write out initial state if tmax is 0
@@ -1281,6 +1289,10 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
                 if constexpr (is_collisional<id>()){
                     curand_init(coll_seed_d, (unsigned long long)idx, 0ULL, &rng_state[threadIdx.x]);
                     v_tot[threadIdx.x] = T(v_total_d);
+                    if(block_t[threadIdx.x] < block_tmax[threadIdx.x]){
+                        block_dt[threadIdx.x] = min(block_dt[threadIdx.x],
+                            T(block_tmax[threadIdx.x] - block_t[threadIdx.x]));
+                    }
                 }
             } else {
                 is_valid_arr[threadIdx.x] = false;
