@@ -1090,6 +1090,15 @@ __device__ void adjust_time(T* t, T* dt, double* tmax, T* state, T* __restrict__
             t[p] += dt_p;
         }
         dt_new = min(dt_new, dtmax[p]);
+        // Collisional kernels land exactly on tmax, as solve_sde does, so the
+        // kick window never extends past it and the two tracers can be
+        // compared at the same time. The collisionless kernels keep master's
+        // overshoot of up to one step, which their callers allow for.
+        if constexpr (is_collisional<id>()){
+            if(t[p] < tmax[p]){
+                dt_new = min(dt_new, T(tmax[p] - t[p]));
+            }
+        }
         dt[p] = dt_new;
     }
     __syncthreads();
