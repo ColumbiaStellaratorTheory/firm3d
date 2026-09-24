@@ -39,7 +39,10 @@ from firm3d.field.boozermagneticfield import (
     BoozerRadialInterpolant,
     InterpolatedBoozerField,
 )
-from firm3d.field.collisions import ThermalBackground
+from firm3d.field.collisions import (
+    ThermalBackground,
+    trace_particles_boozer_with_collisions,
+)
 from firm3d.util.constants import (
     ALPHA_PARTICLE_CHARGE as CHARGE,
 )
@@ -207,15 +210,22 @@ def build_equilibrium_label():
 
 
 @functools.lru_cache(maxsize=1)
-def build_boozmn_catapult_field():
-    """The low-resolution vacuum equilibrium the Boozer-only tests trace in."""
+def build_boozmn_fields():
+    """
+    The low-resolution vacuum equilibrium the Boozer-only tests trace in, as
+    the CPU tracer wants it and as CATAPULT wants it.
+    """
     bri = BoozerRadialInterpolant(
         "examples/inputs/boozmn_aten_rescaled_low_res.nc", 3, enforce_vacuum=True
     )
     field = InterpolatedBoozerField(
         bri, 3, ns_interp=RES, ntheta_interp=RES, nzeta_interp=RES
     )
-    return CatapultBoozerField(field, RES, RES, RES)
+    return field, CatapultBoozerField(field, RES, RES, RES)
+
+
+def build_boozmn_catapult_field():
+    return build_boozmn_fields()[1]
 
 
 def zero_background():
@@ -336,6 +346,105 @@ class TestGPUCollisionsBoozer(unittest.TestCase):
         self.assertLess(abs(mean_xi), 0.15, f"<xi> = {mean_xi:.3f}, launched at 0.9")
         self.assertGreater(mean_xi2, 0.24, f"<xi^2> = {mean_xi2:.3f}, isotropic is 1/3")
         self.assertLess(mean_xi2, 0.43, f"<xi^2> = {mean_xi2:.3f}, isotropic is 1/3")
+
+    def test_cpu_and_gpu_agree_at_tmax(self):
+        r"""
+        The CPU and the GPU must stop a collisional trace at the same time and
+        in the same state distribution.
+
+        Regression test for the endpoint asymmetry reported on PR #67, where
+        one tracer applied the collision kick over the step that reaches tmax
+        and the other did not. It has since broken in both directions: the CPU
+        once reported the pre-kick interpolated state, and the GPU once ran a
+        full step past tmax, so both halves are checked here.
+
+        tmax is a tenth of one orbit step, which makes the whole trace an
+        endpoint test -- a tracer that mishandles the final step has nowhere
+        to hide. The failure modes are far outside the tolerances below: an
+        uncapped GPU step carries the ensemble to <v>/v0 ~ 0.19 rather than
+        ~0.92, and a missing kick leaves it at exactly 1. Across CPU seeds the
+        mean holds to 4e-4 and the KS statistic to 0.012, so the tolerances
+        are loose by more than an order of magnitude either way.
+        """
+        from scipy.stats import ks_2samp
+
+        field, cfield = build_boozmn_fields()
+        Ekin = 0.01 * ENERGY  # 0.1 v_alpha
+        v0 = np.sqrt(2 * Ekin / MASS)
+        n = 256
+        rng = np.random.default_rng(0)
+        stz = np.column_stack(
+            [
+                np.full(n, 0.3),
+                rng.uniform(0, 2 * np.pi, n),
+                rng.uniform(0, 2 * np.pi, n),
+            ]
+        )
+        vpar = 0.5 * v0 * np.ones(n)
+        # dense and cold, so one step of collisional evolution is unmissable
+        deuterium = ThermalBackground(
+            n_profile=lambda s: 1e25,
+            T_profile=lambda s: 1e3,
+            mass=2 * PROTON_MASS,
+            charge=ELEMENTARY_CHARGE,
+        )
+        tmax = 1e-8
+        kw = {
+            "backgrounds": deuterium,
+            "tmax": tmax,
+            "mass": MASS,
+            "charge": CHARGE,
+            "Ekin": Ekin,
+            "tol": 1e-8,
+            "rng_seed": 0,
+        }
+
+        res_tys, _ = trace_particles_boozer_with_collisions(
+            field, stz.copy(), vpar.copy(), **kw
+        )
+        cpu = np.array([traj[-1] for traj in res_tys])
+        gpu = trace_particles_boozer_with_collisions_gpu(
+            cfield, stz.copy(), vpar.copy(), **kw
+        )
+
+        for who, t in (("CPU", cpu[:, 0]), ("GPU", gpu[:, 0])):
+            np.testing.assert_allclose(
+                t,
+                tmax,
+                rtol=1e-12,
+                err_msg=(
+                    f"{who} did not stop at tmax; the kick window then covers "
+                    f"a different interval than the other tracer's"
+                ),
+            )
+
+        # the kick must reach the step that ends the trace, on both sides
+        for who, v in (("CPU", cpu[:, 5]), ("GPU", gpu[:, 5])):
+            moved = np.mean(np.abs(v - v0) > 1e-9 * v0)
+            self.assertGreater(
+                moved,
+                0.99,
+                f"only {moved:.3f} of the {who} ensemble changed speed; the "
+                f"final step is being reported before its kick",
+            )
+
+        v_cpu, v_gpu = cpu[:, 5], gpu[:, 5]
+        d_mean = abs(np.mean(v_cpu) - np.mean(v_gpu)) / v0
+        self.assertLess(
+            d_mean,
+            0.01,
+            f"<v>/v0 disagrees by {d_mean:.4f}: CPU {np.mean(v_cpu) / v0:.4f} "
+            f"vs GPU {np.mean(v_gpu) / v0:.4f}",
+        )
+        d_std = abs(np.std(v_cpu) - np.std(v_gpu)) / np.std(v_cpu)
+        self.assertLess(
+            d_std,
+            0.10,
+            f"the speed spread disagrees by {d_std:.3f} relative; the two "
+            f"tracers are diffusing over different windows",
+        )
+        ks = ks_2samp(v_cpu, v_gpu).statistic
+        self.assertLess(ks, 0.15, f"speed distributions disagree at tmax (KS {ks:.3f})")
 
     def test_electron_drag_slows_without_scattering_pitch(self):
         """
