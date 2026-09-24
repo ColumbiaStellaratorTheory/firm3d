@@ -22,9 +22,9 @@ from firm3d.util.functions import in_github_actions, sigmav
 import json
 import time
 
-resolution = 5 if in_github_actions else 15  # Resolution for field interpolation
-nparticles = 100 if in_github_actions else 100000  # Number of particles to trace
-tol = 1e-4 if in_github_actions else 1e-6  # Tolerance for ODE solver
+resolution = 15  # Resolution for field interpolation
+nparticles = 100000  # Number of particles to trace
+tol = 1e-6  # Tolerance for ODE solver
 tmax = 1e-3
 
 ### CREATE A FIELD FOR TRACING
