@@ -155,7 +155,7 @@ jobs:
             "${{ runner.temp }}/firm3d-master-${{ github.sha }}/gpu_cartesian_tracing_results.json" \
             "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_cartesian_tracing_results.json" \
             "GC Cartesian Vacuum" \
-            "${{ runner.temp }}/firm3d-${{ github.sha }}/pr_comment.md"
+            -o "${{ runner.temp }}/firm3d-${{ github.sha }}/pr_comment.md"
 
       - name: Comment PR with results
         if: always() && github.event_name == 'pull_request'
