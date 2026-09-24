@@ -55,7 +55,7 @@ python -c "import firm3dpp; print('firm3dpp loaded OK')"
 # and always write EXIT_CODE_FILE even when tests fail.
 echo "--- Running GPU tests ---"
 set +e
-python -m coverage run -m unittest tests.field.test_gpu
+python -m coverage run -m unittest tests.field.test_gpu tests.field.test_gpu_collisions
 TEST_EXIT=$?
 set -e
 

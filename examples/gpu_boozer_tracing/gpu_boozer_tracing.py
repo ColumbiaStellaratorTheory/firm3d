@@ -54,9 +54,9 @@ stz_inits = initialize_position_profile(field, nparticles, reactivity, seed=1)
 Ekin = FUSION_ALPHA_PARTICLE_ENERGY
 mass = ALPHA_PARTICLE_MASS
 charge = ALPHA_PARTICLE_CHARGE
-# Initialize uniformly distributed parallel velocities
-vpar0 = np.sqrt(2 * Ekin / mass)
-vpar_inits = initialize_velocity_uniform(vpar0, nparticles, seed=1)
+# Isotropic pitch angle: v_par/v drawn uniformly in [-1, 1] at fixed birth energy
+v0 = np.sqrt(2 * Ekin / mass)
+vpar_inits = initialize_velocity_uniform(v0, nparticles, seed=1)
 
 # The field is tabulated for the GPU once, at the resolution and precision to
 # trace in; the tracing calls then need neither.
