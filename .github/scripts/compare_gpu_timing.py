@@ -124,7 +124,8 @@ def parse_args():
         help="One or more (master_json, pr_json, example_name) triples.",
     )
     parser.add_argument(
-        "-o", "--output",
+        "-o",
+        "--output",
         metavar="output.md",
         help="Write combined report to this file instead of stdout.",
     )
@@ -136,9 +137,7 @@ def parse_args():
             f"got {len(args.triples)} positional arguments."
         )
 
-    examples = [
-        args.triples[i:i + 3] for i in range(0, len(args.triples), 3)
-    ]
+    examples = [args.triples[i : i + 3] for i in range(0, len(args.triples), 3)]
     return examples, args.output
 
 

@@ -24,7 +24,7 @@ np.random.seed(1800)
 
 ### tracing parameters
 nparticles = 100000  # Number of particles to trace
-tmax = 1e-2 # Time for integration
+tmax = 1e-2  # Time for integration
 tol = 1e-6
 
 ### CREATE A FIELD FOR TRACING

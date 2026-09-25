@@ -28,7 +28,7 @@ resolution = 16  # resolution of interpolant
 order = 12  # order of coil curves
 nparticles = 100000
 tmax = 1e-2
-tol=1e-6
+tol = 1e-6
 
 filename = "../inputs/coils.curves_22_7_21"
 wout_filename = "../inputs/wout_aten_rescaled.nc"
@@ -47,7 +47,7 @@ coils_full = coils_via_symmetries(curves, currents, surf.nfp, True)
 
 start_field = time.perf_counter()
 bs = BiotSavart(coils_full)
-field_time = time.perf_counter() - start_field 
+field_time = time.perf_counter() - start_field
 
 surf_launch = SurfaceRZFourier.from_wout(wout_filename, s=0.3)
 
