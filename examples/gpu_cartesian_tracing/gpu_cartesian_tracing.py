@@ -73,7 +73,10 @@ vpar0 = np.sqrt(2 * FUSION_ALPHA_PARTICLE_ENERGY / ALPHA_PARTICLE_MASS)
 vpar_inits = initialize_velocity_uniform(vpar0, nparticles)
 
 # tabulate the field and the boundary distance for the GPU once
+start_setup = time.perf_counter()
 field_dbl = CatapultCartesianField(bsh, sc_particle, precision="double")
+setup_time_dbl = time.perf_counter() - start_setup
+
 start_dbl = time.perf_counter()
 res_tys_dbl, res_hits_dbl = trace_particles_cartesian_gpu(
     field_dbl,
@@ -118,6 +121,7 @@ timing_result = {
     "times": {
         "field_setup": field_time,
         "field_interpolation": if_time,
+        "catapult_setup": setup_time_dbl,
         "tracing_dbl": dbl_time,
         "tracing_flt": flt_time,
     },

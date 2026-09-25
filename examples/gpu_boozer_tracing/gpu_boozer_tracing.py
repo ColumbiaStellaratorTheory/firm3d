@@ -66,7 +66,10 @@ vpar_inits = initialize_velocity_uniform(vpar0, nparticles, seed=1)
 
 # The field is tabulated for the GPU once, at the resolution and precision to
 # trace in; the tracing calls then need neither.
+start_setup = time.perf_counter()
 field_dbl = CatapultBoozerField(bri, resolution, resolution, resolution)
+setup_time_dbl = time.perf_counter() - start_setup
+
 field_flt = CatapultBoozerField(
     bri, resolution, resolution, resolution, precision="single"
 )
@@ -144,6 +147,7 @@ timing_result = {
     "times": {
         "bri_setup": bri_time,
         "field_interpolation": ibf_time,
+        "catapult_setup": setup_time_dbl,
         "tracing_dbl": dbl_time,
         "tracing_flt": flt_time,
     },

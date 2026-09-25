@@ -72,13 +72,14 @@ fi
 set +e
 (cd examples/gpu_boozer_tracing && python gpu_boozer_tracing.py)
 BOOZER_EXIT=$?
-ls -la examples/gpu_boozer_tracing/
 cp examples/gpu_boozer_tracing/gpu_boozer_tracing_results.json "$WORK_DIR/gpu_boozer_tracing_results.json"
+
 (cd examples/gpu_saw_tracing && python gpu_saw_tracing.py)
 SAW_EXIT=$?
+cp examples/gpu_saw_tracing/gpu_boozer_saw_tracing_results.json "$WORK_DIR/gpu_boozer_saw_tracing_results.json"
+
 (cd examples/gpu_cartesian_tracing && python gpu_cartesian_tracing.py)
 CARTESIAN_EXIT=$?
-ls -la examples/gpu_cartesian_tracing/
 cp examples/gpu_cartesian_tracing/gpu_cartesian_tracing_results.json "$WORK_DIR/gpu_cartesian_tracing_results.json"
 set -e
 
