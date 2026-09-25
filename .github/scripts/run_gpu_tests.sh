@@ -63,4 +63,36 @@ python -m coverage xml -o "$WORK_DIR/coverage.xml" || true
 
 echo "$TEST_EXIT" > "$EXIT_CODE_FILE"
 echo "Finished: $(date)  (exit $TEST_EXIT)"
-exit $TEST_EXIT
+if  [ "$TEST_EXIT" -ne 0 ]; then
+    exit $TEST_EXIT
+fi
+
+# if the correctness tests were successful, run the regression tests
+
+set +e
+(cd examples/gpu_boozer_tracing && python gpu_boozer_tracing.py)
+BOOZER_EXIT=$?
+cp examples/gpu_boozer_tracing/gpu_boozer_tracing_results.json "$WORK_DIR/gpu_boozer_tracing_results.json"
+
+(cd examples/gpu_saw_tracing && python gpu_saw_tracing.py)
+SAW_EXIT=$?
+cp examples/gpu_saw_tracing/gpu_boozer_saw_tracing_results.json "$WORK_DIR/gpu_boozer_saw_tracing_results.json"
+
+(cd examples/gpu_cartesian_tracing && python gpu_cartesian_tracing.py)
+CARTESIAN_EXIT=$?
+cp examples/gpu_cartesian_tracing/gpu_cartesian_tracing_results.json "$WORK_DIR/gpu_cartesian_tracing_results.json"
+set -e
+
+echo "boozer_tracing exit    : $BOOZER_EXIT"
+echo "saw_tracing exit       : $SAW_EXIT"
+echo "cartesian_tracing exit : $CARTESIAN_EXIT"
+
+if [ "$BOOZER_EXIT" -ne 0 ] || [ "$SAW_EXIT" -ne 0 ] || [ "$CARTESIAN_EXIT" -ne 0 ]; then
+  EXAMPLES_EXIT=1
+else
+  EXAMPLES_EXIT=0
+fi
+
+echo "$EXAMPLES_EXIT" > "$EXIT_CODE_FILE"
+echo "Finished: $(date)  (exit $EXAMPLES_EXIT)"
+exit $EXAMPLES_EXIT

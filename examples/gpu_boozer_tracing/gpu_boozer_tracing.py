@@ -19,16 +19,21 @@ from firm3d.util.constants import (
     FUSION_ALPHA_PARTICLE_ENERGY,
 )
 from firm3d.util.functions import in_github_actions, sigmav
+import json
+import time
 
-resolution = 5 if in_github_actions else 15  # Resolution for field interpolation
-nparticles = 100 if in_github_actions else 30000  # Number of particles to trace
-tol = 1e-4 if in_github_actions else 1e-6  # Tolerance for ODE solver
-tmax = 1e-4
+resolution = 15  # Resolution for field interpolation
+nparticles = 100000  # Number of particles to trace
+tol = 1e-6  # Tolerance for ODE solver
+tmax = 1e-2
 
 ### CREATE A FIELD FOR TRACING
 boozmn_filename = "../inputs/boozmn_ariescs_low_res.nc"
+start_bri = time.perf_counter()
 bri = BoozerRadialInterpolant(boozmn_filename, 3, enforce_vacuum=True)
+bri_time = time.perf_counter() - start_bri
 
+start_ibf = time.perf_counter()
 field = InterpolatedBoozerField(
     bri,
     3,
@@ -36,6 +41,7 @@ field = InterpolatedBoozerField(
     ntheta_interp=resolution,
     nzeta_interp=resolution,
 )
+ibf_time = time.perf_counter() - start_ibf
 # set seed for consistency
 np.random.seed(8)
 
@@ -60,7 +66,10 @@ vpar_inits = initialize_velocity_uniform(vpar0, nparticles, seed=1)
 
 # The field is tabulated for the GPU once, at the resolution and precision to
 # trace in; the tracing calls then need neither.
+start_setup = time.perf_counter()
 field_dbl = CatapultBoozerField(bri, resolution, resolution, resolution)
+setup_time_dbl = time.perf_counter() - start_setup
+
 field_flt = CatapultBoozerField(
     bri, resolution, resolution, resolution, precision="single"
 )
@@ -68,6 +77,7 @@ field_flt = CatapultBoozerField(
 # Trace in double precision. As for the CPU tracer, res_tys holds each
 # particle's (t, s, theta, zeta, vpar) rows and res_hits its boundary crossing,
 # so the same post-processing serves both.
+start_dbl = time.perf_counter()
 res_tys_dbl, res_hits_dbl = trace_particles_boozer_gpu(
     field_dbl,
     stz_inits,
@@ -79,8 +89,10 @@ res_tys_dbl, res_hits_dbl = trace_particles_boozer_gpu(
     tol=tol,
     forget_exact_path=True,
 )
+dbl_time = time.perf_counter() - start_dbl
 
 # trace in single precision: the inputs are cast to the field's precision
+start_flt = time.perf_counter()
 res_tys_flt, res_hits_flt = trace_particles_boozer_gpu(
     field_flt,
     stz_inits,
@@ -92,6 +104,7 @@ res_tys_flt, res_hits_flt = trace_particles_boozer_gpu(
     tol=tol,
     forget_exact_path=True,
 )
+flt_time = time.perf_counter() - start_flt
 
 final_dbl = np.array([traj[-1] for traj in res_tys_dbl])
 final_flt = np.array([traj[-1] for traj in res_tys_flt])
@@ -115,7 +128,29 @@ particle_data = pd.DataFrame(
 )
 
 particle_data.to_csv("./particle_data.csv")
+loss_fraction_flt = float(np.mean([len(hits) > 0 for hits in res_hits_flt]))
+loss_fraction_dbl = float(np.mean([len(hits) > 0 for hits in res_hits_dbl]))
+
 print(f"tmax= {tmax}")
 print(f"Number of particles= {nparticles}")
-print(f"Flt. Loss fraction: {np.mean([len(hits) > 0 for hits in res_hits_flt]):.3f}")
-print(f"Dbl. Loss fraction: {np.mean([len(hits) > 0 for hits in res_hits_dbl]):.3f}")
+print(f"Flt. Loss fraction: {loss_fraction_flt:.3f}")
+print(f"Dbl. Loss fraction: {loss_fraction_dbl:.3f}")
+
+### record for regression testing
+timing_result = {
+    "nparticles": nparticles,
+    "tolerance": tol,
+    "resolution": resolution,
+    "loss_fraction_dbl": loss_fraction_dbl,
+    "loss_fraction_flt": loss_fraction_flt,
+    "tmax": tmax,
+    "times": {
+        "bri_setup": bri_time,
+        "field_interpolation": ibf_time,
+        "catapult_setup": setup_time_dbl,
+        "tracing_dbl": dbl_time,
+        "tracing_flt": flt_time,
+    },
+}
+with open("gpu_boozer_tracing_results.json", "w") as f:
+    json.dump(timing_result, f, indent=2)
