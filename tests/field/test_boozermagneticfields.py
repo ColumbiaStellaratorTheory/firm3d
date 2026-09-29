@@ -1315,6 +1315,28 @@ class TestingBoozerRadialInterpolantSums(unittest.TestCase):
                 modB[i] += np.sum(bri.bmns_splines(np.array([s]))[0] * np.sin(angle))
         return modB
 
+    def test_axis_modes_and_radial_derivative(self):
+        for filename in (filename_vac, filename_mhd_lasym):
+            bri = BoozerRadialInterpolant(filename, 3, no_K=True)
+            modes = bri.xm_b > 0
+            np.testing.assert_allclose(bri.bmnc_splines(0)[modes], 0, atol=1e-12)
+            if bri.asym:
+                np.testing.assert_allclose(bri.bmns_splines(0)[modes], 0, atol=1e-12)
+            points = np.array([[0.01, 0.3, 0.2], [0.25, 1.0, 0.7], [0.9, 2.0, 1.3]])
+            bri.set_points(points)
+            gradient = bri.dmodBds().ravel()
+            h = 1e-6
+            shifted = points.copy()
+            shifted[:, 0] += h
+            bri.set_points(shifted)
+            upper = bri.modB().ravel()
+            shifted[:, 0] -= 2 * h
+            bri.set_points(shifted)
+            lower = bri.modB().ravel()
+            np.testing.assert_allclose(
+                gradient, (upper - lower) / (2 * h), rtol=1e-5, atol=1e-7
+            )
+
     def test_modB_matches_direct_sum(self):
         for asym in [True, False]:
             if asym:
