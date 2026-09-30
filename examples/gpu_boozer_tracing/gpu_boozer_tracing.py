@@ -18,7 +18,7 @@ from firm3d.util.constants import (
     ALPHA_PARTICLE_MASS,
     FUSION_ALPHA_PARTICLE_ENERGY,
 )
-from firm3d.util.functions import in_github_actions, sigmav
+from firm3d.util.functions import sigmav
 import json
 import time
 

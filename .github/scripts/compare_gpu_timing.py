@@ -2,7 +2,8 @@
 Compare timing results between master and PR runs for one or more tracing examples.
 
 Usage:
-    python compare_timing.py <master1.json> <pr1.json> <name1> [<master2.json> <pr2.json> <name2> ...] [-o output.md]
+    python compare_timing.py <master1.json> <pr1.json> <name1>
+                        [<master2.json> <pr2.json> <name2> ...] [-o output.md]
 
 Each example is a (master_json, pr_json, example_name) triple. Any number of
 triples may be given. If -o/--output is omitted, prints to stdout.

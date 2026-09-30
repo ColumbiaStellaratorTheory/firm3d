@@ -14,7 +14,7 @@ from firm3d.saw.ae3d import AE3DEigenvector
 from firm3d.util.constants import ALPHA_PARTICLE_CHARGE as CHARGE
 from firm3d.util.constants import ALPHA_PARTICLE_MASS as MASS
 from firm3d.util.constants import FUSION_ALPHA_PARTICLE_ENERGY as ENERGY
-from firm3d.util.functions import in_github_actions, sigmav
+from firm3d.util.functions import sigmav
 
 import pandas as pd
 import json
