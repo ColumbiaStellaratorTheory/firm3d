@@ -1343,6 +1343,10 @@ class TestingBoozerRadialInterpolantSums(unittest.TestCase):
         bri = BoozerRadialInterpolant(
             filename_vac, 3, enforce_vacuum=True, regular_axis=True
         )
+        with self.assertWarns(RuntimeWarning), self.assertRaises(ValueError):
+            BoozerRadialInterpolant(
+                filename_vac, 3, field_type="vac", regular_axis=True
+            )
         angles = np.array([0.0, 0.7, 2.1, 4.0])
         bri.set_points(np.column_stack((np.zeros(4), angles, np.full(4, 0.3))))
         Bx, By = bri.modB_cartesian_derivs()

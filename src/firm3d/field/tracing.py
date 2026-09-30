@@ -408,7 +408,8 @@ def trace_particles_boozer(
             ODE_solver. If 1, tracing is performed in coordinates
             (sqrt(s)*cos(theta), sqrt(s)*sin(theta), zeta). If 2, tracing is
             performed in coordinates (s*cos(theta),s*sin(theta),zeta).
-            Option 2 (default) is recommended.
+            The default is 2, or 1 for ``regular_axis=True`` fields; those
+            fields require option 1.
         dt: time step for the symplectic solver. Only used if `ODE_solver` is
             "symplectic".
         ODE_solver: Choice of ODE_solver: "boost", "dormand_prince" or "symplectic"

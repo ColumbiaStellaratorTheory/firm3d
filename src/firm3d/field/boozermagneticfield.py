@@ -2001,7 +2001,8 @@ class BoozerRadialInterpolant(BoozerMagneticField):
             ``'vac'``, ``'nok'``, or ``''``.  By default, this is determined
             from the options ``enforce_vacuum``
             and ``no_K``.
-        regular_axis: Use sqrt(s) scaling for m=1 vacuum harmonics.
+        regular_axis: Use sqrt(s) scaling for m=1 vacuum harmonics. Requires
+            ``enforce_vacuum=True`` and ``field_type='vac'``.
     """
 
     def __init__(
@@ -2058,7 +2059,9 @@ class BoozerRadialInterpolant(BoozerMagneticField):
             else:
                 self.field_type = ""
         if regular_axis and (self.field_type != "vac" or not enforce_vacuum):
-            raise ValueError("regular_axis requires enforce_vacuum=True")
+            raise ValueError(
+                "regular_axis requires enforce_vacuum=True and field_type='vac'"
+            )
         self.regular_axis = regular_axis
 
         if isinstance(equil, str):

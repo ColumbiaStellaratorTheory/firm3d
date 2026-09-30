@@ -28,14 +28,16 @@ using Array2 = BoozerMagneticField::Array2;
 
 class GuidingCenterVacuumBoozerRHS : public BaseRHS {
     /*
-     * The state consists of :math:`[s, theta, zeta, v_par]` with
+     * The physical state is :math:`[s, theta, zeta, v_par]` with
      *
      *    \dot s = -|B|_{,\theta} m(v_{||}^2/|B| + \mu)/(q \psi_0)
      *    \dot \theta = |B|_{,s} m(v_{||}^2/|B| + \mu)/(q \psi_0) + \iota v_{||} |B|/G
      *    \dot \zeta = v_{||}|B|/G
      *    \dot v_{||} = -(\iota |B|_{,\theta} + |B|_{,\zeta})\mu |B|/G,
      *
-     *  where :math:`q` is the charge, :math:`m` is the mass, and :math:`v_\perp = 2\mu|B|`.
+     *  where :math:`q` is the charge, :math:`m` is the mass, and :math:`v_\perp^2 = 2\mu|B|`.
+     *  For axis=1 the integrator uses [sqrt(s)cos(theta), sqrt(s)sin(theta),
+     *  zeta, v_par] and the Cartesian-gradient branch below.
      *
      */
     private:
