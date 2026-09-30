@@ -60,10 +60,9 @@ class _AxisRegularizedSpline:
         values = values.copy()
         root = np.sqrt(s)
         if derivative:
-            values[..., self.m1] = (
-                root[..., None] * values[..., self.m1]
-                + self.spline(s)[..., self.m1] / (2 * root[..., None])
-            )
+            values[..., self.m1] = root[..., None] * values[..., self.m1] + self.spline(
+                s
+            )[..., self.m1] / (2 * root[..., None])
         else:
             values[..., self.m1] *= root[..., None]
         return values
@@ -2058,8 +2057,8 @@ class BoozerRadialInterpolant(BoozerMagneticField):
                 self.field_type = "nok"
             else:
                 self.field_type = ""
-        if regular_axis and self.field_type != "vac":
-            raise ValueError("regular_axis currently requires a vacuum field")
+        if regular_axis and (self.field_type != "vac" or not enforce_vacuum):
+            raise ValueError("regular_axis requires enforce_vacuum=True")
         self.regular_axis = regular_axis
 
         if isinstance(equil, str):
@@ -2244,8 +2243,8 @@ class BoozerRadialInterpolant(BoozerMagneticField):
         bmnc = np.zeros((nm_b, ns_b2))
         bmnc[:, 1:-1] = self.bx.bmnc_b
         bmnc[:, 0] = 1.5 * bmnc[:, 1] - 0.5 * bmnc[:, 2]
-        # Poloidal modes must vanish on the magnetic axis.
-        bmnc[self.xm_b > 0, 0] = 0.0
+        if self.regular_axis:
+            bmnc[self.xm_b > 0, 0] = 0.0
         bmnc[:, -1] = 1.5 * bmnc[:, -2] - 0.5 * bmnc[:, -3]
 
         numns = np.zeros((nm_b, ns_b2))
@@ -2265,7 +2264,8 @@ class BoozerRadialInterpolant(BoozerMagneticField):
             bmns = np.zeros((nm_b, ns_b2))
             bmns[:, 1:-1] = self.bx.bmns_b
             bmns[:, 0] = 1.5 * bmns[:, 1] - 0.5 * bmns[:, 2]
-            bmns[self.xm_b > 0, 0] = 0.0
+            if self.regular_axis:
+                bmns[self.xm_b > 0, 0] = 0.0
             bmns[:, -1] = 1.5 * bmns[:, -2] - 0.5 * bmns[:, -3]
 
             numnc = np.zeros((nm_b, ns_b2))
@@ -2281,10 +2281,12 @@ class BoozerRadialInterpolant(BoozerMagneticField):
             zmnc[:, 0] = 1.5 * zmnc[:, 1] - 0.5 * zmnc[:, 2]
             zmnc[:, -1] = 1.5 * zmnc[:, -2] - 0.5 * zmnc[:, -3]
 
+        dbmncds = (bmnc[:, 2:-1] - bmnc[:, 1:-2]) / ds
         drmncds = (rmnc[:, 2:-1] - rmnc[:, 1:-2]) / ds
         dzmnsds = (zmns[:, 2:-1] - zmns[:, 1:-2]) / ds
         dnumnsds = (numns[:, 2:-1] - numns[:, 1:-2]) / ds
         if self.asym:
+            dbmnsds = (bmns[:, 2:-1] - bmns[:, 1:-2]) / ds
             drmnsds = (rmns[:, 2:-1] - rmns[:, 1:-2]) / ds
             dzmncds = (zmnc[:, 2:-1] - zmnc[:, 1:-2]) / ds
             dnumncds = (numnc[:, 2:-1] - numnc[:, 1:-2]) / ds
@@ -2348,17 +2350,24 @@ class BoozerRadialInterpolant(BoozerMagneticField):
             bmnc_filtered[
                 self.helicity_M * self.xn_b != self.helicity_N * self.xm_b
             ] = 0
+            dbmncds_filtered = dbmncds.copy()
+            dbmncds_filtered[
+                self.helicity_M * self.xn_b != self.helicity_N * self.xm_b
+            ] = 0
         values = bmnc_filtered.T if self.enforce_qs else bmnc.T
         if self.regular_axis:
             self.bmnc_splines = _AxisRegularizedSpline(
                 s_half_mn, values, self.xm_b, self.order
             )
+            self.dbmncds_splines = self.bmnc_splines.derivative()
         else:
             self.bmnc_splines = make_interp_spline(
                 s_half_mn, values, k=self.order, axis=0
             )
-        # Keep the radial gradient consistent with the interpolated field.
-        self.dbmncds_splines = self.bmnc_splines.derivative()
+            derivs = dbmncds_filtered if self.enforce_qs else dbmncds
+            self.dbmncds_splines = make_interp_spline(
+                s_full[1:-1], derivs.T, k=self.order, axis=0
+            )
         self.dnumnsds_splines = make_interp_spline(
             s_full[1:-1], dnumnsds.T, k=self.order, axis=0
         )
@@ -2384,16 +2393,24 @@ class BoozerRadialInterpolant(BoozerMagneticField):
                 bmns_filtered[
                     self.helicity_M * self.xn_b != self.helicity_N * self.xm_b
                 ] = 0
+                dbmnsds_filtered = dbmnsds.copy()
+                dbmnsds_filtered[
+                    self.helicity_M * self.xn_b != self.helicity_N * self.xm_b
+                ] = 0
             values = bmns_filtered.T if self.enforce_qs else bmns.T
             if self.regular_axis:
                 self.bmns_splines = _AxisRegularizedSpline(
                     s_half_mn, values, self.xm_b, self.order
                 )
+                self.dbmnsds_splines = self.bmns_splines.derivative()
             else:
                 self.bmns_splines = make_interp_spline(
                     s_half_mn, values, k=self.order, axis=0
                 )
-            self.dbmnsds_splines = self.bmns_splines.derivative()
+                derivs = dbmnsds_filtered if self.enforce_qs else dbmnsds
+                self.dbmnsds_splines = make_interp_spline(
+                    s_full[1:-1], derivs.T, k=self.order, axis=0
+                )
 
             self.dnumncds_splines = make_interp_spline(
                 s_full[1:-1], dnumncds.T, k=self.order, axis=0

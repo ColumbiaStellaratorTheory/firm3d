@@ -83,7 +83,8 @@ class CatapultBoozerField(_CatapultBoozerTable):
     Attributes:
         dtype: The numpy dtype matching ``precision``.
         srange, trange, zrange: ``(start, end, npoints)`` of the grid in each
-            coordinate.
+            coordinate. With ``regular_axis=True``, ``srange`` indexes
+            :math:`r=\sqrt{s}`; GPU tracing then requires stellarator symmetry.
         quad_info: The tabulated field, in ``dtype``.
         maxJ: The largest Jacobian seen on the grid, for rejection sampling
             of positions.
@@ -101,7 +102,9 @@ class CatapultBoozerField(_CatapultBoozerTable):
         if self.regular_axis and not isinstance(field, BoozerRadialInterpolant):
             raise TypeError("regular_axis requires a BoozerRadialInterpolant")
         if self.regular_axis and field.asym:
-            raise NotImplementedError("regular_axis GPU tracing requires stellarator symmetry")
+            raise NotImplementedError(
+                "regular_axis GPU tracing requires stellarator symmetry"
+            )
         self.field = field
         self.srange, self.trange, self.zrange, self.quad_info, self.maxJ = (
             boozer_interpolant(
@@ -161,7 +164,9 @@ class CatapultPerturbedBoozerField(_CatapultBoozerTable):
             )
         B0 = perturbed_field.B0
         if getattr(B0, "regular_axis", False):
-            raise NotImplementedError("regular_axis is not supported for perturbed GPU tracing")
+            raise NotImplementedError(
+                "regular_axis is not supported for perturbed GPU tracing"
+            )
         super().__init__(B0, ns, ntheta, nzeta, precision, ("vac", "nok"))
         self.perturbed_field = perturbed_field
         self.B0 = B0

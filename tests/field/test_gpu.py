@@ -1,5 +1,6 @@
 # import time
 import unittest
+from pathlib import Path
 import numpy as np
 import firm3dpp
 
@@ -794,6 +795,50 @@ class CATAPULTField:
 
 
 @unittest.skipUnless(HAS_CUDA, "CUDA support not available")
+class TestRegularAxisGPU(unittest.TestCase):
+    def test_table_cartesian_gradient(self):
+        filename = (
+            Path(__file__).resolve().parents[1]
+            / "test_files"
+            / "boozmn_LandremanPaul2021_QA_lowres.nc"
+        )
+        field = BoozerRadialInterpolant(
+            str(filename),
+            3,
+            enforce_vacuum=True,
+            regular_axis=True,
+        )
+        table = CatapultBoozerField(field, 12, 12, 12)
+        x = np.array([1e-4, -0.015, 0.1, -0.4])
+        y = np.array([2e-4, 0.01, -0.2, -0.1])
+        zeta = np.array([0.1, 0.2, 0.3, 0.4])
+
+        def values(x, y):
+            points = np.column_stack((np.hypot(x, y), np.arctan2(y, x), zeta))
+            return np.asarray(
+                firm3dpp.test_gpu_interpolation(
+                    table.quad_info,
+                    table.srange,
+                    table.trange,
+                    table.zrange,
+                    np.ascontiguousarray(points),
+                    "boozer_vacuum",
+                    len(x),
+                )
+            ).reshape(len(x), 6)
+
+        h = 1e-6
+        grad = values(x, y)[:, 1:3]
+        finite_diff = np.column_stack(
+            (
+                (values(x + h, y)[:, 0] - values(x - h, y)[:, 0]) / (2 * h),
+                (values(x, y + h)[:, 0] - values(x, y - h)[:, 0]) / (2 * h),
+            )
+        )
+        np.testing.assert_allclose(grad, finite_diff, rtol=2e-3, atol=1e-3)
+
+
+@unittest.skipUnless(HAS_CUDA, "CUDA support not available")
 class TestGPUTracingBoozerVacuum(unittest.TestCase):
     def setUp(self):
         self.n_metagrid_pts = 15
@@ -822,9 +867,8 @@ class TestGPUTracingBoozerVacuum(unittest.TestCase):
         self.assertTrue(is_small)
 
     def test_derivatives(self):
-        # The two cubic interpolants differ slightly near the axis.
         is_small = self.field.test_derivatives(
-            self.stz, self.vpar_init, self.VELOCITY, 2e-8
+            self.stz, self.vpar_init, self.VELOCITY, 1e-8
         )
         self.assertTrue(is_small)
 
@@ -965,7 +1009,7 @@ class TestGPUTracingBoozerFiniteBeta(unittest.TestCase):
 
     def test_derivatives(self):
         is_small = self.field.test_derivatives(
-            self.stz, self.vpar_init, self.VELOCITY, 2e-8
+            self.stz, self.vpar_init, self.VELOCITY, 1e-8
         )
         self.assertTrue(is_small)
 

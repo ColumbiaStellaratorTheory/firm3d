@@ -646,12 +646,12 @@ __device__ void map_to_grid_cartesian(T* interp_pt, T* x_temp, bool* symmetry_ex
 }
 
 // map_to_grid implementation for Boozer tracing
-template <typename T, bool regular_axis=false>
+template <typename T>
 __device__ void map_to_grid_boozer(T* interp_pt, T* x_temp, bool* symmetry_exploited){
 
     T x1 = x_temp[1*PARTICLES_PER_BLOCK + threadIdx.x];
     T x2 = x_temp[2*PARTICLES_PER_BLOCK + threadIdx.x];
-    T s = regular_axis ? x1*x1 + x2*x2 : hypot(x1, x2);
+    T s = hypot(x1, x2);
     interp_pt[threadIdx.x] = s;
     symmetry_exploited[threadIdx.x] = x2 < 0;
 
@@ -678,12 +678,12 @@ __device__ void map_to_grid_boozer(T* interp_pt, T* x_temp, bool* symmetry_explo
 }
 
 
-template<typename T, RHS id>
+template<typename T, CoordSys coord>
 __device__ void map_to_grid(T* interp_pt, T* xyz, bool* symmetry_exploited){
-    if constexpr (map_rhs_to_coord<id>() == CoordSys::Cartesian){
+    if constexpr (coord == CoordSys::Cartesian){
         map_to_grid_cartesian(interp_pt, xyz, symmetry_exploited);
-    } else {
-        map_to_grid_boozer<T, id == RHS::GC_BoozerVacuumRegular>(interp_pt, xyz, symmetry_exploited);
+    } else if constexpr (coord == CoordSys::Boozer){
+        map_to_grid_boozer<T>(interp_pt, xyz, symmetry_exploited);
     }
 };
 
@@ -719,7 +719,7 @@ __device__ void build_state(T* x_temp, bool* symmetry_exploited, int* cell_index
     __shared__ T interp_pt[3*PARTICLES_PER_BLOCK];
 
     if(threadIdx.x < PARTICLES_PER_BLOCK && is_valid[threadIdx.x]){
-        map_to_grid<T, id>(interp_pt, x_temp, symmetry_exploited);
+        map_to_grid<T, map_rhs_to_coord<id>()>(interp_pt, x_temp, symmetry_exploited);
     }
     __syncthreads();
 

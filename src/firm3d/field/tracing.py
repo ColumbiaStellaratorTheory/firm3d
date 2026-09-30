@@ -459,6 +459,8 @@ def trace_particles_boozer(
     if vpars_stop and (not len(vpars)):
         raise ValueError("No vpars provided for the vpar stopping criterion")
 
+    if getattr(field, "regular_axis", False) and ODE_solver == "symplectic":
+        raise ValueError("regular_axis requires an adaptive ODE solver")
     if ODE_solver == "symplectic":
         if abstol is not None or reltol is not None:
             warn(

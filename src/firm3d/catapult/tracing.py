@@ -181,8 +181,7 @@ def _to_boozer(result, regular_axis=False):
     """Turn columns 1 and 2 of a kernel result from (x1, x2) into (s, theta)."""
     x1 = result[:, 1].copy()
     x2 = result[:, 2].copy()
-    radius = np.hypot(x1, x2)
-    result[:, 1] = radius**2 if regular_axis else radius
+    result[:, 1] = x1 * x1 + x2 * x2 if regular_axis else np.hypot(x1, x2)
     result[:, 2] = np.arctan2(x2, x1)
     return result
 

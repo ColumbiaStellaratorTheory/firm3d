@@ -32,9 +32,16 @@ class BoozerGuidingCenterTracingTesting(unittest.TestCase):
         field = BoozerAnalytic(1.0, 1.0, 0, 1.0, 1.0, 0.0)
         birth = np.array([[1e-6, -np.pi / 2, 0.0]])
         path, _ = trace_particles_boozer(
-            field, birth, np.array([0.0]), tmax=3e-3,
-            mass=PROTON_MASS, charge=ELEMENTARY_CHARGE, Ekin=ONE_EV,
-            axis=1, dt_save=1e-4, tol=1e-10,
+            field,
+            birth,
+            np.array([0.0]),
+            tmax=3e-3,
+            mass=PROTON_MASS,
+            charge=ELEMENTARY_CHARGE,
+            Ekin=ONE_EV,
+            axis=1,
+            dt_save=1e-4,
+            tol=1e-10,
         )
         path = path[0]
         x = np.sqrt(path[:, 1]) * np.cos(path[:, 2])
