@@ -1320,12 +1320,18 @@ class TestingBoozerRadialInterpolantSums(unittest.TestCase):
             bri = BoozerRadialInterpolant(filename, 3, no_K=True)
             modes = bri.xm_b > 0
             np.testing.assert_allclose(bri.bmnc_splines(0)[modes], 0, atol=1e-12)
+            np.testing.assert_allclose(
+                bri.bmnc_splines(0)[~modes],
+                (1.5 * bri.bx.bmnc_b[:, 0] - 0.5 * bri.bx.bmnc_b[:, 1])[~modes],
+            )
             if bri.asym:
                 np.testing.assert_allclose(bri.bmns_splines(0)[modes], 0, atol=1e-12)
-            points = np.array([[0.01, 0.3, 0.2], [0.25, 1.0, 0.7], [0.9, 2.0, 1.3]])
+            points = np.array(
+                [[1e-4, 0.3, 0.2], [0.01, 0.3, 0.2], [0.25, 1.0, 0.7], [0.9, 2.0, 1.3]]
+            )
             bri.set_points(points)
             gradient = bri.dmodBds().ravel()
-            h = 1e-6
+            h = 1e-7
             shifted = points.copy()
             shifted[:, 0] += h
             bri.set_points(shifted)
