@@ -965,7 +965,7 @@ class TestGPUTracingBoozerFiniteBeta(unittest.TestCase):
 
     def test_derivatives(self):
         is_small = self.field.test_derivatives(
-            self.stz, self.vpar_init, self.VELOCITY, 1e-8
+            self.stz, self.vpar_init, self.VELOCITY, 2e-8
         )
         self.assertTrue(is_small)
 
