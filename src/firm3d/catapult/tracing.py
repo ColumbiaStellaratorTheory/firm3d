@@ -106,6 +106,7 @@ def _launch_boozer(
         )
     else:
         kwargs["vacuum"] = cfield.vacuum
+        kwargs["regular_axis"] = cfield.regular_axis
         trace = firm3dpp.boozer_gpu_tracing
     return np.asarray(trace(**kwargs), dtype=dtype).reshape(nparticles, 7)
 
@@ -162,7 +163,7 @@ def _per_particle(value, nparticles, dtype, default):
     return np.ascontiguousarray(value, dtype=dtype)
 
 
-def _to_pseudo_cartesian(stz_inits, dtype):
+def _to_pseudo_cartesian(stz_inits, dtype, regular_axis=False):
     """
     A copy of (s, theta, zeta) initial conditions as (s cos theta, s sin theta,
     zeta), the coordinates CATAPULT integrates in, in the given dtype.
@@ -170,16 +171,18 @@ def _to_pseudo_cartesian(stz_inits, dtype):
     x_inits = np.array(stz_inits, dtype=dtype, order="C")
     s = x_inits[:, 0].copy()
     theta = x_inits[:, 1].copy()
-    x_inits[:, 0] = s * np.cos(theta)
-    x_inits[:, 1] = s * np.sin(theta)
+    radius = np.sqrt(s) if regular_axis else s
+    x_inits[:, 0] = radius * np.cos(theta)
+    x_inits[:, 1] = radius * np.sin(theta)
     return x_inits
 
 
-def _to_boozer(result):
+def _to_boozer(result, regular_axis=False):
     """Turn columns 1 and 2 of a kernel result from (x1, x2) into (s, theta)."""
     x1 = result[:, 1].copy()
     x2 = result[:, 2].copy()
-    result[:, 1] = np.hypot(x1, x2)
+    radius = np.hypot(x1, x2)
+    result[:, 1] = radius**2 if regular_axis else radius
     result[:, 2] = np.arctan2(x2, x1)
     return result
 
@@ -294,7 +297,7 @@ def save_trajectories_boozer_gpu(
 
     # the loop works in the pseudo-Cartesian coordinates CATAPULT integrates
     # in, so a chunk's output feeds the next chunk's input directly
-    inits = _to_pseudo_cartesian(stz_inits, dtype)
+    inits = _to_pseudo_cartesian(stz_inits, dtype, field.regular_axis)
     parallel_speeds = np.ascontiguousarray(parallel_speeds, dtype=dtype)
 
     def trace_chunk(inits, parallel_speeds, local_tmax, dt, mu):
@@ -314,7 +317,7 @@ def save_trajectories_boozer_gpu(
     trajectories = _save_trajectories(
         trace_chunk, inits, parallel_speeds, tmax, dt_save, dt, mu
     )
-    return [_to_boozer(traj) for traj in trajectories]
+    return [_to_boozer(traj, field.regular_axis) for traj in trajectories]
 
 
 def save_trajectories_cartesian_gpu(
@@ -500,7 +503,7 @@ def trace_particles_boozer_gpu(
         # as it does for trace_particles_boozer.
         final = _launch_boozer(
             field,
-            _to_pseudo_cartesian(stz_inits, dtype),
+            _to_pseudo_cartesian(stz_inits, dtype, field.regular_axis),
             parallel_speeds,
             tmax,
             _per_particle(None, nparticles, dtype, -1.0),
@@ -510,7 +513,7 @@ def trace_particles_boozer_gpu(
             kwargs["vtotal"],
             tol,
         )
-        bodies = _to_boozer(final)[:, None, :]
+        bodies = _to_boozer(final, field.regular_axis)[:, None, :]
     else:
         bodies = save_trajectories_boozer_gpu(
             field, stz_inits, parallel_speeds, _one_tmax(tmax), dt_save, **kwargs

@@ -28,6 +28,27 @@ logging.basicConfig()
 
 
 class BoozerGuidingCenterTracingTesting(unittest.TestCase):
+    def test_regular_vacuum_axis_crossing(self):
+        field = BoozerAnalytic(1.0, 1.0, 0, 1.0, 1.0, 0.0)
+        birth = np.array([[1e-6, -np.pi / 2, 0.0]])
+        path, _ = trace_particles_boozer(
+            field, birth, np.array([0.0]), tmax=3e-3,
+            mass=PROTON_MASS, charge=ELEMENTARY_CHARGE, Ekin=ONE_EV,
+            axis=1, dt_save=1e-4, tol=1e-10,
+        )
+        path = path[0]
+        x = np.sqrt(path[:, 1]) * np.cos(path[:, 2])
+        y = np.sqrt(path[:, 1]) * np.sin(path[:, 2])
+        speed = ONE_EV / ELEMENTARY_CHARGE / np.sqrt(2)
+        np.testing.assert_allclose(y, -1e-3 + speed * path[:, 0], atol=2e-6)
+        self.assertLess(np.max(np.abs(x)), 1e-8)
+        self.assertLess(y[0], 0)
+        self.assertGreater(y[-1], 0)
+        field.set_points(path[:, 1:4])
+        mu = ONE_EV / PROTON_MASS
+        energy = PROTON_MASS * (path[:, 4] ** 2 / 2 + mu * field.modB()[:, 0])
+        self.assertLess(np.max(np.abs(energy / energy[0] - 1)), 1e-7)
+
     def test_field_type(self):
         etabar = 1.2 / 1.2
         B0 = 1.0

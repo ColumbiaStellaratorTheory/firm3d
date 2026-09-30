@@ -224,6 +224,8 @@ def trace_particles_boozer_perturbed(
     else:
         speed_total = float(np.sqrt(2 * Ekin / m))
 
+    if getattr(perturbed_field.B0, "regular_axis", False):
+        raise NotImplementedError("regular_axis is not supported for perturbed tracing")
     if mode is not None:
         mode = mode.lower()
         assert mode in ["gc", "gc_vac", "gc_nok"]
@@ -482,7 +484,9 @@ def trace_particles_boozer(
             )
     # Set default values for parameters
     if axis is None:
-        axis = 2
+        axis = 1 if getattr(field, "regular_axis", False) else 2
+    if getattr(field, "regular_axis", False) and axis != 1:
+        raise ValueError("regular_axis vacuum tracing requires axis=1")
     if reltol is None:
         reltol = tol
     if abstol is None:
@@ -519,6 +523,9 @@ def trace_particles_boozer(
             )
     else:
         mode = "gc_" + field.field_type
+
+    if getattr(field, "regular_axis", False) and mode != "gc_vac":
+        raise ValueError("regular_axis currently supports gc_vac only")
 
     res_tys = []
     res_hits = []

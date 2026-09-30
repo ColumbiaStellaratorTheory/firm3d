@@ -6,7 +6,7 @@ import numpy as np
 __all__ = ["boozer_interpolant", "cartesian_interpolant"]
 
 
-def boozer_interpolant(field, nfp, ns, ntheta, nzeta, vacuum=False, dtype=np.float64):
+def boozer_interpolant(field, nfp, ns, ntheta, nzeta, vacuum=False, dtype=np.float64, regular_axis=False):
     r"""
     Set up a Boozer vacuum interpolant for tracing.
 
@@ -49,7 +49,13 @@ def boozer_interpolant(field, nfp, ns, ntheta, nzeta, vacuum=False, dtype=np.flo
     I = field.I()
     iota = field.iota()
     modB = field.modB()
-    modB_derivs = field.modB_derivs()
+    if regular_axis:
+        if not vacuum:
+            raise ValueError("regular_axis requires a vacuum field")
+        Bx, By = field.modB_cartesian_derivs()
+        modB_derivs = np.hstack((Bx, By, field.dmodBdzeta()))
+    else:
+        modB_derivs = field.modB_derivs()
 
     if vacuum:
         # Vacuum approximation: G=const, I=0, K=0
