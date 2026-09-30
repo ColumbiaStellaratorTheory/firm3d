@@ -815,7 +815,6 @@ class TestRegularAxisGPU(unittest.TestCase):
 
         def values(x, y):
             points = np.column_stack((np.hypot(x, y), np.arctan2(y, x), zeta))
-            # This six-column helper also applies the correct By/Bzeta parity.
             return np.asarray(
                 firm3dpp.test_gpu_interpolation(
                     table.quad_info,
@@ -823,7 +822,7 @@ class TestRegularAxisGPU(unittest.TestCase):
                     table.trange,
                     table.zrange,
                     np.ascontiguousarray(points),
-                    "boozer_vacuum",
+                    "boozer_vacuum_regular",
                     len(x),
                 )
             ).reshape(len(x), 6)

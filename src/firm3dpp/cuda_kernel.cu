@@ -1618,7 +1618,7 @@ py::array_t<T> test_gpu_interpolation(py::array_t<T> quad_pts, py::array_t<doubl
     }
 
     // Boozer Coordinates
-    if((rhs == "boozer_vacuum") || (rhs == "boozer_saw_vacuum") || (rhs == "boozer") || (rhs == "boozer_saw_nok")){
+    if((rhs == "boozer_vacuum") || (rhs == "boozer_vacuum_regular") || (rhs == "boozer_saw_vacuum") || (rhs == "boozer") || (rhs == "boozer_saw_nok")){
         for(int i=0; i<n_points; ++i){
             T x1 = loc_arr[3*i] * cos(loc_arr[3*i + 1]);
             T x2 = loc_arr[3*i] * sin(loc_arr[3*i + 1]);
@@ -1631,7 +1631,7 @@ py::array_t<T> test_gpu_interpolation(py::array_t<T> quad_pts, py::array_t<doubl
     int n;
     if(rhs == "cartesian_vacuum"){
         n = 7;
-    } else if(rhs == "boozer_vacuum"){
+    } else if(rhs == "boozer_vacuum" || rhs == "boozer_vacuum_regular"){
         n = 6;
     } else if(rhs == "boozer_saw_vacuum" || rhs == "boozer_saw_nok"){
         n = 10;
@@ -1698,6 +1698,8 @@ py::array_t<T> test_gpu_interpolation(py::array_t<T> quad_pts, py::array_t<doubl
         test_gpu_interpolation_kernel<T, RHS::GC_CartesianVacuum, 7><<<nblks, nthreads>>>(quadpts_d, loc_d, out_d, derivs_d, dt_d, t_d, n_points);
     } else if(rhs == "boozer_vacuum") {
         test_gpu_interpolation_kernel<T, RHS::GC_BoozerVacuum, 6><<<nblks, nthreads>>>(quadpts_d, loc_d, out_d, derivs_d, dt_d, t_d, n_points);
+    } else if(rhs == "boozer_vacuum_regular") {
+        test_gpu_interpolation_kernel<T, RHS::GC_BoozerVacuumRegular, 6><<<nblks, nthreads>>>(quadpts_d, loc_d, out_d, derivs_d, dt_d, t_d, n_points);
     } else if(rhs == "boozer_saw_vacuum" || rhs == "boozer_saw_nok") {
         test_gpu_interpolation_kernel<T, RHS::GC_BoozerVacuumSAW, 10><<<nblks, nthreads>>>(quadpts_d, loc_d, out_d, derivs_d, dt_d, t_d, n_points);
     } else if(rhs == "boozer") {
