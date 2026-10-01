@@ -1,5 +1,6 @@
 # import time
 import unittest
+from unittest.mock import patch
 import numpy as np
 import firm3dpp
 
@@ -791,6 +792,46 @@ class CATAPULTField:
             print("error:", error[row_idx, :])
 
         return gpu_error_is_small
+
+
+class TestSavedBoozerBoundary(unittest.TestCase):
+    def test_crossing_past_save_time_stops_at_first_exit(self):
+        field = CatapultBoozerField.__new__(CatapultBoozerField)
+        field.dtype, field.regular_axis = np.float64, False
+        sizes = []
+
+        def launch(_, points, vpar, tmax, dt, mu, *args):
+            sizes.append(len(points))
+            crossed = points[:, 0] < 0.25
+            return np.column_stack(
+                [
+                    tmax + 0.025,
+                    np.where(crossed, 1.1, 0.3),
+                    points[:, 1:3],
+                    vpar,
+                    np.full(len(points), 0.025),
+                    np.ones(len(points)),
+                ]
+            )
+
+        with patch("firm3d.catapult.tracing._launch_boozer", side_effect=launch):
+            paths = save_trajectories_boozer_gpu(
+                field,
+                np.array([[0.2, 0.0, 0.0], [0.3, 0.0, 0.0]]),
+                np.ones(2),
+                tmax=1.0,
+                dt_save=0.1,
+                mass=MASS,
+                charge=CHARGE,
+                vtotal=2.0,
+                tol=1e-9,
+            )
+        self.assertEqual(len(paths[0]), 1)
+        self.assertEqual(paths[0][0, 0], 0.125)
+        self.assertGreaterEqual(paths[0][0, 1], 1.0)
+        self.assertEqual(sizes[0], 2)
+        self.assertTrue(all(size == 1 for size in sizes[1:]))
+        self.assertGreaterEqual(paths[1][-1, 0], 1.0)
 
 
 @unittest.skipUnless(HAS_CUDA, "CUDA support not available")
