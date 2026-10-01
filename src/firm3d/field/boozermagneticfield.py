@@ -2032,6 +2032,8 @@ class BoozerRadialInterpolant(BoozerMagneticField):
         else:
             self.proc0 = True
 
+        if regular_axis and field_type is not None and field_type.lower() == "vac":
+            enforce_vacuum = True
         if field_type is not None:
             field_type = field_type.lower()
             assert field_type in ["vac", "nok", ""]
