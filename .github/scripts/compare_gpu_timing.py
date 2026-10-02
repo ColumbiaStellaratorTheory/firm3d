@@ -48,9 +48,10 @@ def format_metadata_table(master, pr):
     for key in keys:
         m_val = master.get(key)
         p_val = pr.get(key)
-        both = m_val is not None and p_val is not None
-        flag = "!!!" if both and m_val != p_val else ""
-        lines.append(f"| {key} | {fmt(m_val, '.4g')} | {fmt(p_val, '.4g')}{flag} |")
+        differ = m_val is not None and p_val is not None and m_val != p_val
+        spec = "" if differ else ".4g"
+        flag = "!!!" if differ else ""
+        lines.append(f"| {key} | {fmt(m_val, spec)} | {fmt(p_val, spec)}{flag} |")
     return "\n".join(lines)
 
 
@@ -131,6 +132,16 @@ def parse_args():
         metavar="output.md",
         help="Write combined report to this file instead of stdout.",
     )
+    parser.add_argument(
+        "--pr-status",
+        default="success",
+        help="Outcome of the PR GPU job.",
+    )
+    parser.add_argument(
+        "--master-status",
+        default="success",
+        help="Outcome of the master GPU job.",
+    )
     args = parser.parse_args()
 
     if len(args.triples) % 3 != 0:
@@ -140,17 +151,22 @@ def parse_args():
         )
 
     examples = [args.triples[i : i + 3] for i in range(0, len(args.triples), 3)]
-    return examples, args.output
+    return examples, args.output, args.pr_status, args.master_status
 
 
 def main():
-    examples, output_path = parse_args()
+    examples, output_path, pr_status, master_status = parse_args()
 
     sections = [
         format_example(master_path, pr_path, example_name)
         for master_path, pr_path, example_name in examples
     ]
-    output = "# Timing Comparison\n\n" + "\n---\n\n".join(sections)
+    status_note = ""
+    if pr_status != "success":
+        status_note += f"!!! PR GPU job did not succeed ({pr_status}).\n\n"
+    if master_status != "success":
+        status_note += f"!!! Master GPU job did not succeed ({master_status}).\n\n"
+    output = "# Timing Comparison\n\n" + status_note + "\n---\n\n".join(sections)
 
     if output_path:
         with open(output_path, "w") as f:

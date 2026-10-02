@@ -143,7 +143,7 @@ jobs:
 
       - name: Compare against master
         id: compare
-        if: always() && github.event_name == 'pull_request'
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         run: |
           module load cudatoolkit python cray-hdf5/1.14.3.7 cray-netcdf/4.9.2.1
           CONDA_BASE=$(conda info --base 2>/dev/null || echo "$HOME/.conda")
@@ -159,10 +159,12 @@ jobs:
             "${{ runner.temp }}/firm3d-master-${{ github.sha }}/gpu_boozer_saw_tracing_results.json" \
             "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_boozer_saw_tracing_results.json" \
             "GC Boozer Vacuum + SAW" \
+            --pr-status "${{ steps.slurm.outcome }}" \
+            --master-status "${{ steps.slurm_master.outcome }}" \
             -o "${{ runner.temp }}/firm3d-${{ github.sha }}/pr_comment.md"
 
       - name: Comment PR with results
-        if: always() && steps.compare.outcome == 'success'
+        if: ${{ !cancelled() && steps.compare.outcome == 'success' }}
         uses: thollander/actions-comment-pull-request@v3
         with:
           file-path: ${{ runner.temp }}/firm3d-${{ github.sha }}/pr_comment.md
