@@ -14,7 +14,7 @@ from firm3d.saw.ae3d import AE3DEigenvector
 from firm3d.util.constants import ALPHA_PARTICLE_CHARGE as CHARGE
 from firm3d.util.constants import ALPHA_PARTICLE_MASS as MASS
 from firm3d.util.constants import FUSION_ALPHA_PARTICLE_ENERGY as ENERGY
-from firm3d.util.functions import sigmav
+from firm3d.util.functions import in_github_actions, in_gpu_benchmark, sigmav
 
 import pandas as pd
 import json
@@ -23,9 +23,12 @@ import time
 np.random.seed(1800)
 
 ### tracing parameters
-nparticles = 100000  # Number of particles to trace
-tmax = 1e-2  # Time for integration
-tol = 1e-6
+if in_gpu_benchmark:
+    nparticles, tmax, tol, n_metagrid_pts = 100000, 1e-2, 1e-6, 15
+elif in_github_actions:
+    nparticles, tmax, tol, n_metagrid_pts = 100, 1e-4, 1e-4, 5
+else:
+    nparticles, tmax, tol, n_metagrid_pts = 25000, 1e-3, 1e-9, 15
 
 ### CREATE A FIELD FOR TRACING
 boozmn_filename = "../inputs/boozmn_aten_rescaled.nc"
@@ -36,7 +39,6 @@ bri_time = time.perf_counter() - start_bri
 
 nfp = bri.nfp
 degree = 3
-n_metagrid_pts = 15  # Resolution for field interpolation
 srange = (0, 1, n_metagrid_pts)
 thetarange = (0, np.pi, n_metagrid_pts)
 zetarange = (0, 2 * np.pi / nfp, n_metagrid_pts)
@@ -84,7 +86,7 @@ field_gpu_dbl = CatapultPerturbedBoozerField(
 )
 setup_time_dbl = time.perf_counter() - start_setup
 field_gpu_flt = CatapultPerturbedBoozerField(
-    saw, n_metagrid_pts, n_metagrid_pts, n_metagrid_pts
+    saw, n_metagrid_pts, n_metagrid_pts, n_metagrid_pts, precision="single"
 )
 VELOCITY = np.sqrt(2 * ENERGY / MASS)
 vpar_init = np.random.uniform(-VELOCITY, VELOCITY, (nparticles,))

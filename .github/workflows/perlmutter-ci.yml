@@ -142,7 +142,8 @@ jobs:
             [ -f "$WORK_DIR/coverage.xml" ] && echo "coverage=true" >> "$GITHUB_OUTPUT" || true
 
       - name: Compare against master
-        if: always() && github.event_name == 'pull_request'  && steps.slurm.outcome == 'success'
+        id: compare
+        if: always() && github.event_name == 'pull_request'
         run: |
           module load cudatoolkit python cray-hdf5/1.14.3.7 cray-netcdf/4.9.2.1
           CONDA_BASE=$(conda info --base 2>/dev/null || echo "$HOME/.conda")
@@ -161,7 +162,7 @@ jobs:
             -o "${{ runner.temp }}/firm3d-${{ github.sha }}/pr_comment.md"
 
       - name: Comment PR with results
-        if: always() && github.event_name == 'pull_request'
+        if: always() && steps.compare.outcome == 'success'
         uses: thollander/actions-comment-pull-request@v3
         with:
           file-path: ${{ runner.temp }}/firm3d-${{ github.sha }}/pr_comment.md

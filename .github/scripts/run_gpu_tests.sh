@@ -68,6 +68,7 @@ if  [ "$TEST_EXIT" -ne 0 ]; then
 fi
 
 # if the correctness tests were successful, run the regression tests
+export FIRM3D_GPU_BENCHMARK=1
 
 set +e
 (cd examples/gpu_boozer_tracing && python gpu_boozer_tracing.py)

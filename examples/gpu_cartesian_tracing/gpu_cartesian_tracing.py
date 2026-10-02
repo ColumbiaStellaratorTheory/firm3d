@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 from simsopt.field import (
     BiotSavart,
     InterpolatedField,
@@ -19,15 +20,19 @@ from firm3d.catapult.tracing import trace_particles_cartesian_gpu
 from firm3d.field.tracing_helpers import (
     initialize_velocity_uniform,
 )
+from firm3d.util.functions import in_github_actions, in_gpu_benchmark
 import json
 import time
 
 degree = 3  # degree of interpolant
 resolution = 16  # resolution of interpolant
 order = 12  # order of coil curves
-nparticles = 100000
-tmax = 1e-2
-tol = 1e-6
+if in_gpu_benchmark:
+    nparticles, tmax, tol = 100000, 1e-2, 1e-6
+elif in_github_actions:
+    nparticles, tmax, tol = 100, 1e-5, 1e-8
+else:
+    nparticles, tmax, tol = 1000, 1e-5, 1e-8
 
 filename = "../inputs/coils.curves_22_7_21"
 wout_filename = "../inputs/wout_aten_rescaled.nc"
@@ -106,8 +111,35 @@ res_tys_flt, res_hits_flt = trace_particles_cartesian_gpu(
 )
 flt_time = time.perf_counter() - start_flt
 
+final_dbl = np.array([traj[-1] for traj in res_tys_dbl])
+final_flt = np.array([traj[-1] for traj in res_tys_flt])
+particle_data = pd.DataFrame(
+    {
+        "x_start": xyz[:, 0],
+        "y_start": xyz[:, 1],
+        "z_start": xyz[:, 2],
+        "vpar_start": vpar_inits,
+        "last_time_dbl": final_dbl[:, 0],
+        "x_end_dbl": final_dbl[:, 1],
+        "y_end_dbl": final_dbl[:, 2],
+        "z_end_dbl": final_dbl[:, 3],
+        "vpar_end_dbl": final_dbl[:, 4],
+        "last_time_flt": final_flt[:, 0],
+        "x_end_flt": final_flt[:, 1],
+        "y_end_flt": final_flt[:, 2],
+        "z_end_flt": final_flt[:, 3],
+        "vpar_end_flt": final_flt[:, 4],
+    }
+)
+particle_data.to_csv("./particle_data.csv")
+
 loss_fraction_flt = float(np.mean([len(hits) > 0 for hits in res_hits_flt]))
 loss_fraction_dbl = float(np.mean([len(hits) > 0 for hits in res_hits_dbl]))
+
+print(f"tmax= {tmax}")
+print(f"Number of particles= {nparticles}")
+print(f"Flt. Loss fraction: {loss_fraction_flt:.3f}")
+print(f"Dbl. Loss fraction: {loss_fraction_dbl:.3f}")
 
 ### record for regression testing
 timing_result = {

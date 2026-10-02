@@ -18,14 +18,16 @@ from firm3d.util.constants import (
     ALPHA_PARTICLE_MASS,
     FUSION_ALPHA_PARTICLE_ENERGY,
 )
-from firm3d.util.functions import sigmav
+from firm3d.util.functions import in_github_actions, in_gpu_benchmark, sigmav
 import json
 import time
 
-resolution = 15  # Resolution for field interpolation
-nparticles = 100000  # Number of particles to trace
-tol = 1e-6  # Tolerance for ODE solver
-tmax = 1e-2
+if in_gpu_benchmark:
+    resolution, nparticles, tol, tmax = 15, 100000, 1e-6, 1e-2
+elif in_github_actions:
+    resolution, nparticles, tol, tmax = 5, 100, 1e-4, 1e-4
+else:
+    resolution, nparticles, tol, tmax = 15, 30000, 1e-6, 1e-4
 
 ### CREATE A FIELD FOR TRACING
 boozmn_filename = "../inputs/boozmn_ariescs_low_res.nc"

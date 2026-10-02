@@ -2,16 +2,16 @@
 Compare timing results between master and PR runs for one or more tracing examples.
 
 Usage:
-    python compare_timing.py <master1.json> <pr1.json> <name1>
-                        [<master2.json> <pr2.json> <name2> ...] [-o output.md]
+    python compare_gpu_timing.py <master1.json> <pr1.json> <name1> \\
+        [<master2.json> <pr2.json> <name2> ...] [-o output.md]
 
 Each example is a (master_json, pr_json, example_name) triple. Any number of
 triples may be given. If -o/--output is omitted, prints to stdout.
 
 Example:
-    python compare_timing.py master_a.json pr_a.json "Example A" \\
-                              master_b.json pr_b.json "Example B" \\
-                              -o timing_report.md
+    python compare_gpu_timing.py master_a.json pr_a.json "Example A" \\
+                                  master_b.json pr_b.json "Example B" \\
+                                  -o timing_report.md
 """
 
 import argparse
@@ -26,12 +26,12 @@ def load(path):
         return {}
 
 
-def fmt(val, precision=4):
+def fmt(val, spec=".4f"):
     """Format a number for display, or return an em-dash for missing values."""
     if val is None:
         return "—"
     if isinstance(val, float):
-        return f"{val:.{precision}f}"
+        return f"{val:{spec}}"
     return str(val)
 
 
@@ -48,8 +48,9 @@ def format_metadata_table(master, pr):
     for key in keys:
         m_val = master.get(key)
         p_val = pr.get(key)
-        flag = "!!!" if m_val != p_val else ""
-        lines.append(f"| {key} | {fmt(m_val)} | {fmt(p_val)}{flag} |")
+        both = m_val is not None and p_val is not None
+        flag = "!!!" if both and m_val != p_val else ""
+        lines.append(f"| {key} | {fmt(m_val, '.4g')} | {fmt(p_val, '.4g')}{flag} |")
     return "\n".join(lines)
 
 
