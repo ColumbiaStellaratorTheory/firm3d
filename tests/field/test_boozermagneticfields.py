@@ -7,8 +7,11 @@ from scipy.interpolate import InterpolatedUnivariateSpline
 from scipy.io import netcdf_file
 from scipy.optimize import minimize
 
+from firm3d.catapult.utils import boozer_interpolant
+from firm3d.catapult.field import CatapultBoozerField
 from firm3d._core.util import align_and_pad, allocate_aligned_and_padded_array
 from firm3d.field.boozermagneticfield import (
+    _AxisRegularizedSpline,
     BoozerAnalytic,
     BoozerRadialInterpolant,
     BoozerSplineField,
@@ -1314,6 +1317,77 @@ class TestingBoozerRadialInterpolantSums(unittest.TestCase):
             if bri.asym:
                 modB[i] += np.sum(bri.bmns_splines(np.array([s]))[0] * np.sin(angle))
         return modB
+
+    def test_regular_axis_scaling_and_cartesian_gradient(self):
+        grid = np.r_[0, (np.arange(8) + 0.5) / 9, 1]
+        m = np.array([0, 1, 1, 2])
+        values = np.column_stack(
+            (
+                2 + grid,
+                0.3 * np.sqrt(grid) * (1 + grid),
+                -0.2 * np.sqrt(grid),
+                0.1 * grid,
+            )
+        )
+        spline = _AxisRegularizedSpline(grid, values, m, 3)
+        s = np.array([1e-8, 1e-4, 0.2, 0.8])
+        np.testing.assert_allclose(spline(s)[:, 1], 0.3 * np.sqrt(s) * (1 + s))
+        np.testing.assert_allclose(
+            spline.derivative()(s)[:, 1],
+            0.15 / np.sqrt(s) + 0.45 * np.sqrt(s),
+            rtol=1e-8,
+        )
+        with self.assertRaises(ValueError):
+            spline.derivative()(0)
+
+        bri = BoozerRadialInterpolant(
+            filename_vac, 3, enforce_vacuum=True, regular_axis=True
+        )
+        explicit = BoozerRadialInterpolant(
+            filename_vac, 3, field_type="vac", regular_axis=True
+        )
+        self.assertTrue(explicit.enforce_vacuum)
+        self.assertTrue(explicit.no_K)
+        points = np.array([[0.0, 0.0, 0.3], [0.2, 0.7, 0.4]])
+        for field in (bri, explicit):
+            field.set_points(points)
+        for name in ("modB", "G", "I", "modB_cartesian_derivs"):
+            np.testing.assert_array_equal(
+                getattr(explicit, name)(), getattr(bri, name)()
+            )
+        angles = np.array([0.0, 0.7, 2.1, 4.0])
+        bri.set_points(np.column_stack((np.zeros(4), angles, np.full(4, 0.3))))
+        Bx, By = bri.modB_cartesian_derivs()
+        self.assertLess(np.ptp(Bx), 1e-12)
+        self.assertLess(np.ptp(By), 1e-12)
+        h = 1e-5
+        bri.set_points(
+            np.array([[h * h, t, 0.3] for t in (0, np.pi, np.pi / 2, -np.pi / 2)])
+        )
+        B = bri.modB().ravel()
+        np.testing.assert_allclose(
+            [Bx[0, 0], By[0, 0]],
+            [(B[0] - B[1]) / (2 * h), (B[2] - B[3]) / (2 * h)],
+            rtol=1e-3,
+            atol=1e-4,
+        )
+        with self.assertRaises(NotImplementedError):
+            InterpolatedBoozerField(bri, degree=3)
+        _, _, _, table, _ = boozer_interpolant(
+            bri, bri.nfp, 2, 2, 2, vacuum=True, regular_axis=True
+        )
+        self.assertTrue(np.isfinite(table).all())
+        self.assertLess(np.ptp(table[0, 1, 0:16:4]), 1e-12)
+        self.assertLess(np.ptp(table[0, 2, 0:16:4]), 1e-12)
+        asym = BoozerRadialInterpolant(
+            filename_mhd_lasym, 3, enforce_vacuum=True, regular_axis=True
+        )
+        asym.set_points(np.column_stack((np.zeros(4), angles, np.full(4, 0.3))))
+        ax, ay = asym.modB_cartesian_derivs()
+        self.assertLess(np.ptp(ax), 1e-12)
+        self.assertLess(np.ptp(ay), 1e-12)
+        with self.assertRaises(NotImplementedError):
+            CatapultBoozerField(asym, 2, 2, 2)
 
     def test_modB_matches_direct_sum(self):
         for asym in [True, False]:
