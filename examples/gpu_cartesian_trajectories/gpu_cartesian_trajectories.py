@@ -43,7 +43,9 @@ for _i, coil in enumerate(coils):
     curves.append(coil.curve)
     currents.append(coil.current)
 
-coils_full = coils_via_symmetries(curves, currents, surf.nfp, True)
+# coils.curves_22_7_21 holds the stellarator-symmetric half of a full-torus
+# 40-coil set, so only stellsym is applied here.
+coils_full = coils_via_symmetries(curves, currents, 1, True)
 bs = BiotSavart(coils_full)
 
 surf_launch = SurfaceRZFourier.from_wout(wout_filename, s=0.3)

@@ -197,20 +197,33 @@ class CatapultCartesianField:
             by about as much as they do under a tenfold change of the
             solver tolerance. Use it for statistics over an ensemble, not
             for following a particular particle.
+        flux_label: Optional callable mapping an ``(N, 3)`` array of
+            cylindrical points ``(r, phi, z)`` to the flux label ``s``. It is
+            tabulated as an extra column and is what the collisional kernel
+            reads to evaluate the thermal profiles, so
+            :func:`trace_particles_cartesian_with_collisions_gpu` requires a
+            field built with one. Collisions are traced in double precision.
 
     Attributes:
         dtype: The numpy dtype matching ``precision``.
         rrange, phirange, zrange: ``(start, end, npoints)`` of the grid in
             each coordinate.
         quad_info: The tabulated field and distance function, in ``dtype``.
+        has_flux_label: Whether the flux label column is present.
     """
 
-    def __init__(self, field, surface_classifier, precision="double"):
+    def __init__(self, field, surface_classifier, precision="double", flux_label=None):
         self.dtype = _dtype_from_precision(precision)
+        if flux_label is not None and self.dtype != np.float64:
+            raise ValueError(
+                "a flux label is tabulated for collisional tracing, which runs "
+                "in double precision; pass precision='double'"
+            )
         self.field = field
         self.surface_classifier = surface_classifier
+        self.has_flux_label = flux_label is not None
         self.rrange, self.phirange, self.zrange, self.quad_info = cartesian_interpolant(
-            field, surface_classifier, dtype=self.dtype
+            field, surface_classifier, flux_label=flux_label, dtype=self.dtype
         )
 
     @property

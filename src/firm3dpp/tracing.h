@@ -1,10 +1,13 @@
 #pragma once
 #include <memory>
 #include <vector>
+#include <cstdint>
+#include <stdexcept>
 #include "boozermagneticfield.h"
 #include "shearalfvenwave.h"
 #include "regular_grid_interpolant_3d.h"
 #include "tracing_helpers.h"
+#include "collisions.h"
 
 using std::array;
 using std::shared_ptr;
@@ -21,6 +24,11 @@ public:
     virtual ~BaseRHS() = default;
     virtual void operator()(const vector<double>& y, vector<double>& dydt, double t) = 0;
     virtual int get_state_size() const = 0;
+    virtual void set_mu(double) {
+        throw std::invalid_argument(
+            "this right-hand side does not support collisions: mu is not settable"
+        );
+    }
 };
 
 // Overloaded solve() function that accepts a BaseRHS object
@@ -32,7 +40,7 @@ solve(
     double dtau,
     double dtau_max,
     double abstol,
-    double reltol, 
+    double reltol,
     vector<double> phases,
     vector<double> n_zetas,
     vector<double> m_thetas,
@@ -81,6 +89,48 @@ particle_guiding_center_boozer_perturbed_tracing(
 
 
 tuple<vector<vector<double>>, vector<vector<double>>>
+particle_guiding_center_boozer_collision_tracing(
+        shared_ptr<BoozerMagneticField> field,
+        vector<double> stz_init,
+        double m,
+        double q,
+        double vtotal,
+        double vtang,
+        double tmax,
+        const vector<ThermalBackground>& backgrounds,
+        bool vacuum,
+        bool noK,
+        vector<shared_ptr<StoppingCriterion>> stopping_criteria={},
+        int axis=2,
+        double abstol=1e-9,
+        double reltol=1e-9,
+        string ode_solver="dormand_prince",
+        double DP_hmin=0.0,
+        uint64_t rng_seed=0
+);
+
+tuple<vector<vector<double>>, vector<vector<double>>>
+particle_guiding_center_boozer_perturbed_collision_tracing(
+        shared_ptr<ShearAlfvenWave> perturbed_field,
+        vector<double> stz_init,
+        double m,
+        double q,
+        double vtang,
+        double mu_init,
+        double tmax,
+        const vector<ThermalBackground>& backgrounds,
+        bool vacuum,
+        bool noK,
+        vector<shared_ptr<StoppingCriterion>> stopping_criteria={},
+        int axis=2,
+        double abstol=1e-9,
+        double reltol=1e-9,
+        string ode_solver="dormand_prince",
+        double DP_hmin=0.0,
+        uint64_t rng_seed=0
+);
+
+tuple<vector<vector<double>>, vector<vector<double>>>
 particle_guiding_center_boozer_tracing(
         shared_ptr<BoozerMagneticField> field,
         vector<double> stz_init,
@@ -117,21 +167,34 @@ vector<double> simsopt_derivs_saw(shared_ptr<ShearAlfvenWave> perturbed_field, v
 #ifdef USE_CUDA
 template<typename T>
 vector<T> cartesian_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> rrange,
-        py::array_t<double> phirange, py::array_t<double> zrange, py::array_t<T> xyz_init, double m, double q, double vtotal, py::array_t<T> vtang, 
+        py::array_t<double> phirange, py::array_t<double> zrange, py::array_t<T> xyz_init, double m, double q, double vtotal, py::array_t<T> vtang,
         py::array_t<double> tmax, double tol, py::array_t<T> dt_in, py::array_t<T> mu_in, int nparticles);
 
 template<typename T>
 vector<T> boozer_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> srange,
-        py::array_t<double> trange, py::array_t<double> zrange, py::array_t<T> stz_init, double m, double q, double vtotal, py::array_t<T> vtang, 
+        py::array_t<double> trange, py::array_t<double> zrange, py::array_t<T> stz_init, double m, double q, double vtotal, py::array_t<T> vtang,
         py::array_t<double> tmax, double tol, py::array_t<T> dt_in, py::array_t<T> mu_in, double psi0, int nparticles, bool vacuum);
-        
+
+// Collisional tracing runs in double precision only: the collision
+// coefficients and the Milstein step are evaluated in double on the CPU too,
+// and the kick is small compared with the orbit step it corrects.
+vector<double> cartesian_collision_gpu_tracing(py::array_t<double> quad_pts, py::array_t<double> rrange,
+        py::array_t<double> phirange, py::array_t<double> zrange, py::array_t<double> xyz_init, double m, double q, double vtotal, py::array_t<double> vtang,
+        py::array_t<double> tmax, double tol, py::array_t<double> dt_in, int nparticles,
+        const vector<ThermalBackground>& backgrounds, unsigned long long rng_seed=0);
+
+vector<double> boozer_collision_gpu_tracing(py::array_t<double> quad_pts, py::array_t<double> srange,
+        py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> stz_init, double m, double q, double vtotal, py::array_t<double> vtang,
+        py::array_t<double> tmax, double tol, py::array_t<double> dt_in, double psi0, int nparticles,
+        const vector<ThermalBackground>& backgrounds, bool vacuum=false, unsigned long long rng_seed=0);
+
 template<typename T>
-vector<T> boozer_saw_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, 
+vector<T> boozer_saw_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange,
         double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<T> saw_phihats, int saw_nharmonics,
         py::array_t<T> stz_init, double m, double q, double vtotal, py::array_t<T> vtang, py::array_t<double> tmax, double tol, py::array_t<T> dt_in, py::array_t<T> mu_in, double psi0, int nparticles);
 
 template<typename T>
-vector<T> boozer_saw_nok_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, 
+vector<T> boozer_saw_nok_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange,
         double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<T> saw_phihats, int saw_nharmonics,
         py::array_t<T> stz_init, double m, double q, double vtotal, py::array_t<T> vtang, py::array_t<double> tmax, double tol, py::array_t<T> dt_in, py::array_t<T> mu_in, double psi0, int nparticles);
 
@@ -159,16 +222,16 @@ vector<double> test_timestep_cartesian(py::array_t<double> quad_pts, py::array_t
         double tol, int nparticles);
 
 vector<double> test_timestep_boozer(py::array_t<double> quad_pts, py::array_t<double> srange,
-        py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> stz_init, double m, double q, double vtotal, py::array_t<double> vtang, 
+        py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> stz_init, double m, double q, double vtotal, py::array_t<double> vtang,
         double tol, double psi0, int nparticles, bool vacuum);
-        
-vector<double> test_timestep_saw(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, 
+
+vector<double> test_timestep_saw(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange,
         double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<double> saw_phihats, int saw_nharmonics,
         py::array_t<double> stz_init, double m, double q, double vtotal, py::array_t<double> vtang, py::array_t<double> time,
         double tol, double psi0, int nparticles);
 
 
-vector<double> test_timestep_saw_nok(py::array_t<double> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, 
+vector<double> test_timestep_saw_nok(py::array_t<double> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range,
         double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<double> saw_phihats, int saw_nharmonics,
         py::array_t<double> loc_init, double m, double q, double v_total, py::array_t<double> vtang, py::array_t<double> time,
         double tol, double psi0, int nparticles);

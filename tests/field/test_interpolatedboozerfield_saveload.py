@@ -400,9 +400,9 @@ class TestInterpolatedBoozerFieldSaveLoad(unittest.TestCase):
         Ekin = FUSION_ALPHA_PARTICLE_ENERGY
         mass = ALPHA_PARTICLE_MASS
         charge = ALPHA_PARTICLE_CHARGE
-        vpar0 = np.sqrt(2 * Ekin / mass)
+        v0 = np.sqrt(2 * Ekin / mass)
         vpar_init = initialize_velocity_uniform(
-            vpar0,
+            v0,
             n_particles,
             comm=comm,
             seed=42,
@@ -505,15 +505,15 @@ class TestInterpolatedBoozerFieldSaveLoad(unittest.TestCase):
         Ekin = FUSION_ALPHA_PARTICLE_ENERGY
         mass = ALPHA_PARTICLE_MASS
         charge = ALPHA_PARTICLE_CHARGE
-        vpar0 = np.sqrt(2 * Ekin / mass)
+        v0 = np.sqrt(2 * Ekin / mass)
         vpar_init = initialize_velocity_uniform(
-            vpar0,
+            v0,
             n_particles,
             comm=comm,
             seed=42,
         )
         field.set_points(points)
-        mu_init = (vpar0**2 - vpar_init**2) / (2 * field.modB()[:, 0])
+        mu_init = (v0**2 - vpar_init**2) / (2 * field.modB()[:, 0])
 
         saw_orig = ShearAlfvenHarmonic(Phihat, Phim, Phin, omega, phase, field)
         res_tys_orig, res_hits_orig = trace_particles_boozer_perturbed(
@@ -538,7 +538,7 @@ class TestInterpolatedBoozerFieldSaveLoad(unittest.TestCase):
             field.to_json(json_path)
             loaded_field = InterpolatedBoozerField.from_json(json_path)
             loaded_field.set_points(points)
-            mu_loaded = (vpar0**2 - vpar_init**2) / (2 * loaded_field.modB()[:, 0])
+            mu_loaded = (v0**2 - vpar_init**2) / (2 * loaded_field.modB()[:, 0])
             saw_loaded = ShearAlfvenHarmonic(
                 Phihat, Phim, Phin, omega, phase, loaded_field
             )

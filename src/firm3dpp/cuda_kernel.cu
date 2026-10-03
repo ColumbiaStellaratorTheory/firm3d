@@ -9,6 +9,9 @@ typedef xt::pytensor<double, 2, xt::layout_type::row_major> PyTensor;
 using std::shared_ptr;
 using std::vector;
 namespace py = pybind11;
+#include "collisions.h"
+#include <curand_kernel.h>
+#include <algorithm>
 
 #define THREADS_PER_BLOCK 32
 #define PARTICLES_PER_BLOCK 8
@@ -26,15 +29,26 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=t
 
 // enum used for templating
 // https://stackoverflow.com/questions/9116267/how-can-i-use-an-enumeration-as-a-template-parameter
-enum class RHS {GC_CartesianVacuum, GC_BoozerVacuum, GC_Boozer, GC_BoozerVacuumSAW, GC_BoozerNoKSAW};
+// The *Coll ids are the collisional counterparts of GC_CartesianVacuum,
+// GC_BoozerVacuum and GC_Boozer: same equations of motion, but the rhs also
+// hands the step controller what the collision kick needs (|B| always, and
+// the flux label in Cartesian coordinates, where the state does not carry
+// it). They are separate ids rather than a runtime flag so the collisionless
+// kernels keep their deriv and interpolant counts, and their occupancy.
+enum class RHS {GC_CartesianVacuum, GC_CartesianVacuumColl, GC_BoozerVacuum, GC_BoozerVacuumColl, GC_Boozer, GC_BoozerColl, GC_BoozerVacuumSAW, GC_BoozerNoKSAW};
 
 enum class CoordSys {Cartesian, Boozer};
 
 template<RHS id>
+__host__ __device__ constexpr bool is_collisional(){
+    return id == RHS::GC_CartesianVacuumColl || id == RHS::GC_BoozerVacuumColl || id == RHS::GC_BoozerColl;
+}
+
+template<RHS id>
 __host__ __device__ constexpr CoordSys map_rhs_to_coord(){
-    if constexpr(id == RHS::GC_BoozerVacuum || id == RHS::GC_Boozer || id == RHS::GC_BoozerVacuumSAW || id == RHS::GC_BoozerNoKSAW){
+    if constexpr(id == RHS::GC_BoozerVacuum || id == RHS::GC_BoozerVacuumColl || id == RHS::GC_Boozer || id == RHS::GC_BoozerColl || id == RHS::GC_BoozerVacuumSAW || id == RHS::GC_BoozerNoKSAW){
         return CoordSys::Boozer;
-    } else if constexpr (id == RHS::GC_CartesianVacuum) {
+    } else if constexpr (id == RHS::GC_CartesianVacuum || id == RHS::GC_CartesianVacuumColl) {
         return CoordSys::Cartesian;
     }
 }
@@ -43,9 +57,13 @@ template<RHS id>
 __host__ __device__ constexpr int map_rhs_to_n_interpolants(){
     if constexpr(id == RHS::GC_CartesianVacuum){
         return 7;
-    } else if constexpr(id == RHS::GC_BoozerVacuum){
+    } else if constexpr(id == RHS::GC_CartesianVacuumColl){
+        // the 7 collisionless columns plus the flux label the thermal
+        // profiles are parametrized by
+        return 8;
+    } else if constexpr(id == RHS::GC_BoozerVacuum || id == RHS::GC_BoozerVacuumColl){
         return 6;
-    } else if constexpr(id == RHS::GC_Boozer){
+    } else if constexpr(id == RHS::GC_Boozer || id == RHS::GC_BoozerColl){
         return 12;
     } else if constexpr(id == RHS::GC_BoozerVacuumSAW || id == RHS::GC_BoozerNoKSAW){
         return 10;
@@ -54,12 +72,30 @@ __host__ __device__ constexpr int map_rhs_to_n_interpolants(){
 
 // each rhs needs a different number of outputs.
 // GC rhs need 4 derivative components, Cartesian tracing needs to track the signed distance fn to boundary
+// The collisional rhs additionally carry |B| at the evaluation point, and in
+// Cartesian coordinates the flux label, which the kick reads from the last
+// stage rather than interpolating a second time.
 template<RHS id>
 __host__ __device__ constexpr int map_rhs_to_n_deriv_outputs(){
     if constexpr(id == RHS::GC_BoozerVacuum || id == RHS::GC_Boozer || id == RHS::GC_BoozerVacuumSAW || id == RHS::GC_BoozerNoKSAW){
         return 4;
+    } else if constexpr(id == RHS::GC_BoozerVacuumColl || id == RHS::GC_BoozerColl){
+        return 5;
     } else if constexpr(id == RHS::GC_CartesianVacuum){
         return 5;
+    } else if constexpr(id == RHS::GC_CartesianVacuumColl){
+        return 7;
+    }
+}
+
+// the deriv slot the collisional rhs writes |B| to, and, in Cartesian
+// coordinates, the flux label
+template<RHS id>
+__host__ __device__ constexpr int map_rhs_to_modB_slot(){
+    if constexpr(id == RHS::GC_CartesianVacuumColl){
+        return 5;
+    } else {
+        return 4;
     }
 }
 
@@ -114,6 +150,13 @@ __constant__ double saw_srange_d[4]; // used for SAW RHS only
 
 __constant__ bool rescale_abstol_var_d = true;
 __constant__ bool is_test_d = false;
+
+// the thermal backgrounds the collision kick reads, and the base RNG seed.
+// coll_n_backgrounds_d is 0 unless a collisional launch uploaded profiles,
+// which disables the kick even in a collisional kernel.
+__constant__ ThermalBackgroundView coll_backgrounds_d[COLL_MAX_SPECIES];
+__constant__ int coll_n_backgrounds_d = 0;
+__constant__ unsigned long long coll_seed_d = 0;
 
 // global counter for workstealing
 __device__ int next_particle_d;
@@ -186,8 +229,11 @@ template <typename T, int n> __device__ void interpolate(T*  out, const T* __res
 
 
 // calc_derivs implementation for guiding center cartesian vacuum tracing
-template <typename T, int deriv_id>
+// id selects the collisionless or the collisional instantiation, which differ
+// only in the deriv stride and in the two extra columns the kick reads.
+template <typename T, RHS id, int deriv_id>
 __device__ void rhs_GC_CartesianVacuum(T* derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu){
+    constexpr int nout = map_rhs_to_n_deriv_outputs<id>();
 
     T x = x_temp[1*PARTICLES_PER_BLOCK];
     T y = x_temp[2*PARTICLES_PER_BLOCK];
@@ -219,21 +265,25 @@ __device__ void rhs_GC_CartesianVacuum(T* derivs, const T* __restrict__ x_temp, 
     T fak2 = (T(mass_d)/(T(charge_d)*pow(AbsB, 3)))*(0.5*v_perp2 + v_par*v_par);
 
     T BcrossGradAbsB_elt = B_y*GradAbsB_z - B_z*GradAbsB_y;
-    derivs[(5*deriv_id + 0)*PARTICLES_PER_BLOCK] = fak1*B_x + fak2*BcrossGradAbsB_elt;
+    derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = fak1*B_x + fak2*BcrossGradAbsB_elt;
     BcrossGradAbsB_elt = B_z*GradAbsB_x - B_x*GradAbsB_z;
-    derivs[(5*deriv_id + 1)*PARTICLES_PER_BLOCK] = fak1*B_y + fak2*BcrossGradAbsB_elt;
+    derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK] = fak1*B_y + fak2*BcrossGradAbsB_elt;
     BcrossGradAbsB_elt = B_x*GradAbsB_y - B_y*GradAbsB_x;
-    derivs[(5*deriv_id + 2)*PARTICLES_PER_BLOCK] = fak1*B_z + fak2*BcrossGradAbsB_elt;
-    derivs[(5*deriv_id + 3)*PARTICLES_PER_BLOCK] = -mu[0]*(B_x*GradAbsB_x + B_y*GradAbsB_y + B_z*GradAbsB_z)/AbsB;
-    // derivs[(6*deriv_id + 4)*PARTICLES_PER_BLOCK] = AbsB; // AbsB
-    derivs[(5*deriv_id + 4)*PARTICLES_PER_BLOCK] = block_interpolants[6*PARTICLES_PER_BLOCK]; // boundary dist fn
+    derivs[(nout*deriv_id + 2)*PARTICLES_PER_BLOCK] = fak1*B_z + fak2*BcrossGradAbsB_elt;
+    derivs[(nout*deriv_id + 3)*PARTICLES_PER_BLOCK] = -mu[0]*(B_x*GradAbsB_x + B_y*GradAbsB_y + B_z*GradAbsB_z)/AbsB;
+    derivs[(nout*deriv_id + 4)*PARTICLES_PER_BLOCK] = block_interpolants[6*PARTICLES_PER_BLOCK]; // boundary dist fn
+    if constexpr (is_collisional<id>()){
+        derivs[(nout*deriv_id + 5)*PARTICLES_PER_BLOCK] = AbsB;
+        derivs[(nout*deriv_id + 6)*PARTICLES_PER_BLOCK] = block_interpolants[7*PARTICLES_PER_BLOCK]; // flux label
+    }
 
 }
 
 
 // calc_derivs implementation for guiding center boozer vacuum tracing
-template <typename T, int deriv_id>
+template <typename T, RHS id, int deriv_id>
 __device__ void rhs_GC_BoozerVacuum(T* derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu){
+    constexpr int nout = map_rhs_to_n_deriv_outputs<id>();
 
     T x1 = x_temp[1*PARTICLES_PER_BLOCK];
     T x2 = x_temp[2*PARTICLES_PER_BLOCK];
@@ -260,10 +310,13 @@ __device__ void rhs_GC_BoozerVacuum(T* derivs, const T* __restrict__ x_temp, con
     T sdot = -dmodBdtheta*(fak1 * T(inv_psi0_charge_d));
     T tdot = dmodBds*(fak1 * T(inv_psi0_charge_d)) + iota*(v_par*modB_inv_G);
 
-    derivs[(4*deriv_id + 0)*PARTICLES_PER_BLOCK] = sdot*x1*inv_s - x2*tdot;
-    derivs[(4*deriv_id + 1)*PARTICLES_PER_BLOCK] = sdot*x2*inv_s + x1*tdot;
-    derivs[(4*deriv_id + 2)*PARTICLES_PER_BLOCK] = (v_par*modB_inv_G);
-    derivs[(4*deriv_id + 3)*PARTICLES_PER_BLOCK] = -(iota*dmodBdtheta + dmodBdzeta)*mu_val*modB_inv_G;
+    derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = sdot*x1*inv_s - x2*tdot;
+    derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK] = sdot*x2*inv_s + x1*tdot;
+    derivs[(nout*deriv_id + 2)*PARTICLES_PER_BLOCK] = (v_par*modB_inv_G);
+    derivs[(nout*deriv_id + 3)*PARTICLES_PER_BLOCK] = -(iota*dmodBdtheta + dmodBdzeta)*mu_val*modB_inv_G;
+    if constexpr (is_collisional<id>()){
+        derivs[(nout*deriv_id + 4)*PARTICLES_PER_BLOCK] = modB;
+    }
 
 }
 
@@ -271,8 +324,9 @@ __device__ void rhs_GC_BoozerVacuum(T* derivs, const T* __restrict__ x_temp, con
 // calc_derivs implementation for general guiding center Boozer tracing (with K != 0)
 // The equations in this function match those for the CPU tracing at
 // tracing.cpp::GuidingCenterBoozerRHS
-template<typename T, int deriv_id>
+template<typename T, RHS id, int deriv_id>
 __device__ void rhs_GC_Boozer(T* derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu){
+    constexpr int nout = map_rhs_to_n_deriv_outputs<id>();
 
     T x1 = x_temp[1*PARTICLES_PER_BLOCK];
     T x2 = x_temp[2*PARTICLES_PER_BLOCK];
@@ -326,10 +380,13 @@ __device__ void rhs_GC_Boozer(T* derivs, const T* __restrict__ x_temp, const T* 
     // v||dot = (C |B|,theta - F |B|,zeta) mu |B| / (iota D)
     T vpardot = (C * dmodBdtheta - F * dmodBdzeta) * mu_val * modB / (iota * D);
 
-    derivs[(4*deriv_id + 0)*PARTICLES_PER_BLOCK] = sdot*cos(theta) - s*sin(theta)*tdot;
-    derivs[(4*deriv_id + 1)*PARTICLES_PER_BLOCK] = sdot*sin(theta) + s*cos(theta)*tdot;
-    derivs[(4*deriv_id + 2)*PARTICLES_PER_BLOCK] = zetadot;
-    derivs[(4*deriv_id + 3)*PARTICLES_PER_BLOCK] = vpardot;
+    derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = sdot*cos(theta) - s*sin(theta)*tdot;
+    derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK] = sdot*sin(theta) + s*cos(theta)*tdot;
+    derivs[(nout*deriv_id + 2)*PARTICLES_PER_BLOCK] = zetadot;
+    derivs[(nout*deriv_id + 3)*PARTICLES_PER_BLOCK] = vpardot;
+    if constexpr (is_collisional<id>()){
+        derivs[(nout*deriv_id + 4)*PARTICLES_PER_BLOCK] = modB;
+    }
 };
 
 // calc_derivs implementation for guiding center boozer vacuum tracing with Shear Alfven Waves
@@ -557,12 +614,12 @@ __device__ void calc_derivs(T* derivs, const T* __restrict__ quadpts_arr, const 
     __syncthreads();
 
     if(threadIdx.x < PARTICLES_PER_BLOCK && is_valid[threadIdx.x]){
-        if constexpr (id == RHS::GC_CartesianVacuum){
-            rhs_GC_CartesianVacuum<T, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
-        } else if constexpr(id == RHS::GC_BoozerVacuum){
-            rhs_GC_BoozerVacuum<T, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
-        } else if constexpr(id == RHS::GC_Boozer){
-            rhs_GC_Boozer<T, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
+        if constexpr (id == RHS::GC_CartesianVacuum || id == RHS::GC_CartesianVacuumColl){
+            rhs_GC_CartesianVacuum<T, id, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
+        } else if constexpr(id == RHS::GC_BoozerVacuum || id == RHS::GC_BoozerVacuumColl){
+            rhs_GC_BoozerVacuum<T, id, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
+        } else if constexpr(id == RHS::GC_Boozer || id == RHS::GC_BoozerColl){
+            rhs_GC_Boozer<T, id, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
         } else if constexpr(id == RHS::GC_BoozerVacuumSAW){
             rhs_GC_BoozerVacuumSAW<T, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu,
                 saw_omega, saw_m, saw_n, saw_phihats, saw_nharmonics);
@@ -756,7 +813,10 @@ template<typename T>
 __device__ void max_stepsize_boozer(T* dtmax, T* interpolants){
     T modB = interpolants[PARTICLES_PER_BLOCK*0 + threadIdx.x];
     T G = interpolants[PARTICLES_PER_BLOCK*4 + threadIdx.x];
-    dtmax[threadIdx.x] = (G / modB)*0.5*T(M_PI) / T(v_total_d);
+    // |G|: its sign is an equilibrium convention, but this bound is a time.
+    // A negative dtmax seeds a negative dt in setup_particle, and the step
+    // loop then runs backwards and never reaches tmax.
+    dtmax[threadIdx.x] = (fabs(G) / modB)*0.5*T(M_PI) / T(v_total_d);
 }
 
 // calculate maximum allowable timestep to allow at most a quarter of a revolution per step
@@ -865,9 +925,9 @@ __global__ void setup_kernel(T* init_pos, const T* __restrict__ quadpts_arr, T* 
 
 }
 
-template<typename T>
+template<typename T, RHS id>
 __device__ void check_has_left_cartesian(bool* has_left, const T* __restrict__ state, const T* __restrict__ derivs){
-    constexpr int n_deriv_outputs = map_rhs_to_n_deriv_outputs<RHS::GC_CartesianVacuum>();
+    constexpr int n_deriv_outputs = map_rhs_to_n_deriv_outputs<id>();
     has_left[threadIdx.x] = derivs[(6*n_deriv_outputs + 4)*PARTICLES_PER_BLOCK + threadIdx.x] < 0; // boundary dist fn at new location
 }
 
@@ -884,10 +944,11 @@ __device__ void check_has_left_boozer(bool* has_left, const T* __restrict__ stat
 // determine whether a particle has been lost or not
 // in cartesian coordinates, we check the signed distance function
 // in boozer coordinates we check for s >= 1
-template<typename T, CoordSys coord>
+template<typename T, RHS id>
 __device__ void check_has_left(bool* has_left, const T* __restrict__ state, const T* __restrict__ derivs){
+    constexpr CoordSys coord = map_rhs_to_coord<id>();
     if constexpr (coord == CoordSys::Cartesian){
-        check_has_left_cartesian(has_left, state, derivs);
+        check_has_left_cartesian<T, id>(has_left, state, derivs);
     } else if constexpr (coord == CoordSys::Boozer){
         check_has_left_boozer(has_left, state, derivs);
     } else{
@@ -896,11 +957,72 @@ __device__ void check_has_left(bool* has_left, const T* __restrict__ state, cons
 };
 
 
+// ---------------------------------------------------------------------------
+// Collision kick, applied to (v, xi) after an accepted orbit step.
+//
+// It runs in the one thread per particle that adjust_time gives state_id 0,
+// on the state the step just wrote: v_par from state, |B| and, in Cartesian
+// coordinates, the flux label from the last DP5 stage, which is evaluated at
+// the step endpoint.
+//
+// The kick is always computed in double, whatever precision the orbit is
+// traced in: the coefficients span many orders of magnitude in v and the
+// CPU tracer evaluates them in double as well.
+// ---------------------------------------------------------------------------
+template<typename T, RHS id>
+__device__ void collision_kick(T* state, T* mu, const T* __restrict__ derivs,
+                               double dt_taken, double s_flux,
+                               curandStatePhilox4_32_10_t* rng,
+                               T* v_out)
+{
+    if (coll_n_backgrounds_d <= 0) return;
+
+    const int p = threadIdx.x;
+    constexpr int nout = map_rhs_to_n_deriv_outputs<id>();
+    constexpr int modB_slot = map_rhs_to_modB_slot<id>();
+
+    double v_par = (double)state[3*PARTICLES_PER_BLOCK + p];
+    double B     = (double)derivs[(nout*6 + modB_slot)*PARTICLES_PER_BLOCK + p];
+
+    double v = sqrt(v_par*v_par + 2.0 * (double)mu[p] * B);
+    double xi = v_par / v;
+
+    CollisionCoefficients c;
+    if (compute_collision_coefficients_core(v, s_flux, mass_d, charge_d,
+                                            coll_backgrounds_d, coll_n_backgrounds_d, &c)
+        != COLL_OK) {
+        // ln_Lambda <= 0: the model is undefined here.
+        return;
+    }
+
+    // Sub-cycle exactly as solve_sde does: one sub-step at a time, re-sized
+    // from the refreshed coefficients, so sub-steps shrink as the particle
+    // slows into faster collision rates.
+    double t_left = dt_taken;
+    while (t_left > 0.0) {
+        double h_sub  = t_left / collision_substeps(v, c, t_left);
+        double sqrt_h = sqrt(h_sub);
+        double dW_v  = curand_normal_double(rng) * sqrt_h;
+        double dW_xi = curand_normal_double(rng) * sqrt_h;
+        milstein_collision_step(v, xi, c, h_sub, dW_v, dW_xi);
+        t_left -= h_sub;
+        if (t_left <= 0.0) break;
+        if (compute_collision_coefficients_core(v, s_flux, mass_d, charge_d,
+                                                coll_backgrounds_d, coll_n_backgrounds_d, &c)
+            != COLL_OK) break;
+    }
+
+    state[3*PARTICLES_PER_BLOCK + p] = (T)(v * xi);
+    mu[p] = (T)(v * v * (1.0 - xi*xi) / (2.0 * B));
+    v_out[p] = (T)v;
+}
+
 // this function estimates error, accepts/rejects the proposed step
 // and adjust the step size
 template<typename T, RHS id>
 __device__ void adjust_time(T* t, T* dt, double* tmax, T* state, T* __restrict__ derivs, const T* __restrict__ x_temp,
-                            bool* has_left, const T* __restrict__ dtmax, const bool* __restrict__ is_valid){
+                            bool* has_left, const T* __restrict__ dtmax, const bool* __restrict__ is_valid,
+                            T* mu = nullptr, curandStatePhilox4_32_10_t* rng = nullptr, T* v_out = nullptr){
     // identify a particle and state index
     const int p = threadIdx.x % PARTICLES_PER_BLOCK;   // particle
     const int state_id = threadIdx.x / PARTICLES_PER_BLOCK; // state variable
@@ -968,11 +1090,34 @@ __device__ void adjust_time(T* t, T* dt, double* tmax, T* state, T* __restrict__
             t[p] += dt_p;
         }
         dt_new = min(dt_new, dtmax[p]);
+        // Collisional kernels land exactly on tmax, as solve_sde does, so the
+        // kick window never extends past it and the two tracers can be
+        // compared at the same time. The collisionless kernels keep master's
+        // overshoot of up to one step, which their callers allow for.
+        if constexpr (is_collisional<id>()){
+            if(t[p] < tmax[p]){
+                dt_new = min(dt_new, T(tmax[p] - t[p]));
+            }
+        }
         dt[p] = dt_new;
     }
     __syncthreads();
     if(accept && state_id == 0){
-        check_has_left<T, map_rhs_to_coord<id>()>(has_left, state, derivs);
+        if constexpr (is_collisional<id>()){
+            // the flux label: the Boozer state carries it, the Cartesian
+            // path reads the column the rhs tabulated for it
+            double s_flux;
+            if constexpr (map_rhs_to_coord<id>() == CoordSys::Boozer){
+                double x1 = (double)state[0*PARTICLES_PER_BLOCK + p];
+                double x2 = (double)state[1*PARTICLES_PER_BLOCK + p];
+                s_flux = sqrt(x1*x1 + x2*x2);
+            } else {
+                constexpr int nout = map_rhs_to_n_deriv_outputs<id>();
+                s_flux = (double)derivs[(nout*6 + 6)*PARTICLES_PER_BLOCK + p];
+            }
+            collision_kick<T, id>(state, mu, derivs, (double)dt_p, s_flux, rng, v_out);
+        }
+        check_has_left<T, id>(has_left, state, derivs);
     }
 }
 
@@ -1015,6 +1160,14 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
     __shared__ T block_dtmax[PARTICLES_PER_BLOCK];
     __shared__ T state[4 * PARTICLES_PER_BLOCK];
     __shared__ bool has_left[PARTICLES_PER_BLOCK];
+    // collisional launches carry a per-particle RNG stream and the total
+    // speed, which the kick changes; ncols is the output row width. The
+    // arrays shrink to one element in a collisionless kernel so they cost it
+    // no shared memory, and therefore no occupancy.
+    constexpr int coll_slots = is_collisional<id>() ? PARTICLES_PER_BLOCK : 1;
+    __shared__ curandStatePhilox4_32_10_t rng_state[coll_slots];
+    __shared__ T v_tot[coll_slots];
+    constexpr int ncols = is_collisional<id>() ? 8 : 7;
 
 
     bool is_valid = idx < nparticles_d && threadIdx.x < PARTICLES_PER_BLOCK;
@@ -1034,15 +1187,32 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
         block_t[threadIdx.x] = t[idx]; // copy input t
         block_tmax[threadIdx.x] = tmax[idx]; // copy input tmax
         block_dtmax[threadIdx.x] = dtmax[idx]; // copy input dtmax
+        if constexpr (is_collisional<id>()){
+            // key the stream on the global particle index, so a particle's
+            // draws do not depend on which block picked it up
+            curand_init(coll_seed_d, (unsigned long long)idx, 0ULL, &rng_state[threadIdx.x]);
+            v_tot[threadIdx.x] = T(v_total_d);
+            // setup_kernel sized this step from the orbit alone, so the first
+            // one can already reach past tmax; adjust_time only bounds the
+            // steps after it. Clamp it here so the kick never covers an
+            // interval the caller did not ask for.
+            if(block_t[threadIdx.x] < block_tmax[threadIdx.x]){
+                block_dt[threadIdx.x] = min(block_dt[threadIdx.x],
+                    T(block_tmax[threadIdx.x] - block_t[threadIdx.x]));
+            }
+        }
 
         // write out initial state if tmax is 0
         if(block_tmax[threadIdx.x] == 0.0){
-            out[7*idx] = block_t[threadIdx.x];
+            out[ncols*idx] = block_t[threadIdx.x];
             for(int i=0; i<4; ++i){
-                out[7*idx + i + 1] = state[i*PARTICLES_PER_BLOCK + threadIdx.x];
+                out[ncols*idx + i + 1] = state[i*PARTICLES_PER_BLOCK + threadIdx.x];
             }
-            out[7*idx + 5] = block_dt[threadIdx.x];
-            out[7*idx + 6] = block_mu[threadIdx.x];
+            out[ncols*idx + 5] = block_dt[threadIdx.x];
+            out[ncols*idx + 6] = block_mu[threadIdx.x];
+            if constexpr (is_collisional<id>()){
+                out[ncols*idx + 7] = v_tot[threadIdx.x];
+            }
         }
     }
     __syncthreads();
@@ -1052,9 +1222,15 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
                             !(block_t[threadIdx.x % PARTICLES_PER_BLOCK] >= block_tmax[threadIdx.x % PARTICLES_PER_BLOCK] || has_left[threadIdx.x % PARTICLES_PER_BLOCK])) > 0){
 
         // create a mask similar to is_valid_arr for particles where mu needs to be computed
+        //
+        // A collisional kernel cannot take the FSAL shortcut: the kick changes
+        // vpar and mu after the last stage's derivative has been copied into
+        // the first slot, so that derivative no longer describes the state the
+        // next step starts from. Those kernels re-evaluate stage 0 every step.
         __shared__ bool needs_stage0[PARTICLES_PER_BLOCK];
         if(threadIdx.x < PARTICLES_PER_BLOCK){
-            needs_stage0[threadIdx.x] = is_valid_arr[threadIdx.x] && (block_t[threadIdx.x] == 0.0);
+            needs_stage0[threadIdx.x] = is_valid_arr[threadIdx.x]
+                && (is_collisional<id>() || block_t[threadIdx.x] == 0.0);
         }
         __syncthreads();
 
@@ -1074,19 +1250,27 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
                             symmetry_exploited, state, block_mu, is_valid_arr, args...);
         dp5_one_step<T, id, 6>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
                             symmetry_exploited, state, block_mu, is_valid_arr, args...);
-        adjust_time<T, id>(block_t, block_dt, block_tmax, state, block_derivs, x_temp, has_left, block_dtmax, is_valid_arr);
+        if constexpr (is_collisional<id>()){
+            adjust_time<T, id>(block_t, block_dt, block_tmax, state, block_derivs, x_temp, has_left, block_dtmax, is_valid_arr,
+                               block_mu, &rng_state[threadIdx.x % PARTICLES_PER_BLOCK], v_tot);
+        } else {
+            adjust_time<T, id>(block_t, block_dt, block_tmax, state, block_derivs, x_temp, has_left, block_dtmax, is_valid_arr);
+        }
 
 
         // if the particle has left, go get another one
         if(threadIdx.x < PARTICLES_PER_BLOCK && is_valid_arr[threadIdx.x] && \
             (block_t[threadIdx.x] >= block_tmax[threadIdx.x] || has_left[threadIdx.x])){
             // write output for current particle
-            out[7*idx] = block_t[threadIdx.x];
+            out[ncols*idx] = block_t[threadIdx.x];
             for(int i=0; i<4; ++i){
-                out[7*idx + i + 1] = state[i*PARTICLES_PER_BLOCK + threadIdx.x];
+                out[ncols*idx + i + 1] = state[i*PARTICLES_PER_BLOCK + threadIdx.x];
             }
-            out[7*idx + 5] = block_dt[threadIdx.x];
-            out[7*idx + 6] = block_mu[threadIdx.x];
+            out[ncols*idx + 5] = block_dt[threadIdx.x];
+            out[ncols*idx + 6] = block_mu[threadIdx.x];
+            if constexpr (is_collisional<id>()){
+                out[ncols*idx + 7] = v_tot[threadIdx.x];
+            }
 
             // load the next particle
             idx = atomicAdd(&next_particle_d, 1);
@@ -1102,6 +1286,14 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
                 block_tmax[threadIdx.x] = tmax[idx];
                 has_left[threadIdx.x] = false;
                 symmetry_exploited[threadIdx.x] = false;
+                if constexpr (is_collisional<id>()){
+                    curand_init(coll_seed_d, (unsigned long long)idx, 0ULL, &rng_state[threadIdx.x]);
+                    v_tot[threadIdx.x] = T(v_total_d);
+                    if(block_t[threadIdx.x] < block_tmax[threadIdx.x]){
+                        block_dt[threadIdx.x] = min(block_dt[threadIdx.x],
+                            T(block_tmax[threadIdx.x] - block_t[threadIdx.x]));
+                    }
+                }
             } else {
                 is_valid_arr[threadIdx.x] = false;
             }
@@ -1111,6 +1303,60 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
     return;
 }
 
+
+// ---------------------------------------------------------------------------
+// Copy the background profiles to the GPU so the collision kick can read
+// them, and record the RNG seed. This is the GPU counterpart of
+// make_thermal_views (collisions.h), which does the same job for the CPU.
+// The returned pointers are the caller's to free once the launch is done.
+// ---------------------------------------------------------------------------
+static vector<double*> upload_collision_backgrounds(
+    const vector<ThermalBackground>& backgrounds, unsigned long long rng_seed)
+{
+    vector<double*> owned;
+    int n = (int)backgrounds.size();
+    gpuErrchk(cudaMemcpyToSymbol(coll_seed_d, &rng_seed, sizeof(unsigned long long)));
+
+    if (n == 0) {
+        int zero = 0;
+        gpuErrchk(cudaMemcpyToSymbol(coll_n_backgrounds_d, &zero, sizeof(int)));
+        return owned;
+    }
+
+    ThermalBackgroundView views[COLL_MAX_SPECIES];
+    for (int i = 0; i < n; ++i) {
+        const ThermalBackground& bg = backgrounds[i];
+        int np = (int)bg.s_grid.size();
+        double *n_d = nullptr, *T_d = nullptr;
+        gpuErrchk(cudaMalloc(&n_d, np * sizeof(double)));
+        gpuErrchk(cudaMalloc(&T_d, np * sizeof(double)));
+        gpuErrchk(cudaMemcpy(n_d, bg.n_grid.data(), np * sizeof(double), cudaMemcpyHostToDevice));
+        gpuErrchk(cudaMemcpy(T_d, bg.T_grid.data(), np * sizeof(double), cudaMemcpyHostToDevice));
+        owned.push_back(n_d);
+        owned.push_back(T_d);
+
+        views[i].n_grid   = n_d;
+        views[i].T_grid   = T_d;
+        views[i].n_points = np;
+        views[i].s_min    = bg.s_grid.front();
+        views[i].s_max    = bg.s_grid.back();
+        views[i].mass     = bg.mass;
+        views[i].charge   = bg.charge;
+    }
+    gpuErrchk(cudaMemcpyToSymbol(coll_backgrounds_d, views, n * sizeof(ThermalBackgroundView)));
+    gpuErrchk(cudaMemcpyToSymbol(coll_n_backgrounds_d, &n, sizeof(int)));
+    return owned;
+}
+
+// Switch the kick back off and release the profile buffers, so a later
+// collisionless launch does not see stale pointers in constant memory.
+static void release_collision_backgrounds(vector<double*>& owned)
+{
+    int zero = 0;
+    gpuErrchk(cudaMemcpyToSymbol(coll_n_backgrounds_d, &zero, sizeof(int)));
+    for (double* ptr : owned) gpuErrchk(cudaFree(ptr));
+    owned.clear();
+}
 
 template<typename T, RHS id, typename... Args>
 vector<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range,
@@ -1211,8 +1457,10 @@ vector<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range, py:
     T* dtmax_d;
     gpuErrchk(cudaMalloc((void**)&dtmax_d, nparticles * sizeof(T)) );
 
+    // a collisional launch appends the total speed, which the kick changes
+    constexpr int ncols = is_collisional<id>() ? 8 : 7;
     T* out_d;
-    gpuErrchk(cudaMalloc((void**)&out_d, 7 * nparticles * sizeof(T)) );
+    gpuErrchk(cudaMalloc((void**)&out_d, ncols * nparticles * sizeof(T)) );
 
     // launch params
     int nthreads = THREADS_PER_BLOCK;
@@ -1240,8 +1488,8 @@ vector<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range, py:
     gpuErrchk(cudaMemcpyToSymbol(next_particle_d, &n_total_threads, sizeof(int)) );
     particle_trace_kernel<T, id><<<nblks, nthreads>>>(out_d, init_pos_d, quadpts_d, derivs_d, mu_d, tmax_d, t_d, dt_d, dtmax_d, args...);
 
-    T out[7*nparticles];
-    gpuErrchk(cudaMemcpy(out, out_d, 7 * nparticles * sizeof(T), cudaMemcpyDeviceToHost) );
+    T out[ncols*nparticles];
+    gpuErrchk(cudaMemcpy(out, out_d, ncols * nparticles * sizeof(T), cudaMemcpyDeviceToHost) );
 
     gpuErrchk( cudaFree(quadpts_d) );
     gpuErrchk( cudaFree(init_pos_d) );
@@ -1252,8 +1500,8 @@ vector<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range, py:
     gpuErrchk(cudaFree(tmax_d));
     gpuErrchk(cudaFree(dtmax_d));
     gpuErrchk(cudaFree(mu_d));
-    vector<T> particle_output(7*nparticles);
-    for(int i=0; i<7*nparticles; ++i){
+    vector<T> particle_output(ncols*nparticles);
+    for(int i=0; i<ncols*nparticles; ++i){
         particle_output[i] = out[i];
     }
 
@@ -1319,6 +1567,55 @@ template vector<double> boozer_gpu_tracing<double>(py::array_t<double> quad_pts,
 template vector<float> boozer_gpu_tracing<float>(py::array_t<float> quad_pts, py::array_t<double> srange,
         py::array_t<double> trange, py::array_t<double> zrange, py::array_t<float> stz_init, double m, double q, double vtotal, py::array_t<float> vtang,
         py::array_t<double> tmax, double tol, py::array_t<float> dt_in, py::array_t<float> mu_in, double psi0, int nparticles, bool vacuum);
+
+// Collisional Cartesian tracing. Identical to cartesian_gpu_tracing apart
+// from uploading the background profiles and a seed, and reading the
+// 8-column quad-point layout whose last column is the flux label the
+// profiles are parametrized by. mu is always the kernel's to derive, since
+// collisions change it and a run cannot be continued from an earlier one.
+vector<double> cartesian_collision_gpu_tracing(py::array_t<double> quad_pts, py::array_t<double> rrange,
+        py::array_t<double> phirange, py::array_t<double> zrange, py::array_t<double> xyz_init, double m, double q, double vtotal, py::array_t<double> vtang,
+        py::array_t<double> tmax, double tol, py::array_t<double> dt_in, int nparticles,
+        const vector<ThermalBackground>& backgrounds, unsigned long long rng_seed){
+
+    py::array_t<double> mu_in = py::array_t<double>(nparticles);
+    std::fill_n(mu_in.mutable_data(), nparticles, -1.0);
+
+    vector<double*> owned = upload_collision_backgrounds(backgrounds, rng_seed);
+    vector<double> results = gpu_tracing<double, RHS::GC_CartesianVacuumColl>(
+        quad_pts, rrange, phirange, zrange, xyz_init, m, q, vtotal, vtang, tmax, tol, dt_in, mu_in, nparticles);
+    release_collision_backgrounds(owned);
+    return results;
+}
+
+// Collisional Boozer tracing. Identical to boozer_gpu_tracing apart from
+// uploading the background profiles and a seed; the kick itself lives in the
+// shared step logic. Initial conditions arrive in the pseudo-Cartesian
+// coordinates the kernel integrates in, as they do for boozer_gpu_tracing.
+vector<double> boozer_collision_gpu_tracing(py::array_t<double> quad_pts, py::array_t<double> srange,
+        py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> stz_init, double m, double q, double vtotal, py::array_t<double> vtang,
+        py::array_t<double> tmax, double tol, py::array_t<double> dt_in, double psi0, int nparticles,
+        const vector<ThermalBackground>& backgrounds, bool vacuum, unsigned long long rng_seed){
+
+    double inv_psi0_charge = 1.0 / (psi0*q);
+    gpuErrchk(cudaMemcpyToSymbol(psi0_d, &psi0, sizeof(double)));
+    gpuErrchk(cudaMemcpyToSymbol(inv_psi0_charge_d, &inv_psi0_charge, sizeof(double)));
+
+    py::array_t<double> mu_in = py::array_t<double>(nparticles);
+    std::fill_n(mu_in.mutable_data(), nparticles, -1.0);
+
+    vector<double*> owned = upload_collision_backgrounds(backgrounds, rng_seed);
+    vector<double> results;
+    if (vacuum) {
+        results = gpu_tracing<double, RHS::GC_BoozerVacuumColl>(
+            quad_pts, srange, trange, zrange, stz_init, m, q, vtotal, vtang, tmax, tol, dt_in, mu_in, nparticles);
+    } else {
+        results = gpu_tracing<double, RHS::GC_BoozerColl>(
+            quad_pts, srange, trange, zrange, stz_init, m, q, vtotal, vtang, tmax, tol, dt_in, mu_in, nparticles);
+    }
+    release_collision_backgrounds(owned);
+    return results;
+}
 
 template<typename T>
 vector<T> boozer_saw_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange,

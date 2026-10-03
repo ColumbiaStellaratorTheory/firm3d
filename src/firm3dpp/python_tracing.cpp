@@ -25,6 +25,104 @@ void init_tracing(py::module_ &m){
     py::class_<StepSizeStoppingCriterion, shared_ptr<StepSizeStoppingCriterion>, StoppingCriterion>(m, "StepSizeStoppingCriterion", py::module_local())
         .def(py::init<double>());
 
+    m.attr("COLL_MAX_SPECIES") = py::int_(COLL_MAX_SPECIES);
+
+    py::class_<ThermalBackground>(m, "ThermalBackground")
+        .def(py::init<>())
+        .def_readwrite("s_grid",     &ThermalBackground::s_grid)
+        .def_readwrite("n_grid",     &ThermalBackground::n_grid)
+        .def_readwrite("T_grid",     &ThermalBackground::T_grid)
+        .def_readwrite("mass",       &ThermalBackground::mass)
+        .def_readwrite("charge",     &ThermalBackground::charge);
+
+    py::class_<CollisionCoefficients>(m, "CollisionCoefficients")
+        .def_readonly("D_par",     &CollisionCoefficients::D_par)
+        .def_readonly("dD_par_dv", &CollisionCoefficients::dD_par_dv)
+        .def_readonly("nu_D",      &CollisionCoefficients::nu_D)
+        .def_readonly("K",         &CollisionCoefficients::K)
+        .def_readonly("v_cutoff",  &CollisionCoefficients::v_cutoff);
+
+    m.def("chandrasekhar_G", &chandrasekhar_G, py::arg("x"));
+    m.def("chandrasekhar_G_deriv", &chandrasekhar_G_deriv, py::arg("x"));
+
+    m.def("milstein_collision_step",
+        [](double v, double xi, const CollisionCoefficients& coef,
+           double h, double dW_v, double dW_xi) {
+            milstein_collision_step(v, xi, coef, h, dW_v, dW_xi);
+            return py::make_tuple(v, xi);
+        },
+        py::arg("v"),
+        py::arg("xi"),
+        py::arg("coef"),
+        py::arg("h"),
+        py::arg("dW_v"),
+        py::arg("dW_xi")
+    );
+
+    m.def("compute_collision_coefficients", &compute_collision_coefficients,
+        py::arg("v"),
+        py::arg("s"),
+        py::arg("m_a"),
+        py::arg("q_a"),
+        py::arg("backgrounds")
+    );
+
+    m.def("min_coulomb_log", &min_coulomb_log,
+        py::arg("v"),
+        py::arg("s"),
+        py::arg("m_a"),
+        py::arg("q_a"),
+        py::arg("backgrounds")
+    );
+
+    m.def("collision_substeps", &collision_substeps,
+        py::arg("v"),
+        py::arg("coef"),
+        py::arg("h")
+    );
+
+    m.def("particle_guiding_center_boozer_collision_tracing",
+        &particle_guiding_center_boozer_collision_tracing,
+        py::arg("field"),
+        py::arg("stz_init"),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("vtotal"),
+        py::arg("vtang"),
+        py::arg("tmax"),
+        py::arg("backgrounds"),
+        py::arg("vacuum"),
+        py::arg("noK"),
+        py::arg("stopping_criteria")=vector<shared_ptr<StoppingCriterion>>{},
+        py::arg("axis")=2,
+        py::arg("abstol")=1e-9,
+        py::arg("reltol")=1e-9,
+        py::arg("ode_solver")="dormand_prince",
+        py::arg("DP_hmin")=0.0,
+        py::arg("rng_seed")=uint64_t(0)
+    );
+
+    m.def("particle_guiding_center_boozer_perturbed_collision_tracing",
+        &particle_guiding_center_boozer_perturbed_collision_tracing,
+        py::arg("perturbed_field"),
+        py::arg("stz_init"),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("vtang"),
+        py::arg("mu_init"),
+        py::arg("tmax"),
+        py::arg("backgrounds"),
+        py::arg("vacuum"),
+        py::arg("noK"),
+        py::arg("stopping_criteria")=vector<shared_ptr<StoppingCriterion>>{},
+        py::arg("axis")=2,
+        py::arg("abstol")=1e-9,
+        py::arg("reltol")=1e-9,
+        py::arg("ode_solver")="dormand_prince",
+        py::arg("DP_hmin")=0.0,
+        py::arg("rng_seed")=uint64_t(0)
+    );
+
     m.def("particle_guiding_center_boozer_tracing", &particle_guiding_center_boozer_tracing,
         py::arg("field"),
         py::arg("stz_init"),
@@ -156,6 +254,44 @@ void init_tracing(py::module_ &m){
         py::arg("vacuum") = false
         );
 
+
+    m.def("boozer_collision_gpu_tracing", &boozer_collision_gpu_tracing,
+        py::arg("quad_pts").noconvert(),
+        py::arg("srange"),
+        py::arg("trange"),
+        py::arg("zrange"),
+        py::arg("stz_init").noconvert(),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("vtotal"),
+        py::arg("vtang").noconvert(),
+        py::arg("tmax"),
+        py::arg("tol"),
+        py::arg("dt_in").noconvert(),
+        py::arg("psi0"),
+        py::arg("nparticles"),
+        py::arg("backgrounds"),
+        py::arg("vacuum")=false,
+        py::arg("rng_seed")=(unsigned long long)0
+    );
+
+    m.def("cartesian_collision_gpu_tracing", &cartesian_collision_gpu_tracing,
+        py::arg("quad_pts").noconvert(),
+        py::arg("rrange"),
+        py::arg("phirange"),
+        py::arg("zrange"),
+        py::arg("xyz_init").noconvert(),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("vtotal"),
+        py::arg("vtang").noconvert(),
+        py::arg("tmax"),
+        py::arg("tol"),
+        py::arg("dt_in").noconvert(),
+        py::arg("nparticles"),
+        py::arg("backgrounds"),
+        py::arg("rng_seed")=(unsigned long long)0
+    );
 
     m.def("boozer_saw_gpu_tracing", &boozer_saw_gpu_tracing<double>,
         py::arg("quad_pts").noconvert(),
@@ -424,7 +560,7 @@ void init_tracing(py::module_ &m){
         py::arg("vtang"),
         py::arg("vacuum")
         );
-    
+
     m.def("simsopt_derivs_saw", &simsopt_derivs_saw,
         py::arg("perturbed_field"),
         py::arg("loc"),
@@ -433,7 +569,7 @@ void init_tracing(py::module_ &m){
         py::arg("vtotal"),
         py::arg("vtang"),
         py::arg("time"),
-        py::arg("rhs")    
+        py::arg("rhs")
         );
 
 
