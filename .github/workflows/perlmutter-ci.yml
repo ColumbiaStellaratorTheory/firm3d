@@ -100,7 +100,7 @@ jobs:
           WORK_DIR: ${{ runner.temp }}/firm3d-master-${{ github.sha }}
         run: |
             mkdir -p "$WORK_DIR"
-            cp .github/scripts/run_gpu_tests.sh "$WORK_DIR/run_gpu_tests.sh"
+            cp master-checkout/.github/scripts/run_gpu_tests.sh "$WORK_DIR/run_gpu_tests.sh"
 
             JOB_ID=$(sbatch \
               --account="$NERSC_ACCOUNT" \
