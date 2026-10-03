@@ -7,6 +7,7 @@ import sys
 from .mpi import verbose
 
 in_github_actions = os.getenv("GITHUB_ACTIONS") == "true"
+in_gpu_benchmark = os.getenv("FIRM3D_GPU_BENCHMARK") == "1"
 
 
 def print(*args, **kwargs):
