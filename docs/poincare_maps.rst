@@ -74,7 +74,8 @@ The ``TrappedPoincare`` class computes Poincaré maps for trapped particles that
 Initial conditions that do not produce a complete map (e.g., in fields far
 from omnigenity) are recorded in ``poinc.outcomes`` with the reason for
 failure. ``poinc.outcome_counts()`` summarizes them, and
-``poinc.plot_outcomes()`` plots the initial conditions colored by outcome.
+``poinc.plot_poincare()`` marks the failed initial conditions by reason
+(``show_failures=False`` to disable).
 Outcome codes are listed in ``firm3d.trajectory_helpers.poincare.TRAPPED_MAP_OUTCOMES``:
 
 - ``completed``: all ``Nmaps`` returns computed
@@ -88,7 +89,6 @@ Outcome codes are listed in ``firm3d.trajectory_helpers.poincare.TRAPPED_MAP_OUT
 .. code-block:: python
 
     print(poinc.outcome_counts())
-    poinc.plot_outcomes(filename="trapped_poincare_outcomes.pdf")
 
 Passing Poincaré Maps
 ---------------------

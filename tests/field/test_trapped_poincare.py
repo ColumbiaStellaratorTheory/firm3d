@@ -84,8 +84,10 @@ class TrappedPoincareOutcomeTests(unittest.TestCase):
         self.assertGreater(counts["lost_outer"], 0)
         self.assertEqual(counts.get("completed", 0), len(poinc.s_all))
         with tempfile.TemporaryDirectory() as tmp:
-            filename = os.path.join(tmp, "outcomes.png")
-            poinc.plot_outcomes(filename=filename)
+            filename = os.path.join(tmp, "trapped_poincare.png")
+            ax = poinc.plot_poincare(filename=filename)
+            labels = [text.get_text() for text in ax.get_legend().get_texts()]
+            self.assertEqual(len(labels), len(counts) - ("completed" in counts))
             self.assertTrue(os.path.exists(filename))
 
 

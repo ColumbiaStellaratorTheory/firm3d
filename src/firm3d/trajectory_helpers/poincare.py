@@ -1256,6 +1256,7 @@ class TrappedPoincare:
         filename="trapped_poincare.pdf",
         convergence_test_indicies=None,
         DA_max=None,
+        show_failures=True,
     ):
         r"""
         Plot the trapped Poincare map and save to a file. It is recommended to only
@@ -1272,6 +1273,9 @@ class TrappedPoincare:
                 the plot. If None, all trajectories are plotted.
             DA_max : Maximum digit accuracy to display on the colorbar. If None
                      and chaos_detection=True, defaults to 7.
+            show_failures : If True, mark the initial conditions that did not
+                            complete the map, by failure reason (see
+                            ``TRAPPED_MAP_OUTCOMES``).
         Returns:
             ax : The Matplotlib axis containing the plot.
         """
@@ -1352,12 +1356,56 @@ class TrappedPoincare:
                 orientation="vertical",
                 label="Digit Accuracy",
             )
-        fig.savefig(filename)
+        if show_failures and self._plot_failures(ax):
+            fig.savefig(filename, bbox_inches="tight")
+        else:
+            fig.savefig(filename)
 
         if created_fig is not None:
             plt.close(created_fig)
 
         return ax
+
+    def _plot_failures(self, ax):
+        """Mark failed initial conditions by reason; True if any were plotted."""
+        styles = {
+            "no_mirror_B_above": ("v", "tab:blue"),
+            "no_mirror_B_below": ("^", "tab:cyan"),
+            "root_solve_failed": ("D", "tab:purple"),
+            "lost_inner": ("x", "tab:olive"),
+            "lost_outer": ("x", "tab:red"),
+            "tmax": ("s", "tab:orange"),
+            "transition": ("+", "tab:green"),
+            "integration_error": ("*", "black"),
+        }
+        reasons = self.outcomes["reason"]
+        etas0 = np.mod(self.outcomes["etas_init"], 2 * np.pi)
+        s0 = self.outcomes["s_init"]
+        plotted = False
+        for key, count in self.outcome_counts().items():
+            if key == "completed":
+                continue
+            marker, color = styles[key]
+            mask = reasons == key
+            ax.scatter(
+                etas0[mask],
+                s0[mask],
+                marker=marker,
+                s=15,
+                color=color,
+                linewidths=1,
+                zorder=3,
+                label=f"{TRAPPED_MAP_OUTCOMES[key]} ({count})",
+            )
+            plotted = True
+        if plotted:
+            ax.legend(
+                loc="upper center",
+                bbox_to_anchor=(0.5, -0.15),
+                ncol=2,
+                fontsize="small",
+            )
+        return plotted
 
     def outcome_counts(self):
         """
@@ -1368,87 +1416,6 @@ class TrappedPoincare:
         """
         reasons = list(self.outcomes["reason"])
         return {k: reasons.count(k) for k in TRAPPED_MAP_OUTCOMES if k in reasons}
-
-    def plot_outcomes(
-        self,
-        ax=None,
-        filename="trapped_poincare_outcomes.pdf",
-        show_trajectories=True,
-    ):
-        r"""
-        Plot the initial conditions of the trapped Poincare map colored by
-        outcome (completed, no mirror point, lost, tmax, transition, ...). It is
-        recommended to only call this function on MPI rank 0.
-
-        Args:
-            ax : Matplotlib axis to plot on. If None, a new figure and axis are
-                 created and closed before returning.
-            filename : Name of the file to save the plot. If None, the figure
-                       is not saved.
-            show_trajectories : If True, also plot the returns of failed
-                                trajectories up to the point of failure.
-        Returns:
-            ax : The Matplotlib axis containing the plot.
-        """
-        import matplotlib as mpl
-
-        mpl.use("Agg")  # Don't use interactive backend
-        import matplotlib.pyplot as plt
-
-        created_fig = None
-        if ax is None:
-            created_fig, ax = plt.subplots(figsize=(8, 4.8))
-        fig = ax.get_figure()
-
-        colors = {
-            "completed": "0.75",
-            "no_mirror_B_above": "tab:blue",
-            "no_mirror_B_below": "tab:cyan",
-            "root_solve_failed": "tab:purple",
-            "lost_inner": "tab:olive",
-            "lost_outer": "tab:red",
-            "tmax": "tab:orange",
-            "transition": "tab:green",
-            "integration_error": "black",
-        }
-        reasons = self.outcomes["reason"]
-        etas0 = np.mod(self.outcomes["etas_init"], 2 * np.pi)
-        s0 = self.outcomes["s_init"]
-        for key, count in self.outcome_counts().items():
-            mask = reasons == key
-            if show_trajectories and key != "completed":
-                for i in np.flatnonzero(mask):
-                    ax.scatter(
-                        np.mod(self.outcomes["etas_traj"][i][1:], 2 * np.pi),
-                        self.outcomes["s_traj"][i][1:],
-                        marker="o",
-                        s=1,
-                        color=colors[key],
-                        alpha=0.6,
-                        edgecolors="none",
-                    )
-            ax.scatter(
-                etas0[mask],
-                s0[mask],
-                marker="o",
-                s=12,
-                color=colors[key],
-                edgecolors="none",
-                label=f"{TRAPPED_MAP_OUTCOMES[key]} ({count})",
-            )
-
-        ax.set_xlabel(r"$\eta$")
-        ax.set_ylabel(r"$s$")
-        ax.set_xlim([0, 2 * np.pi])
-        ax.set_ylim([0, 1])
-        ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), fontsize="small")
-        if filename is not None:
-            fig.savefig(filename, bbox_inches="tight")
-
-        if created_fig is not None:
-            plt.close(created_fig)
-
-        return ax
 
     def get_poincare_data(self):
         """
