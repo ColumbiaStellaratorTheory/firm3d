@@ -71,6 +71,25 @@ The ``TrappedPoincare`` class computes Poincaré maps for trapped particles that
 - **ns_poinc, neta_poinc**: Grid resolution for initial conditions
 - **Nmaps**: Number of return maps to compute
 
+Initial conditions that do not produce a complete map (e.g., in fields far
+from omnigenity) are recorded in ``poinc.outcomes`` with the reason for
+failure. ``poinc.outcome_counts()`` summarizes them, and
+``poinc.plot_outcomes()`` plots the initial conditions colored by outcome.
+Outcome codes are listed in ``firm3d.trajectory_helpers.poincare.TRAPPED_MAP_OUTCOMES``:
+
+- ``completed``: all ``Nmaps`` returns computed
+- ``no_mirror_B_above`` / ``no_mirror_B_below``: :math:`|B| - B_{\rm crit}` has the same sign at :math:`\chi = 0, \pi`, so no mirror point is found at this :math:`(s, \eta)`
+- ``root_solve_failed``: the mirror point root solve failed or did not converge
+- ``lost_inner`` / ``lost_outer``: the trajectory reached :math:`s < 0.01` or :math:`s > 0.99`
+- ``tmax``: no bounce point reached within ``tmax``
+- ``transition``: :math:`|\Delta\chi| > 2\pi` over one bounce period (e.g., transition to barely trapped or passing)
+- ``integration_error``: the tracer raised an error
+
+.. code-block:: python
+
+    print(poinc.outcome_counts())
+    poinc.plot_outcomes(filename="trapped_poincare_outcomes.pdf")
+
 Passing Poincaré Maps
 ---------------------
 

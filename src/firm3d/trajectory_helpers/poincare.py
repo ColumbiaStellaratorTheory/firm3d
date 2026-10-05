@@ -25,6 +25,26 @@ from ._utils import (
     _solve_vpar_perturbed,
 )
 
+TRAPPED_MAP_OUTCOMES = {
+    "completed": "completed",
+    "no_mirror_B_above": r"no mirror: $|B| > B_{\rm crit}$ at $\chi = 0, \pi$",
+    "no_mirror_B_below": r"no mirror: $|B| < B_{\rm crit}$ at $\chi = 0, \pi$",
+    "root_solve_failed": "mirror root solve failed",
+    "lost_inner": r"lost: $s < 0.01$",
+    "lost_outer": r"lost: $s > 0.99$",
+    "tmax": "no bounce before tmax",
+    "transition": r"transition: $|\Delta\chi| > 2\pi$",
+    "integration_error": "integration error",
+}
+
+
+class TrappedMapError(RuntimeError):
+    """Raised when a trapped map initial condition or bounce fails."""
+
+    def __init__(self, reason, message=""):
+        super().__init__(message or TRAPPED_MAP_OUTCOMES[reason])
+        self.reason = reason
+
 
 class PassingPoincare:
     def __init__(
@@ -951,7 +971,9 @@ class TrappedPoincare:
         )
 
         if len(res_hits[0]) == 0:
-            raise RuntimeError("No stopping criterion reached in trapped_map.")
+            raise TrappedMapError(
+                "tmax", "No stopping criterion reached in trapped_map."
+            )
 
         res_hit = res_hits[0][0, :]  # Only check the first hit or stopping criterion
 
@@ -960,8 +982,15 @@ class TrappedPoincare:
             point[1] = chi(res_hit[3], res_hit[4], self.helicity_M, self.helicity_N)
             point[2] = eta(res_hit[3], res_hit[4], self.helicity_Mp, self.helicity_Np)
             time = res_hit[0]
+        elif res_hit[1] == -1:
+            raise TrappedMapError("lost_inner")
+        elif res_hit[1] == -2:
+            raise TrappedMapError("lost_outer")
         else:
-            raise RuntimeError("Alternative stopping criterion reached in passing_map.")
+            raise TrappedMapError(
+                "integration_error",
+                "Alternative stopping criterion reached in trapped_map.",
+            )
 
         if not self.DA_poinc:
             return point, time
@@ -1050,6 +1079,14 @@ class TrappedPoincare:
                 self.field.set_points(point)
                 return self.field.modB()[0, 0]
 
+            f0 = diffmodB(0.0)
+            fpi = diffmodB(np.pi)
+            if f0 * fpi > 0:
+                raise TrappedMapError(
+                    "no_mirror_B_above" if f0 > 0 else "no_mirror_B_below",
+                    f"No mirror point in chi = [0, pi]! s = {s}, "
+                    f"eta/(2*pi) = {eta / (2 * np.pi)}",
+                )
             try:
                 sol = root_scalar(
                     diffmodB,
@@ -1059,14 +1096,16 @@ class TrappedPoincare:
                     bracket=[0, np.pi],
                 )
             except Exception as err:
-                raise RuntimeError(
+                raise TrappedMapError(
+                    "root_solve_failed",
                     f"Root solve for chi_mirror failed! s = {s}, "
-                    f"eta/(2*pi) = {eta / (2 * np.pi)}"
+                    f"eta/(2*pi) = {eta / (2 * np.pi)}",
                 ) from err
             if not sol.converged:
-                raise RuntimeError(
+                raise TrappedMapError(
+                    "root_solve_failed",
                     f"Root solve for chi_mirror did not converge! s = {s}, "
-                    f"eta/(2*pi) = {eta / (2 * np.pi)}"
+                    f"eta/(2*pi) = {eta / (2 * np.pi)}",
                 )
             return sol.root
 
@@ -1084,6 +1123,7 @@ class TrappedPoincare:
         s_init = []
         chis_init = []
         etas_init = []
+        init_failures = []
         first, last = parallel_loop_bounds(self.comm, len(etas2d))
         # For each point, find the mirror point in chi
         for i in range(first, last):
@@ -1092,17 +1132,17 @@ class TrappedPoincare:
                 s_init.append(s2d[i])
                 chis_init.append(chi)
                 etas_init.append(etas2d[i])
-            except RuntimeError:
-                warn(
-                    f"Root solve for chi_mirror failed! s = {s2d[i]}, "
-                    f"eta/(2*pi) = {etas2d[i] / (2 * np.pi)}",
-                    stacklevel=2,
-                )
+            except RuntimeError as err:
+                reason = getattr(err, "reason", "root_solve_failed")
+                init_failures.append((s2d[i], etas2d[i], reason))
+                warn(str(err), stacklevel=2)
 
         if self.comm is not None:
             s_init = [i for o in self.comm.allgather(s_init) for i in o]
             chis_init = [i for o in self.comm.allgather(chis_init) for i in o]
             etas_init = [i for o in self.comm.allgather(etas_init) for i in o]
+            init_failures = [i for o in self.comm.allgather(init_failures) for i in o]
+        self.init_failures = init_failures
 
         return s_init, chis_init, etas_init
 
@@ -1128,6 +1168,7 @@ class TrappedPoincare:
         DA_all = []
         DA_times = []
         t_all = []
+        outcomes = []
         first, last = parallel_loop_bounds(self.comm, Ntrj)
         for itrj in range(first, last):
             tr = [self.s_init[itrj], self.chis_init[itrj], self.etas_init[itrj]]
@@ -1136,6 +1177,7 @@ class TrappedPoincare:
             etas_traj = [tr[2]]
             t_traj = [0]
             broken = False
+            reason = "completed"
             particle_DAs = []
             particle_DA_times = []
             for jj in range(self.Nmaps):
@@ -1161,6 +1203,7 @@ class TrappedPoincare:
                             stacklevel=2,
                         )
                         broken = True
+                        reason = "transition"
                         break
                     s_traj.append(tr[0])
                     chis_traj.append(tr[1])
@@ -1170,10 +1213,14 @@ class TrappedPoincare:
                         time_at_evaluation, DA_at_evaluation = return_DA(Peta)
                         particle_DAs.append(DA_at_evaluation)
                         particle_DA_times.append(jj)
-                except RuntimeError:
+                except RuntimeError as err:
                     broken = True
+                    reason = getattr(err, "reason", "integration_error")
                     # @NOTE: not returning DA
                     break
+            outcomes.append(
+                (s_traj[0], etas_traj[0], reason, len(s_traj) - 1, s_traj, etas_traj)
+            )
             if not broken:
                 s_all.append(s_traj)
                 chis_all.append(chis_traj)
@@ -1189,6 +1236,17 @@ class TrappedPoincare:
             t_all = [i for o in self.comm.allgather(t_all) for i in o]
             DA_all = [i for o in self.comm.allgather(DA_all) for i in o]
             DA_times = [i for o in self.comm.allgather(DA_times) for i in o]
+            outcomes = [i for o in self.comm.allgather(outcomes) for i in o]
+
+        outcomes += [(s, e, r, 0, [s], [e]) for s, e, r in self.init_failures]
+        self.outcomes = {
+            "s_init": np.array([o[0] for o in outcomes]),
+            "etas_init": np.array([o[1] for o in outcomes]),
+            "reason": np.array([o[2] for o in outcomes], dtype=object),
+            "nmaps": np.array([o[3] for o in outcomes], dtype=int),
+            "s_traj": [o[4] for o in outcomes],
+            "etas_traj": [o[5] for o in outcomes],
+        }
 
         return s_all, chis_all, etas_all, t_all, DA_all, DA_times
 
@@ -1295,6 +1353,97 @@ class TrappedPoincare:
                 label="Digit Accuracy",
             )
         fig.savefig(filename)
+
+        if created_fig is not None:
+            plt.close(created_fig)
+
+        return ax
+
+    def outcome_counts(self):
+        """
+        Number of initial conditions for each outcome in ``TRAPPED_MAP_OUTCOMES``.
+
+        Returns:
+            counts : Dictionary mapping outcome code to count.
+        """
+        reasons = list(self.outcomes["reason"])
+        return {k: reasons.count(k) for k in TRAPPED_MAP_OUTCOMES if k in reasons}
+
+    def plot_outcomes(
+        self,
+        ax=None,
+        filename="trapped_poincare_outcomes.pdf",
+        show_trajectories=True,
+    ):
+        r"""
+        Plot the initial conditions of the trapped Poincare map colored by
+        outcome (completed, no mirror point, lost, tmax, transition, ...). It is
+        recommended to only call this function on MPI rank 0.
+
+        Args:
+            ax : Matplotlib axis to plot on. If None, a new figure and axis are
+                 created and closed before returning.
+            filename : Name of the file to save the plot. If None, the figure
+                       is not saved.
+            show_trajectories : If True, also plot the returns of failed
+                                trajectories up to the point of failure.
+        Returns:
+            ax : The Matplotlib axis containing the plot.
+        """
+        import matplotlib as mpl
+
+        mpl.use("Agg")  # Don't use interactive backend
+        import matplotlib.pyplot as plt
+
+        created_fig = None
+        if ax is None:
+            created_fig, ax = plt.subplots(figsize=(8, 4.8))
+        fig = ax.get_figure()
+
+        colors = {
+            "completed": "0.75",
+            "no_mirror_B_above": "tab:blue",
+            "no_mirror_B_below": "tab:cyan",
+            "root_solve_failed": "tab:purple",
+            "lost_inner": "tab:olive",
+            "lost_outer": "tab:red",
+            "tmax": "tab:orange",
+            "transition": "tab:green",
+            "integration_error": "black",
+        }
+        reasons = self.outcomes["reason"]
+        etas0 = np.mod(self.outcomes["etas_init"], 2 * np.pi)
+        s0 = self.outcomes["s_init"]
+        for key, count in self.outcome_counts().items():
+            mask = reasons == key
+            if show_trajectories and key != "completed":
+                for i in np.flatnonzero(mask):
+                    ax.scatter(
+                        np.mod(self.outcomes["etas_traj"][i][1:], 2 * np.pi),
+                        self.outcomes["s_traj"][i][1:],
+                        marker="o",
+                        s=1,
+                        color=colors[key],
+                        alpha=0.6,
+                        edgecolors="none",
+                    )
+            ax.scatter(
+                etas0[mask],
+                s0[mask],
+                marker="o",
+                s=12,
+                color=colors[key],
+                edgecolors="none",
+                label=f"{TRAPPED_MAP_OUTCOMES[key]} ({count})",
+            )
+
+        ax.set_xlabel(r"$\eta$")
+        ax.set_ylabel(r"$s$")
+        ax.set_xlim([0, 2 * np.pi])
+        ax.set_ylim([0, 1])
+        ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), fontsize="small")
+        if filename is not None:
+            fig.savefig(filename, bbox_inches="tight")
 
         if created_fig is not None:
             plt.close(created_fig)
