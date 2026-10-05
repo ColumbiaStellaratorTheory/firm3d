@@ -20,19 +20,27 @@ from firm3d.util.constants import (
     FUSION_ALPHA_PARTICLE_ENERGY,
     PROTON_MASS,
 )
-from firm3d.util.functions import in_github_actions
+from firm3d.util.functions import in_github_actions, in_gpu_benchmark, sigmav
 from firm3d.util.mpi import comm_world
 
-resolution = 5 if in_github_actions else 15  # Resolution for field interpolation
-nparticles = 100 if in_github_actions else 1000  # Number of particles to trace
-tol = 1e-4 if in_github_actions else 1e-8  # Tolerance for ODE solver
-tmax = 2e-1
+import json
+import time
+
+if in_gpu_benchmark:
+    resolution, nparticles, tol, tmax = 15, 100000, 1e-6, 2e-1
+elif in_github_actions:
+    resolution, nparticles, tol, tmax = 5, 100, 1e-4, 1e-1
+else:
+    resolution, nparticles, tol, tmax = 15, 30000, 1e-6, 1e-1
 
 wout_filename = "../inputs/wout_aten_rescaled.nc"
+start_bri = time.perf_counter()
 bri = BoozerRadialInterpolant(
     wout_filename, 3, comm=comm_world, enforce_vacuum=True, write_boozmn=False
 )
+bri_time = time.perf_counter()
 
+start_ibf = time.perf_counter()
 field = InterpolatedBoozerField(
     bri,
     3,
@@ -40,6 +48,8 @@ field = InterpolatedBoozerField(
     ntheta_interp=resolution,
     nzeta_interp=resolution,
 )
+ibf_time = time.perf_counter() - start_ibf
+
 # set seed for consistency
 np.random.seed(8)
 
@@ -49,15 +59,6 @@ np.random.seed(8)
 nD = lambda s: 1 - s**5  # Normalized density
 nT = nD
 T = lambda s: 11.5 * (1 - s)  # Temperature in keV
-
-
-# D-T cross-section
-def sigmav(T):
-    if T > 0:
-        return T ** (-2 / 3) * np.exp(-19.94 * T ** (-1 / 3))
-    else:
-        return 0
-
 
 # Reactivity profile
 reactivity = lambda s: nD(s) * nT(s) * sigmav(T(s))
@@ -101,8 +102,11 @@ backgrounds = [
 
 # The field is tabulated for the GPU once; collisions are traced in double
 # precision, so the field is built that way.
+start_setup = time.perf_counter()
 field_gpu = CatapultBoozerField(field, resolution, resolution, resolution)
+setup_time_dbl = time.perf_counter() - start_setup
 
+start_dbl = time.perf_counter()
 last_time = trace_particles_boozer_with_collisions_gpu(
     field_gpu,
     stz_inits,
@@ -115,6 +119,8 @@ last_time = trace_particles_boozer_with_collisions_gpu(
     tol=tol,
     rng_seed=0,
 )
+dbl_time = time.perf_counter() - start_dbl
+
 # The collisional output has seven columns rather than six: the total speed
 # is reported before the final step size, because collisions change it and
 # it is no longer recoverable from the launch energy.
@@ -139,10 +145,29 @@ t_end = last_time[:, 0]
 v_end = last_time[:, 5]
 lost = t_end < tmax
 
-particle_loss = lost.sum() / nparticles
+loss_fraction_dbl = lost.sum() / nparticles
 energy_loss = np.sum((v_end[lost] / v0) ** 2) / nparticles
 
 print(f"Number of particles= {nparticles}")
-print(f"Particle loss fraction: {particle_loss:.3f}")
+print(f"Particle loss fraction: {loss_fraction_dbl:.3f}")
 print(f"Energy loss fraction: {energy_loss:.3f}")
 print(f"Mean energy fraction of confined: {np.mean((v_end[~lost] / v0) ** 2):.4f}")
+
+### record for regression testing
+timing_result = {
+    "nparticles": nparticles,
+    "tolerance": tol,
+    "resolution": resolution,
+    "loss_fraction_dbl": loss_fraction_dbl,
+    # "loss_fraction_flt": loss_fraction_flt,
+    "tmax": tmax,
+    "times": {
+        "bri_setup": bri_time,
+        "field_interpolation": ibf_time,
+        "catapult_setup": setup_time_dbl,
+        "tracing_dbl": dbl_time,
+        # "tracing_flt": flt_time,
+    },
+}
+with open("gpu_boozer_collisional_tracing_results.json", "w") as f:
+    json.dump(timing_result, f, indent=2)
