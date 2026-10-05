@@ -29,6 +29,7 @@ TRAPPED_MAP_OUTCOMES = {
     "completed": "completed",
     "no_mirror_B_above": r"no mirror: $|B| > B_{\rm crit}$ at $\chi = 0, \pi$",
     "no_mirror_B_below": r"no mirror: $|B| < B_{\rm crit}$ at $\chi = 0, \pi$",
+    "no_mirror_Bmin_above": r"no mirror: $\min_\chi |B| > B_{\rm crit}$",
     "root_solve_failed": "mirror root solve failed",
     "lost_inner": r"lost: $s < 0.01$",
     "lost_outer": r"lost: $s > 0.99$",
@@ -759,6 +760,8 @@ class TrappedPoincare:
         chaos_detection=False,
         nconvergence_points=None,
         solver_options=None,
+        mirror_init="root",
+        sign_vpar_init=1,
     ):
         r"""
         Initialize and compute the trapped Poincare map, evaluated by
@@ -824,9 +827,22 @@ class TrappedPoincare:
                                   metric. If None and chaos_detection=True, a
                                   single evaluation at the end of the trajectory
                                   is used.
+            mirror_init : Method for locating the initial mirror points. If
+                          "root", solve |B| = B_crit along chi in [0, pi] at
+                          fixed (s, eta). If "trace", launch from the minimum
+                          of |B| along chi at fixed (s, eta) and trace to the
+                          first vpar = 0 crossing (default: "root").
+            sign_vpar_init : Sign of vpar at launch for mirror_init="trace",
+                             selecting which bounce point is used (default: 1).
         """
         if solver_options is None:
             solver_options = {}
+        if mirror_init not in ("root", "trace"):
+            raise ValueError('mirror_init must be "root" or "trace".')
+        if sign_vpar_init not in (1, -1):
+            raise ValueError("sign_vpar_init must be 1 or -1.")
+        self.mirror_init = mirror_init
+        self.sign_vpar_init = sign_vpar_init
         self.field = field
 
         self.helicity_M = helicity_M
@@ -946,51 +962,11 @@ class TrappedPoincare:
             self.helicity_Mp,
             self.helicity_Np,
         )
-        points = np.zeros((1, 3))
-        points[:, 0] = point[0]
-        points[:, 1] = theta
-        points[:, 2] = zeta
-
-        # Set solver options needed for passing map
-        res_tys, res_hits = trace_particles_boozer(
-            self.field,
-            points,
-            [0],
-            tmax=self.tmax,
-            mass=self.mass,
-            charge=self.charge,
-            Ekin=self.Ekin,
-            vpars=[0],
-            stopping_criteria=[
-                MinToroidalFluxStoppingCriterion(0.01),
-                MaxToroidalFluxStoppingCriterion(0.99),
-            ],
-            forget_exact_path=False,
-            vpars_stop=True,
-            **self.solver_options,
-        )
-
-        if len(res_hits[0]) == 0:
-            raise TrappedMapError(
-                "tmax", "No stopping criterion reached in trapped_map."
-            )
-
-        res_hit = res_hits[0][0, :]  # Only check the first hit or stopping criterion
-
-        if res_hit[1] == 0:  # Check that the vpars=[0] plane was hit
-            point[0] = res_hit[2]
-            point[1] = chi(res_hit[3], res_hit[4], self.helicity_M, self.helicity_N)
-            point[2] = eta(res_hit[3], res_hit[4], self.helicity_Mp, self.helicity_Np)
-            time = res_hit[0]
-        elif res_hit[1] == -1:
-            raise TrappedMapError("lost_inner")
-        elif res_hit[1] == -2:
-            raise TrappedMapError("lost_outer")
-        else:
-            raise TrappedMapError(
-                "integration_error",
-                "Alternative stopping criterion reached in trapped_map.",
-            )
+        res_tys, res_hit = self._trace_to_bounce(point[0], theta, zeta, 0.0)
+        point[0] = res_hit[2]
+        point[1] = chi(res_hit[3], res_hit[4], self.helicity_M, self.helicity_N)
+        point[2] = eta(res_hit[3], res_hit[4], self.helicity_Mp, self.helicity_Np)
+        time = res_hit[0]
 
         if not self.DA_poinc:
             return point, time
@@ -1021,6 +997,100 @@ class TrappedPoincare:
         )
         peta = np.column_stack((time_momentum, peta))
         return point, time, peta
+
+    def _trace_to_bounce(self, s, theta, zeta, vpar):
+        """
+        Trace from (s, theta, zeta, vpar) to the first vpar = 0 crossing.
+
+        Returns:
+            res_tys : Trajectory array for the traced segment.
+            res_hit : The vpar = 0 hit, [time, idx, s, theta, zeta, vpar].
+        """
+        res_tys, res_hits = trace_particles_boozer(
+            self.field,
+            np.array([[s, theta, zeta]]),
+            [vpar],
+            tmax=self.tmax,
+            mass=self.mass,
+            charge=self.charge,
+            Ekin=self.Ekin,
+            vpars=[0],
+            stopping_criteria=[
+                MinToroidalFluxStoppingCriterion(0.01),
+                MaxToroidalFluxStoppingCriterion(0.99),
+            ],
+            forget_exact_path=False,
+            vpars_stop=True,
+            **self.solver_options,
+        )
+
+        if len(res_hits[0]) == 0:
+            raise TrappedMapError("tmax", "No stopping criterion reached.")
+
+        res_hit = res_hits[0][0, :]  # Only check the first hit or stopping criterion
+
+        if res_hit[1] == -1:
+            raise TrappedMapError("lost_inner")
+        elif res_hit[1] == -2:
+            raise TrappedMapError("lost_outer")
+        elif res_hit[1] != 0:
+            raise TrappedMapError(
+                "integration_error", "Alternative stopping criterion reached."
+            )
+        return res_tys, res_hit
+
+    def _bounce_point_from_Bmin(self, s, eta_init, nchi=64):
+        """
+        Launch from the minimum of |B| along chi at fixed (s, eta) and trace to
+        the first vpar = 0 crossing.
+
+        Returns:
+            s, chi, eta : Coordinates of the bounce point.
+        """
+        from scipy.optimize import minimize_scalar
+
+        def theta_zeta(chis):
+            return chi_eta_to_theta_zeta(
+                chis,
+                eta_init,
+                self.helicity_M,
+                self.helicity_N,
+                self.helicity_Mp,
+                self.helicity_Np,
+            )
+
+        def modB(chis):
+            chis = np.atleast_1d(chis)
+            theta, zeta = theta_zeta(chis)
+            self.field.set_points(np.column_stack([np.full(len(chis), s), theta, zeta]))
+            return self.field.modB()[:, 0]
+
+        chis = np.linspace(0, 2 * np.pi, nchi, endpoint=False)
+        i = np.argmin(modB(chis))
+        dchi = 2 * np.pi / nchi
+        sol = minimize_scalar(
+            lambda c: modB(c)[0],
+            bounds=(chis[i] - dchi, chis[i] + dchi),
+            method="bounded",
+        )
+        chi_min = sol.x if sol.fun < modB(chis[i])[0] else chis[i]
+        Bmin = modB(chi_min)[0]
+        if Bmin >= self.modBcrit:
+            raise TrappedMapError(
+                "no_mirror_Bmin_above",
+                f"min |B| along chi exceeds Bcrit! s = {s}, "
+                f"eta/(2*pi) = {eta_init / (2 * np.pi)}",
+            )
+
+        vtotal = np.sqrt(2 * self.Ekin / self.mass)
+        vpar = self.sign_vpar_init * vtotal * np.sqrt(1 - self.lam * Bmin)
+        theta, zeta = theta_zeta(chi_min)
+        _, res_hit = self._trace_to_bounce(s, float(theta), float(zeta), vpar)
+        return (
+            res_hit[2],
+            chi(res_hit[3], res_hit[4], self.helicity_M, self.helicity_N),
+            eta(res_hit[3], res_hit[4], self.helicity_Mp, self.helicity_Np),
+        )
 
     def initialize_trapped_map(self):
         r"""
@@ -1123,15 +1193,21 @@ class TrappedPoincare:
         s_init = []
         chis_init = []
         etas_init = []
+        launch = []
         init_failures = []
         first, last = parallel_loop_bounds(self.comm, len(etas2d))
         # For each point, find the mirror point in chi
         for i in range(first, last):
             try:
-                chi = chi_mirror_func(s2d[i], etas2d[i])
-                s_init.append(s2d[i])
-                chis_init.append(chi)
-                etas_init.append(etas2d[i])
+                if self.mirror_init == "trace":
+                    s0, chi0, eta0 = self._bounce_point_from_Bmin(s2d[i], etas2d[i])
+                else:
+                    s0, eta0 = s2d[i], etas2d[i]
+                    chi0 = chi_mirror_func(s0, eta0)
+                s_init.append(s0)
+                chis_init.append(chi0)
+                etas_init.append(eta0)
+                launch.append((s2d[i], etas2d[i]))
             except RuntimeError as err:
                 reason = getattr(err, "reason", "root_solve_failed")
                 init_failures.append((s2d[i], etas2d[i], reason))
@@ -1141,7 +1217,9 @@ class TrappedPoincare:
             s_init = [i for o in self.comm.allgather(s_init) for i in o]
             chis_init = [i for o in self.comm.allgather(chis_init) for i in o]
             etas_init = [i for o in self.comm.allgather(etas_init) for i in o]
+            launch = [i for o in self.comm.allgather(launch) for i in o]
             init_failures = [i for o in self.comm.allgather(init_failures) for i in o]
+        self.launch = launch
         self.init_failures = init_failures
 
         return s_init, chis_init, etas_init
@@ -1219,7 +1297,15 @@ class TrappedPoincare:
                     # @NOTE: not returning DA
                     break
             outcomes.append(
-                (s_traj[0], etas_traj[0], reason, len(s_traj) - 1, s_traj, etas_traj)
+                (
+                    s_traj[0],
+                    etas_traj[0],
+                    reason,
+                    len(s_traj) - 1,
+                    s_traj,
+                    etas_traj,
+                    *self.launch[itrj],
+                )
             )
             if not broken:
                 s_all.append(s_traj)
@@ -1238,7 +1324,7 @@ class TrappedPoincare:
             DA_times = [i for o in self.comm.allgather(DA_times) for i in o]
             outcomes = [i for o in self.comm.allgather(outcomes) for i in o]
 
-        outcomes += [(s, e, r, 0, [s], [e]) for s, e, r in self.init_failures]
+        outcomes += [(s, e, r, 0, [s], [e], s, e) for s, e, r in self.init_failures]
         self.outcomes = {
             "s_init": np.array([o[0] for o in outcomes]),
             "etas_init": np.array([o[1] for o in outcomes]),
@@ -1246,6 +1332,8 @@ class TrappedPoincare:
             "nmaps": np.array([o[3] for o in outcomes], dtype=int),
             "s_traj": [o[4] for o in outcomes],
             "etas_traj": [o[5] for o in outcomes],
+            "s_launch": np.array([o[6] for o in outcomes]),
+            "etas_launch": np.array([o[7] for o in outcomes]),
         }
 
         return s_all, chis_all, etas_all, t_all, DA_all, DA_times
@@ -1371,6 +1459,7 @@ class TrappedPoincare:
         styles = {
             "no_mirror_B_above": ("v", "tab:blue"),
             "no_mirror_B_below": ("^", "tab:cyan"),
+            "no_mirror_Bmin_above": ("v", "tab:brown"),
             "root_solve_failed": ("D", "tab:purple"),
             "lost_inner": ("x", "tab:olive"),
             "lost_outer": ("x", "tab:red"),

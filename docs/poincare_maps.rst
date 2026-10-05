@@ -90,6 +90,15 @@ Outcome codes are listed in ``firm3d.trajectory_helpers.poincare.TRAPPED_MAP_OUT
 
     print(poinc.outcome_counts())
 
+For fields far from omnigenity, ``mirror_init="trace"`` locates the initial
+mirror points by launching from the minimum of :math:`|B|` along
+:math:`\chi` at each :math:`(s, \eta)` and tracing to the first
+:math:`v_{||} = 0` crossing, rather than solving :math:`|B| = B_{\rm crit}`
+on :math:`\chi \in [0, \pi]`. The resulting initial conditions lie where the
+particles bounce, which can differ from the launch grid
+(``poinc.outcomes["s_launch"]``, ``poinc.outcomes["etas_launch"]``).
+``sign_vpar_init`` selects which bounce point is used.
+
 Passing Poincaré Maps
 ---------------------
 

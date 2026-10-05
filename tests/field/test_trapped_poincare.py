@@ -7,6 +7,7 @@ import numpy as np
 
 from firm3d.field.boozermagneticfield import BoozerAnalytic
 from firm3d.trajectory_helpers import TrappedPoincare
+from firm3d.trajectory_helpers._utils import chi_eta_to_theta_zeta
 from firm3d.trajectory_helpers.poincare import TRAPPED_MAP_OUTCOMES
 from firm3d.util.constants import (
     ALPHA_PARTICLE_CHARGE,
@@ -42,7 +43,7 @@ def qh_field(perturbation):
     )
 
 
-def trapped_map(field):
+def trapped_map(field, **kwargs):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         return TrappedPoincare(
@@ -59,6 +60,7 @@ def trapped_map(field):
             comm=comm,
             tmax=1e-4,
             solver_options={"reltol": 1e-6, "abstol": 1e-6, "axis": 0},
+            **kwargs,
         )
 
 
@@ -89,6 +91,30 @@ class TrappedPoincareOutcomeTests(unittest.TestCase):
             labels = [text.get_text() for text in ax.get_legend().get_texts()]
             self.assertEqual(len(labels), len(counts) - ("completed" in counts))
             self.assertTrue(os.path.exists(filename))
+
+    def test_trace_mirror_init(self):
+        poinc = trapped_map(qh_field(0.0), mirror_init="trace")
+        reasons = poinc.outcomes["reason"]
+        self.assertEqual(len(reasons), NS * NETA)
+        # Bcrit exceeds max |B| within an orbit width of s = 0.2
+        self.assertEqual(poinc.outcome_counts(), {"completed": 6, "tmax": 2})
+        self.assertTrue(np.allclose(poinc.outcomes["s_init"][reasons == "tmax"], 0.2))
+        self.assertTrue(np.allclose(poinc.outcomes["s_launch"][reasons == "tmax"], 0.2))
+        completed = reasons == "completed"
+        self.assertTrue(
+            np.allclose(
+                sorted(poinc.outcomes["s_launch"][completed]),
+                [0.4] * 2 + [0.6] * 2 + [0.8] * 2,
+            )
+        )
+        theta, zeta = chi_eta_to_theta_zeta(
+            np.array(poinc.chis_init), np.array(poinc.etas_init), 1, 4, 0, 1
+        )
+        for s, th, ze in zip(poinc.s_init, theta, zeta):
+            poinc.field.set_points(np.array([[s, th, ze]]))
+            self.assertAlmostEqual(
+                poinc.field.modB()[0, 0] / poinc.modBcrit, 1.0, places=5
+            )
 
 
 if __name__ == "__main__":
