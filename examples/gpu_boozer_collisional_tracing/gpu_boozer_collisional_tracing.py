@@ -21,7 +21,6 @@ from firm3d.util.constants import (
     PROTON_MASS,
 )
 from firm3d.util.functions import in_github_actions, in_gpu_benchmark, sigmav
-from firm3d.util.mpi import comm_world
 
 import json
 import time
@@ -36,7 +35,7 @@ else:
 wout_filename = "../inputs/wout_aten_rescaled.nc"
 start_bri = time.perf_counter()
 bri = BoozerRadialInterpolant(
-    wout_filename, 3, comm=comm_world, enforce_vacuum=True, write_boozmn=False
+    wout_filename, 3, enforce_vacuum=True, write_boozmn=False
 )
 bri_time = time.perf_counter()
 
@@ -62,7 +61,7 @@ T = lambda s: 11.5 * (1 - s)  # Temperature in keV
 
 # Reactivity profile
 reactivity = lambda s: nD(s) * nT(s) * sigmav(T(s))
-stz_inits = initialize_position_profile(field, nparticles, reactivity, comm=comm_world)
+stz_inits = initialize_position_profile(field, nparticles, reactivity)
 
 Ekin = FUSION_ALPHA_PARTICLE_ENERGY
 mass = ALPHA_PARTICLE_MASS
