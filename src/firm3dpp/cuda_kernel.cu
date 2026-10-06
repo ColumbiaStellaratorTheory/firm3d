@@ -314,8 +314,7 @@ __device__ void rhs_GC_Boozer(T* derivs, const T* __restrict__ x_temp, const T* 
     T x1 = x_temp[1*PARTICLES_PER_BLOCK];
     T x2 = x_temp[2*PARTICLES_PER_BLOCK];
 
-    T s = sqrt(x1*x1 + x2*x2);
-    T theta = atan2(x2, x1);
+    T inv_s = rhypot(x1, x2);
     T zeta = x_temp[3*PARTICLES_PER_BLOCK];
     T v_par = x_temp[4*PARTICLES_PER_BLOCK];
 
@@ -363,8 +362,8 @@ __device__ void rhs_GC_Boozer(T* derivs, const T* __restrict__ x_temp, const T* 
     // v||dot = (C |B|,theta - F |B|,zeta) mu |B| / (iota D)
     T vpardot = (C * dmodBdtheta - F * dmodBdzeta) * mu_val * modB / (iota * D);
 
-    derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = sdot*cos(theta) - s*sin(theta)*tdot;
-    derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK] = sdot*sin(theta) + s*cos(theta)*tdot;
+    derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = sdot*x1*inv_s - x2*tdot;
+    derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK] = sdot*x2*inv_s + x1*tdot;
     derivs[(nout*deriv_id + 2)*PARTICLES_PER_BLOCK] = zetadot;
     derivs[(nout*deriv_id + 3)*PARTICLES_PER_BLOCK] = vpardot;
 
@@ -383,8 +382,12 @@ __device__ void rhs_GC_BoozerVacuumSAW(T* derivs, const T* __restrict__ x_temp, 
     T x1 = x_temp[1*PARTICLES_PER_BLOCK];
     T x2 = x_temp[2*PARTICLES_PER_BLOCK];
 
-    T s = sqrt(x1*x1 + x2*x2);
+    T s = hypot(x1, x2);
+    T inv_s = rhypot(x1, x2);
+    T cos_theta = x1 * inv_s;
+    T sin_theta = x2 * inv_s;
     T theta = atan2(x2, x1);
+
     T zeta = x_temp[3*PARTICLES_PER_BLOCK];
     T v_par = x_temp[4*PARTICLES_PER_BLOCK];
 
@@ -461,8 +464,8 @@ __device__ void rhs_GC_BoozerVacuumSAW(T* derivs, const T* __restrict__ x_temp, 
     T sdot = (-dmodBdtheta*fak1/T(charge_d) + dalphadtheta*modB*v_par - dphidtheta) / T(psi0_d);
     T tdot = (dmodBdpsi*fak1 / T(charge_d)) + (iota - dalphadpsi*G)*v_par*modB / G + dphidpsi;
 
-    derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = sdot*cos(theta) - s * sin(theta) * tdot;
-    derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK] = sdot*sin(theta) + s*cos(theta)*tdot;
+    derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = sdot*cos_theta - (x2 * tdot);
+    derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK] = sdot*sin_theta + (x1 * tdot);
     derivs[(nout*deriv_id + 2)*PARTICLES_PER_BLOCK] = v_par*modB/G;
     derivs[(nout*deriv_id + 3)*PARTICLES_PER_BLOCK] = -modB/(G*T(mass_d)) * (T(mass_d)*mu_val*(dmodBdzeta + dalphadtheta*dmodBdpsi*G \
                 + dmodBdtheta*(iota - dalphadpsi*G)) + T(charge_d)*(alphadot*G \
@@ -481,7 +484,8 @@ __device__ void rhs_GC_BoozerNoKSAW(T* derivs, const T* __restrict__ x_temp, con
     T x1 = x_temp[1*PARTICLES_PER_BLOCK];
     T x2 = x_temp[2*PARTICLES_PER_BLOCK];
 
-    T s = sqrt(x1*x1 + x2*x2);
+    T s = hypot(x1, x2);
+    T inv_s = 1 / s;
     T theta = atan2(x2, x1);
     T zeta = x_temp[3*PARTICLES_PER_BLOCK];
     T v_par = x_temp[4*PARTICLES_PER_BLOCK];
@@ -564,8 +568,8 @@ __device__ void rhs_GC_BoozerNoKSAW(T* derivs, const T* __restrict__ x_temp, con
     T sdot = (-G*dphidtheta*T(charge_d) + I*dphidzeta*T(charge_d) + modB*T(charge_d)*v_par*(dalphadtheta*G-dalphadzeta*I) + (-dmodBdtheta*G + dmodBdzeta*I)*fak1)/(denom*T(psi0_d));
     T tdot = (G*T(charge_d)*dphidpsi + modB*T(charge_d)*v_par*(-dalphadpsi*G - alpha*dGdpsi + iota) - dGdpsi*T(mass_d)*v_par*v_par \
                     + dmodBdpsi*G*fak1)/denom;
-    derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = sdot*cos(theta) - s * sin(theta) * tdot;
-    derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK] = sdot*sin(theta) + s*cos(theta)*tdot;
+    derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = sdot*x1*inv_s - x2*tdot;
+    derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK] = sdot*x2*inv_s + x1*tdot;
     derivs[(nout*deriv_id + 2)*PARTICLES_PER_BLOCK] = v_par*modB/G;
     derivs[(nout*deriv_id + 3)*PARTICLES_PER_BLOCK] = (modB*T(charge_d)/T(mass_d) * ( -T(mass_d)*mu_val * (dmodBdzeta*(1 + dalphadpsi*I + alpha*dIdpsi) \
                     + dmodBdpsi*(dalphadtheta*G - dalphadzeta*I) + dmodBdtheta*(iota - alpha*dGdpsi - dalphadpsi*G)) \
@@ -940,6 +944,7 @@ __device__ void check_has_left(bool* has_left, const T* __restrict__ state, cons
         printf("default check_has_left not implemented\n");
     }
 };
+
 
 
 // ---------------------------------------------------------------------------
