@@ -56,11 +56,10 @@ def trapped_map(field, **kwargs):
             lam=1 / (B0 * (1 + 0.12 * 1.2 * 0.9)),
             ns_poinc=NS,
             neta_poinc=NETA,
-            Nmaps=2,
             comm=comm,
             tmax=1e-4,
             solver_options={"reltol": 1e-6, "abstol": 1e-6, "axis": 0},
-            **kwargs,
+            **{"Nmaps": 2, **kwargs},
         )
 
 
@@ -72,7 +71,7 @@ class TrappedPoincareOutcomeTests(unittest.TestCase):
         self.assertTrue(set(reasons) <= set(TRAPPED_MAP_OUTCOMES))
         # Bcrit exceeds max |B| on the inner surfaces
         inner = poinc.outcomes["s_init"] < 0.5
-        self.assertTrue(np.all(reasons[inner] == "no_mirror_B_below"))
+        self.assertTrue(np.all(reasons[inner] == "surface_B_below_Bcrit"))
         self.assertTrue(np.all(reasons[~inner] == "completed"))
         self.assertEqual(poinc.outcome_counts()["completed"], len(poinc.s_all))
         completed = reasons == "completed"
@@ -90,6 +89,18 @@ class TrappedPoincareOutcomeTests(unittest.TestCase):
             ax = poinc.plot_poincare(filename=filename)
             labels = [text.get_text() for text in ax.get_legend().get_texts()]
             self.assertEqual(len(labels), len(counts) - ("completed" in counts))
+            self.assertTrue(os.path.exists(filename))
+
+    def test_modB_range(self):
+        poinc = trapped_map(qh_field(0.0), Nmaps=1)
+        for s in [0.1, 0.5, 0.9]:
+            r = 1.7 * np.sqrt(s)
+            Bmin, Bmax = poinc.modB_range(s)
+            self.assertAlmostEqual(Bmin, B0 * (1 - 0.12 * r), places=6)
+            self.assertAlmostEqual(Bmax, B0 * (1 + 0.12 * r), places=6)
+        with tempfile.TemporaryDirectory() as tmp:
+            filename = os.path.join(tmp, "modB_range.png")
+            poinc.plot_modB_range(filename=filename, ns=5)
             self.assertTrue(os.path.exists(filename))
 
     def test_trace_mirror_init(self):

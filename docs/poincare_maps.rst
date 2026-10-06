@@ -79,7 +79,9 @@ failure. ``poinc.outcome_counts()`` summarizes them, and
 Outcome codes are listed in ``firm3d.trajectory_helpers.poincare.TRAPPED_MAP_OUTCOMES``:
 
 - ``completed``: all ``Nmaps`` returns computed
+- ``surface_B_below_Bcrit`` / ``surface_B_above_Bcrit``: :math:`|B| < B_{\rm crit}` (or :math:`> B_{\rm crit}`) everywhere on the surface, so no mirror point exists on it at this :math:`\lambda`
 - ``no_mirror_B_above`` / ``no_mirror_B_below``: :math:`|B| - B_{\rm crit}` has the same sign at :math:`\chi = 0, \pi`, so no mirror point is found at this :math:`(s, \eta)`
+- ``no_mirror_Bmin_above``: :math:`\min_\chi |B| > B_{\rm crit}` at this :math:`(s, \eta)` (``mirror_init="trace"``)
 - ``root_solve_failed``: the mirror point root solve failed or did not converge
 - ``lost_inner`` / ``lost_outer``: the trajectory reached :math:`s < 0.01` or :math:`s > 0.99`
 - ``tmax``: no bounce point reached within ``tmax``
@@ -89,6 +91,11 @@ Outcome codes are listed in ``firm3d.trajectory_helpers.poincare.TRAPPED_MAP_OUT
 .. code-block:: python
 
     print(poinc.outcome_counts())
+    poinc.plot_modB_range(filename="trapped_modB_range.pdf")
+
+``plot_modB_range`` plots the minimum and maximum of :math:`|B|` on each surface
+against :math:`B_{\rm crit}`, showing the range of :math:`s` on which mirror
+points can exist.
 
 For fields far from omnigenity, ``mirror_init="trace"`` locates the initial
 mirror points by launching from the minimum of :math:`|B|` along

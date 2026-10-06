@@ -27,6 +27,8 @@ from ._utils import (
 
 TRAPPED_MAP_OUTCOMES = {
     "completed": "completed",
+    "surface_B_below_Bcrit": r"$|B| < B_{\rm crit}$ on whole surface",
+    "surface_B_above_Bcrit": r"$|B| > B_{\rm crit}$ on whole surface",
     "no_mirror_B_above": r"no mirror: $|B| > B_{\rm crit}$ at $\chi = 0, \pi$",
     "no_mirror_B_below": r"no mirror: $|B| < B_{\rm crit}$ at $\chi = 0, \pi$",
     "no_mirror_Bmin_above": r"no mirror: $\min_\chi |B| > B_{\rm crit}$",
@@ -1210,6 +1212,12 @@ class TrappedPoincare:
                 launch.append((s2d[i], etas2d[i]))
             except RuntimeError as err:
                 reason = getattr(err, "reason", "root_solve_failed")
+                if reason.startswith("no_mirror"):
+                    Bmin, Bmax = self.modB_range(s2d[i])
+                    if Bmax < self.modBcrit:
+                        reason = "surface_B_below_Bcrit"
+                    elif Bmin > self.modBcrit:
+                        reason = "surface_B_above_Bcrit"
                 init_failures.append((s2d[i], etas2d[i], reason))
                 warn(str(err), stacklevel=2)
 
@@ -1460,6 +1468,8 @@ class TrappedPoincare:
             "no_mirror_B_above": ("v", "tab:blue"),
             "no_mirror_B_below": ("^", "tab:cyan"),
             "no_mirror_Bmin_above": ("v", "tab:brown"),
+            "surface_B_below_Bcrit": ("^", "tab:pink"),
+            "surface_B_above_Bcrit": ("v", "tab:gray"),
             "root_solve_failed": ("D", "tab:purple"),
             "lost_inner": ("x", "tab:olive"),
             "lost_outer": ("x", "tab:red"),
@@ -1495,6 +1505,86 @@ class TrappedPoincare:
                 fontsize="small",
             )
         return plotted
+
+    def modB_range(self, s, ntheta=64, nzeta=64):
+        """
+        Minimum and maximum of |B| on the surface s.
+
+        Args:
+            s : Normalized toroidal flux.
+            ntheta : Number of theta grid points for the initial search.
+            nzeta : Number of zeta grid points per field period for the
+                    initial search.
+        Returns:
+            Bmin, Bmax : Extrema of |B| on the surface.
+        """
+        from scipy.optimize import minimize
+
+        if not hasattr(self, "_modB_range_cache"):
+            self._modB_range_cache = {}
+        if s in self._modB_range_cache:
+            return self._modB_range_cache[s]
+
+        def modB(tz):
+            tz = np.atleast_2d(tz)
+            self.field.set_points(np.column_stack([np.full(len(tz), s), tz]))
+            return self.field.modB()[:, 0]
+
+        thetas, zetas = np.meshgrid(
+            np.linspace(0, 2 * np.pi, ntheta, endpoint=False),
+            np.linspace(0, 2 * np.pi / self.field.nfp, nzeta, endpoint=False),
+        )
+        tz = np.column_stack([thetas.ravel(), zetas.ravel()])
+        B = modB(tz)
+        Bmin = minimize(lambda x: modB(x)[0], tz[np.argmin(B)], method="Nelder-Mead")
+        Bmax = minimize(lambda x: -modB(x)[0], tz[np.argmax(B)], method="Nelder-Mead")
+        result = (min(Bmin.fun, B.min()), max(-Bmax.fun, B.max()))
+        self._modB_range_cache[s] = result
+        return result
+
+    def plot_modB_range(self, ax=None, filename="trapped_modB_range.pdf", ns=50):
+        r"""
+        Plot the minimum and maximum of |B| on each surface against
+        :math:`B_{\rm crit}`. Mirror points can only exist on surfaces where
+        :math:`B_{\rm crit}` lies in the shaded band. It is recommended to only
+        call this function on MPI rank 0.
+
+        Args:
+            ax : Matplotlib axis to plot on. If None, a new figure and axis are
+                 created and closed before returning.
+            filename : Name of the file to save the plot. If None, the figure
+                       is not saved.
+            ns : Number of surfaces to evaluate.
+        Returns:
+            ax : The Matplotlib axis containing the plot.
+        """
+        import matplotlib as mpl
+
+        mpl.use("Agg")  # Don't use interactive backend
+        import matplotlib.pyplot as plt
+
+        created_fig = None
+        if ax is None:
+            created_fig, ax = plt.subplots()
+        fig = ax.get_figure()
+
+        s = np.linspace(0, 1, ns + 1, endpoint=False)[1:]
+        Bmin, Bmax = np.array([self.modB_range(si) for si in s]).T
+        ax.fill_between(s, Bmin, Bmax, color="0.85", label=r"$[\min |B|, \max |B|]$")
+        ax.plot(s, Bmin, "k", lw=1)
+        ax.plot(s, Bmax, "k", lw=1)
+        ax.axhline(self.modBcrit, color="tab:red", label=r"$B_{\rm crit}$")
+        ax.set_xlabel(r"$s$")
+        ax.set_ylabel(r"$|B|$")
+        ax.set_xlim([0, 1])
+        ax.legend()
+        if filename is not None:
+            fig.savefig(filename)
+
+        if created_fig is not None:
+            plt.close(created_fig)
+
+        return ax
 
     def outcome_counts(self):
         """
