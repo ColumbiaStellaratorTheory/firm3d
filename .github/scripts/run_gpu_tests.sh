@@ -85,7 +85,7 @@ cp examples/gpu_cartesian_tracing/gpu_cartesian_tracing_results.json "$WORK_DIR/
 
 (cd examples/gpu_boozer_collisional_tracing && python gpu_boozer_collisional_tracing.py)
 BOOZER_COLLISONS_EXIT=$?
-cp examples/gpu_boozer_tracing/gpu_boozer_collisional_tracing_results.json "$WORK_DIR/gpu_boozer_collisional_tracing_results.json"
+cp examples/gpu_boozer_collisional_tracing/gpu_boozer_collisional_tracing_results.json "$WORK_DIR/gpu_boozer_collisional_tracing_results.json"
 set -e
 
 echo "boozer_tracing exit    : $BOOZER_EXIT"
