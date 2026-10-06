@@ -1112,8 +1112,6 @@ class TestGPUTracingBoozerVacuumSAW(unittest.TestCase):
 class TestGPUTracingBoozerNoKSAW(unittest.TestCase):
     def setUp(self):
         self.n_metagrid_pts = 15
-        # finite I, dIds: aten has I/G ~ 1e-18, where the K=0 zetadot
-        # is indistinguishable from the vacuum one
         self.filename = "examples/inputs/boozmn_ariescs_low_res.nc"
         self.vacuum = False
         self.bri, self.field, self.nfp = get_field(
