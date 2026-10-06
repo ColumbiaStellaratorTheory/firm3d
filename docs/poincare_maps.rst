@@ -106,7 +106,7 @@ passing (above both).
 Since the wells do not depend on :math:`B_{\rm crit}`,
 ``poinc.plot_one_sided_fraction()`` sweeps :math:`B_{\rm crit}` and plots the
 percentage of field lines that are one-sided, along with the share of each
-class.
+class. Pass ``data_filename`` to save the curves to a text file.
 
 For fields far from omnigenity, ``mirror_init="trace"`` locates the initial
 mirror points by tracing rather than solving :math:`|B| = B_{\rm crit}` on

@@ -1972,6 +1972,7 @@ class TrappedPoincare:
         filename="trapped_one_sided_fraction.pdf",
         ns=100,
         nalpha=64,
+        data_filename=None,
     ):
         r"""
         Fraction of field lines in each class of ``plot_field_line_wells`` as a
@@ -1988,6 +1989,8 @@ class TrappedPoincare:
             ns : Number of surfaces. The curves are noisy if ns is too small
                  to resolve the gap between the two maxima across surfaces.
             nalpha : Number of field lines per surface.
+            data_filename : If given, save the curves to this text file, one
+                            row per Bcrit.
         Returns:
             Bcrits : The Bcrit values.
             fractions : Array of shape (len(Bcrits), 4), percentage of the grid
@@ -2017,6 +2020,16 @@ class TrappedPoincare:
             out=np.full(len(Bcrits), np.nan),
             where=allowed > 0,
         )
+        if data_filename is not None:
+            np.savetxt(
+                data_filename,
+                np.column_stack([Bcrits, one_sided, fractions]),
+                header=(
+                    f"ns = {ns}, nalpha = {nalpha}, map Bcrit = {self.modBcrit}\n"
+                    "Bcrit  one_sided_pct_of_allowed  forbidden_pct  trapped_pct  "
+                    "one_sided_pct  passing_pct  (last four: % of (s, alpha) grid)"
+                ),
+            )
 
         fig, axs = plt.subplots(
             2, 1, figsize=(7, 7), sharex=True, constrained_layout=True

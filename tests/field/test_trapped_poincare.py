@@ -130,9 +130,16 @@ class TrappedPoincareOutcomeTests(unittest.TestCase):
     def test_one_sided_fraction(self):
         poinc = trapped_map(qh_field(0.0), Nmaps=1)
         with tempfile.TemporaryDirectory() as tmp:
+            data = os.path.join(tmp, "one_sided.txt")
             Bcrits, fractions = poinc.plot_one_sided_fraction(
-                filename=os.path.join(tmp, "one_sided.png"), ns=4, nalpha=3
+                filename=os.path.join(tmp, "one_sided.png"),
+                ns=4,
+                nalpha=3,
+                data_filename=data,
             )
+            saved = np.loadtxt(data)
+        self.assertTrue(np.allclose(saved[:, 0], Bcrits))
+        self.assertTrue(np.allclose(saved[:, 2:], fractions))
         self.assertTrue(np.allclose(fractions.sum(axis=1), 100))
         # QS: the two maxima bounding each well are equal, so nothing is one-sided
         self.assertTrue(np.allclose(fractions[:, 2], 0))
