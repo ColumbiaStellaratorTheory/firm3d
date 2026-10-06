@@ -1,4 +1,4 @@
-This example traces 5000 alpha particles in the Wistell-A configuration scaled to the size and field strength of ARIES-CS. Particles are initialized proportional to the fusion reactivity profile and traced until they reach the boundary (s=1) or the elapsed time is 1e-2 seconds. 
+This example traces 5000 alpha particles in the Wistell-A configuration scaled to the size and field strength of ARIES-CS. Particles are initialized proportional to the fusion reactivity profile and traced until they reach the boundary (s=1) or the elapsed time is 1e-2 seconds.
 
 Particles that are lost to the wall are classified into three trapping regimes based on their bounce dynamics:
 - Banana trapped (0): Particles trapped in the lowest-order toroidal magnetic well
@@ -9,3 +9,5 @@ The classification uses helicity M=1, N=0 to analyze the M=1,N=0 helical compone
 
 The main script is fusion_distribution_classification.py. The OrbitClassification class in orbit_classification.py provides the classification algorithm and is documented with detailed descriptions of the physics and output diagnostics.
 
+
+OrbitClassification.phase_space_fractions(s_grid) is the zero-orbit-width analog of this classification. It uses the same main well, the same dchi_predicted and the same thresholds. It applies them to every point and pitch angle on a set of field lines, giving the fraction of phase space on each surface that is banana, barely, or ripple trapped, or passing, for an isotropic distribution. It needs no particle tracing.

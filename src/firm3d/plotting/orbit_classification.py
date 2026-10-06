@@ -6,6 +6,70 @@ from scipy.optimize import isotonic_regression
 __all__ = ["OrbitClassification"]
 
 
+def _main_well(modB):
+    """
+    Indices (left peak, minimum, right peak) of the main |B| well for |B|
+    sampled on a chi grid spanning +/- 2 pi about the point of interest.
+    """
+    # Locate the well by finding the nearest |B| peaks on either side of the
+    # center, then taking the global Bmin between those two peaks. Bounding
+    # the branches to [peak, minimum, peak] ensures both sides are monotone.
+    idx_center = len(modB) // 2
+    idx_l_peak = int(np.argmax(modB[:idx_center]))
+    idx_r_peak = idx_center + int(np.argmax(modB[idx_center:]))
+    # Identified maxima are more than a field period apart
+    if (idx_r_peak - idx_l_peak) / (len(modB) - 1) * 4 * np.pi > 1.25 * 2 * np.pi:
+        # Find min between max_l and center
+        idx_min_l = int(np.argmin(modB[idx_l_peak : idx_center + 1]))
+        # Find min between center and max_r
+        idx_min_r = int(np.argmin(modB[idx_center : idx_r_peak + 1]))
+        # Find max between min_l and center
+        idx_max_l = int(np.argmax(modB[(idx_min_l + idx_l_peak) : idx_center + 1]))
+        # Find max between center and min_r
+        idx_max_r = int(np.argmax(modB[idx_center : (idx_center + idx_min_r) + 1]))
+        # Choose larger of the two maxima
+        if modB[idx_min_l + idx_l_peak + idx_max_l] > modB[idx_center + idx_max_r]:
+            idx_l_peak = idx_min_l + idx_l_peak + idx_max_l
+        else:
+            idx_r_peak = idx_center + idx_max_r
+    # Global Bmin between the two flanking peaks.
+    min_loc = idx_l_peak + int(np.argmin(modB[idx_l_peak : idx_r_peak + 1]))
+    return idx_l_peak, min_loc, idx_r_peak
+
+
+def _monotone_branches(chi_grid, modB, idx_l_peak, min_loc, idx_r_peak):
+    """
+    Left (peak to minimum) and right (minimum to peak) branches of the main
+    well, with |B| forced monotonic on each so that crossings are unique.
+    """
+    chi_left = chi_grid[idx_l_peak : min_loc + 1]
+    chi_right = chi_grid[min_loc : idx_r_peak + 1]
+    modB_left_mon = isotonic_regression(
+        modB[idx_l_peak : min_loc + 1], increasing=False
+    ).x
+    modB_right_mon = isotonic_regression(
+        modB[min_loc : idx_r_peak + 1], increasing=True
+    ).x
+    return chi_left, chi_right, modB_left_mon, modB_right_mon
+
+
+def _dchi_predicted(chi_left, chi_right, modB_left_mon, modB_right_mon, chi_min, Bcrit):
+    """
+    Mirror points in the monotonic main well, and the predicted dchi: twice
+    the distance from chi_min to the nearer mirror point, capped at 2 pi.
+    """
+    chi_mirror_left = chi_left[np.argmin(np.abs(modB_left_mon - Bcrit))]
+    chi_mirror_right = chi_right[np.argmin(np.abs(modB_right_mon - Bcrit))]
+    dchi_predicted = np.min(
+        [
+            np.abs(2 * (chi_mirror_left - chi_min)),
+            np.abs(2 * (chi_mirror_right - chi_min)),
+            2 * np.pi,
+        ]
+    )
+    return chi_mirror_left, chi_mirror_right, dchi_predicted
+
+
 class OrbitClassification:
     r"""
     A class to classify the trapping state and other diagnostics of a particle based on
@@ -303,68 +367,13 @@ class OrbitClassification:
             self.field.set_points(points)
             modB = self.field.modB()[:, 0]
 
-            # Locate the well the particle is bouncing in by finding the nearest
-            # |B| peaks on either side of the trajectory center, then taking the
-            # global Bmin between those two peaks.  Bounding the branches to
-            # [peak, minimum, peak] ensures both sides are monotone.
-            idx_center = len(chi_grid_mean) // 2
-
-            # Nearest |B| peak on the low-chi side (left half) and high-chi side
-            # (right half).
-            idx_l_peak = int(np.argmax(modB[:idx_center]))
-            idx_r_peak = idx_center + int(np.argmax(modB[idx_center:]))
-            # Identified maxima are more than a field period apart
-            if (
-                np.abs(chi_grid_mean[idx_l_peak] - chi_grid_mean[idx_r_peak])
-                > 1.25 * 2 * np.pi
-            ):
-                # Find min between max_l and center
-                idx_min_l = int(np.argmin(modB[idx_l_peak : idx_center + 1]))
-                # Find min between center and max_r
-                idx_min_r = int(np.argmin(modB[idx_center : idx_r_peak + 1]))
-                # Find max between min_l and center
-                idx_max_l = int(
-                    np.argmax(modB[(idx_min_l + idx_l_peak) : idx_center + 1])
-                )
-                # Find max between center and min_r
-                idx_max_r = int(
-                    np.argmax(modB[idx_center : (idx_center + idx_min_r) + 1])
-                )
-                # Choose larger of the two maxima
-                if (
-                    modB[idx_min_l + idx_l_peak + idx_max_l]
-                    > modB[idx_center + idx_max_r]
-                ):
-                    idx_l_peak = idx_min_l + idx_l_peak + idx_max_l
-                else:
-                    idx_r_peak = idx_center + idx_max_r
-
-            # Global Bmin between the two flanking peaks.
-            min_loc = idx_l_peak + int(np.argmin(modB[idx_l_peak : idx_r_peak + 1]))
+            idx_l_peak, min_loc, idx_r_peak = _main_well(modB)
             chi_min = chi_grid_mean[min_loc]
-            # Split field line into left (low-chi) and right (high-chi) branches,
-            # bounded by the peaks.
-            chi_left = chi_grid_mean[idx_l_peak : min_loc + 1]
-            chi_right = chi_grid_mean[min_loc : idx_r_peak + 1]
-            modB_left = modB[idx_l_peak : min_loc + 1]
-            modB_right = modB[min_loc : idx_r_peak + 1]
-
-            # Force monotonic |B| on each side of the well minimum, so the
-            # crossing with modB_crit is unique even if the branch is rippled.
-            # chi_left runs peak -> minimum, so its |B| must be non-increasing;
-            # chi_right runs minimum -> peak, so its |B| must be non-decreasing.
-            modB_left_mon = isotonic_regression(modB_left, increasing=False).x
-            modB_right_mon = isotonic_regression(modB_right, increasing=True).x
-            chi_mirror_left = chi_left[np.argmin(np.abs(modB_left_mon - modB_crit))]
-            chi_mirror_right = chi_right[np.argmin(np.abs(modB_right_mon - modB_crit))]
-
-            # Predicted dchi: 2× distance from chi_min to the nearer mirror point.
-            dchi_predicted = np.min(
-                [
-                    np.abs(2 * (chi_mirror_left - chi_min)),
-                    np.abs(2 * (chi_mirror_right - chi_min)),
-                    2 * np.pi,
-                ]
+            chi_left, chi_right, modB_left_mon, modB_right_mon = _monotone_branches(
+                chi_grid_mean, modB, idx_l_peak, min_loc, idx_r_peak
+            )
+            chi_mirror_left, chi_mirror_right, dchi_predicted = _dchi_predicted(
+                chi_left, chi_right, modB_left_mon, modB_right_mon, chi_min, modB_crit
             )
             dchis_predicted.append(dchi_predicted)
 
@@ -551,6 +560,145 @@ class OrbitClassification:
             "debug_data": debug_data,
         }
         return particle_dict
+
+    def phase_space_fractions(
+        self,
+        s_grid,
+        nalpha=16,
+        nb=100,
+        nchi=1001,
+        filename=None,
+        data_filename=None,
+    ):
+        r"""
+        Zero-orbit-width analog of :meth:`classify_orbit`: the fraction of
+        phase space on each surface that is banana, barely, or ripple trapped,
+        or passing, for an isotropic distribution at fixed energy.
+
+        A particle at a point on a field line with :math:`B_{\rm crit} = 1/\lambda`
+        bounces between the ends of the interval around it where
+        :math:`|B| < B_{\rm crit}`, and its dchi is the chi-width of that
+        interval. The main well, its monotonic fit, dchi_predicted, and the
+        thresholds barely_trapped_crit and ripple_trapped_crit are the same as
+        in :meth:`classify_orbit`; passing means :math:`B_{\rm crit}` exceeds
+        |B| everywhere within chi +/- 4 pi. Pitch angles are weighted
+        uniformly in :math:`v_{||}/v` and points by the flux-surface measure
+        :math:`1/B^2`, sampling the main well of field lines
+        :math:`\alpha = \theta - \iota \zeta` on a uniform grid.
+
+        Args:
+            s_grid: Surfaces to evaluate.
+            nalpha: Number of field lines per surface.
+            nb: Number of Bcrit levels per field line.
+            nchi: Number of chi points over chi +/- 2 pi (odd).
+            filename: If given, save a plot of the fractions against s.
+            data_filename: If given, save the fractions to this text file, one
+                           row per surface.
+        Returns:
+            dict: "s" and arrays of length len(s_grid): "banana", "barely",
+                  "ripple" and "passing" (fractions summing to one).
+        """
+        s_grid = np.atleast_1d(np.asarray(s_grid, dtype=float))
+        nchi += 1 - nchi % 2
+        half = (nchi - 1) // 2
+        chi = np.linspace(-4 * np.pi, 4 * np.pi, 4 * half + 1)
+        center = slice(half, 3 * half + 1)
+        dchi_grid = chi[1] - chi[0]
+        alphas = np.linspace(0, 2 * np.pi, nalpha, endpoint=False)
+        fractions = np.zeros((len(s_grid), 4))
+        for i, s in enumerate(s_grid):
+            self.field.set_points(np.array([[s, 0.0, 0.0]]))
+            iota = self.field.iota()[0, 0]
+            denom = self.helicity_N - iota * self.helicity_M
+            if np.abs(denom) < 1e-10:
+                warnings.warn(
+                    f"Skipping s = {s}: helicity aligned with field-line pitch.",
+                    stacklevel=2,
+                )
+                fractions[i] = np.nan
+                continue
+            totals = np.zeros(4)
+            for alpha in alphas:
+                points = np.column_stack(
+                    [
+                        np.full(len(chi), s),
+                        (self.helicity_N * alpha - iota * chi) / denom,
+                        (self.helicity_M * alpha - chi) / denom,
+                    ]
+                )
+                self.field.set_points(points)
+                modB = self.field.modB()[:, 0].copy()
+                chi_c, modB_c = chi[center], modB[center]
+                l_peak, min_loc, r_peak = _main_well(modB_c)
+                branches = _monotone_branches(chi_c, modB_c, l_peak, min_loc, r_peak)
+                well = np.arange(l_peak, r_peak + 1) + half
+                B_well = modB[well]
+                weight = 1 / B_well**2
+                Btop = modB.max()
+                levels = np.linspace(modB_c[min_loc], Btop, nb + 1)
+                xi = np.sqrt(np.clip(1 - B_well[None, :] / levels[:, None], 0, None))
+                for k in range(nb):
+                    share = xi[k + 1] - xi[k]
+                    if not np.any(share > 0):
+                        continue
+                    b = 0.5 * (levels[k] + levels[k + 1])
+                    inside = np.flatnonzero(modB < b)
+                    breaks = np.flatnonzero(np.diff(inside) > 1)
+                    starts = inside[np.r_[0, breaks + 1]]
+                    ends = inside[np.r_[breaks, len(inside) - 1]]
+                    run = np.clip(
+                        np.searchsorted(starts, well, side="right") - 1, 0, None
+                    )
+                    width = chi[ends[run]] - chi[starts[run]] + dchi_grid
+                    open_run = (starts[run] == 0) | (ends[run] == len(chi) - 1)
+                    width[open_run] = np.inf
+                    dchi_pred = _dchi_predicted(*branches, chi_c[min_loc], b)[2]
+                    status = np.zeros(len(well), dtype=int)
+                    status[width > self.barely_trapped_crit] = 1
+                    status[width < self.ripple_trapped_crit * dchi_pred] = 2
+                    np.add.at(totals, status, weight * share)
+                totals[3] += np.sum(weight * (1 - xi[-1]))
+            fractions[i] = totals / totals.sum()
+
+        result = {
+            "s": s_grid,
+            "banana": fractions[:, 0],
+            "barely": fractions[:, 1],
+            "ripple": fractions[:, 2],
+            "passing": fractions[:, 3],
+        }
+        if data_filename is not None:
+            np.savetxt(
+                data_filename,
+                np.column_stack([s_grid, fractions]),
+                header=(
+                    f"nalpha = {nalpha}, nb = {nb}, nchi = {nchi}, "
+                    f"barely_trapped_crit = {self.barely_trapped_crit}, "
+                    f"ripple_trapped_crit = {self.ripple_trapped_crit}\n"
+                    "s  banana  barely  ripple  passing"
+                ),
+            )
+        if filename is not None:
+            import matplotlib as mpl
+
+            mpl.use("Agg")  # Don't use interactive backend
+            import matplotlib.pyplot as plt
+
+            fig, ax = plt.subplots()
+            ax.stackplot(
+                s_grid,
+                fractions[:, [0, 2, 1, 3]].T,
+                colors=["tab:green", "tab:red", "tab:orange", "0.7"],
+                labels=["banana", "ripple", "barely", "passing"],
+            )
+            ax.set_xlabel(r"$s$")
+            ax.set_ylabel("phase-space fraction")
+            ax.set_xlim([s_grid[0], s_grid[-1]])
+            ax.set_ylim([0, 1])
+            ax.legend(fontsize="small", loc="lower right")
+            fig.savefig(filename)
+            plt.close(fig)
+        return result
 
     def plot_bounce_segment(self, data, show=True):
         r"""
