@@ -127,14 +127,26 @@ class TrappedPoincareOutcomeTests(unittest.TestCase):
         expected = np.where(wells["s"] < 0.5, 3, 1)[:, None]
         self.assertTrue(np.all(wells["category"] == expected))
 
+    def test_one_sided_fraction(self):
+        poinc = trapped_map(qh_field(0.0), Nmaps=1)
+        with tempfile.TemporaryDirectory() as tmp:
+            Bcrits, fractions = poinc.plot_one_sided_fraction(
+                filename=os.path.join(tmp, "one_sided.png"), ns=4, nalpha=3
+            )
+        self.assertTrue(np.allclose(fractions.sum(axis=1), 100))
+        # QS: the two maxima bounding each well are equal, so nothing is one-sided
+        self.assertTrue(np.allclose(fractions[:, 2], 0))
+
     def test_trace_mirror_init(self):
         poinc = trapped_map(qh_field(0.0), mirror_init="trace")
         reasons = poinc.outcomes["reason"]
         self.assertEqual(len(reasons), NS * NETA)
         # Bcrit exceeds max |B| within an orbit width of s = 0.2
-        self.assertEqual(poinc.outcome_counts(), {"completed": 6, "tmax": 2})
-        self.assertTrue(np.allclose(poinc.outcomes["s_init"][reasons == "tmax"], 0.2))
-        self.assertTrue(np.allclose(poinc.outcomes["s_launch"][reasons == "tmax"], 0.2))
+        self.assertEqual(
+            poinc.outcome_counts(), {"completed": 6, "surface_B_below_Bcrit": 2}
+        )
+        below = reasons == "surface_B_below_Bcrit"
+        self.assertTrue(np.allclose(poinc.outcomes["s_launch"][below], 0.2))
         completed = reasons == "completed"
         self.assertTrue(
             np.allclose(

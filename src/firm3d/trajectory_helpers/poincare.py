@@ -62,6 +62,15 @@ def _join_paths(segments, max_points=5000):
     return np.vstack(joined)
 
 
+def _classify_wells(wells, Bcrit):
+    """0 forbidden, 1 trapped, 2 one-sided, 3 passing."""
+    return np.select(
+        [Bcrit < wells["Bmin"], Bcrit < wells["Bmax_low"], Bcrit < wells["Bmax_high"]],
+        [0, 1, 2],
+        default=3,
+    )
+
+
 class TrappedMapError(RuntimeError):
     """Raised when a trapped map initial condition or bounce fails."""
 
@@ -1272,11 +1281,11 @@ class TrappedPoincare:
                 launch.append((s2d[i], eta_l, alpha))
             except RuntimeError as err:
                 reason = getattr(err, "reason", "root_solve_failed")
-                if reason.startswith("no_mirror"):
+                if reason.startswith("no_mirror") or reason == "tmax":
                     Bmin, Bmax = self.modB_range(s2d[i])
                     if Bmax < self.modBcrit:
                         reason = "surface_B_below_Bcrit"
-                    elif Bmin > self.modBcrit:
+                    elif Bmin > self.modBcrit and reason != "tmax":
                         reason = "surface_B_above_Bcrit"
                 init_failures.append((s2d[i], eta_l, alpha, reason))
                 warn(str(err), stacklevel=2)
@@ -1892,19 +1901,10 @@ class TrappedPoincare:
         import matplotlib.pyplot as plt
         from matplotlib.colors import BoundaryNorm, ListedColormap
 
-        s_grid = np.linspace(0, 1, ns + 1, endpoint=False)[1:]
-        alphas = np.linspace(0, 2 * np.pi, nalpha, endpoint=False)
-        Bmin = np.zeros((ns, nalpha))
-        Bmax_low = np.zeros((ns, nalpha))
-        Bmax_high = np.zeros((ns, nalpha))
-        for i, si in enumerate(s_grid):
-            for j, alpha in enumerate(alphas):
-                _, _, Bmin[i, j], bm, bp = self.field_line_well(si, alpha)
-                Bmax_low[i, j], Bmax_high[i, j] = min(bm, bp), max(bm, bp)
+        wells = self.field_line_wells(ns, nalpha)
+        s_grid, alphas = wells["s"], wells["alpha"]
         Bcrit = self.modBcrit
-        category = np.select(
-            [Bcrit < Bmin, Bcrit < Bmax_low, Bcrit < Bmax_high], [0, 1, 2], default=3
-        )
+        category = _classify_wells(wells, Bcrit)
 
         created_fig = None
         if ax is None:
@@ -1931,14 +1931,116 @@ class TrappedPoincare:
         if created_fig is not None:
             plt.close(created_fig)
 
-        return {
+        return {**wells, "category": category}
+
+    def field_line_wells(self, ns=30, nalpha=64):
+        """
+        |B| wells on a grid of field lines (s, alpha); see ``field_line_well``.
+        Independent of Bcrit, and cached per (ns, nalpha).
+
+        Returns:
+            wells : Dictionary with "s" (ns,), "alpha" (nalpha,), and arrays of
+                    shape (ns, nalpha): "Bmin", "Bmax_low" and "Bmax_high" (the
+                    smaller and larger maximum bounding the well).
+        """
+        if not hasattr(self, "_wells_cache"):
+            self._wells_cache = {}
+        if (ns, nalpha) in self._wells_cache:
+            return self._wells_cache[(ns, nalpha)]
+        s_grid = np.linspace(0, 1, ns + 1, endpoint=False)[1:]
+        alphas = np.linspace(0, 2 * np.pi, nalpha, endpoint=False)
+        Bmin = np.zeros((ns, nalpha))
+        Bmax_low = np.zeros((ns, nalpha))
+        Bmax_high = np.zeros((ns, nalpha))
+        for i, si in enumerate(s_grid):
+            for j, alpha in enumerate(alphas):
+                _, _, Bmin[i, j], bm, bp = self.field_line_well(si, alpha)
+                Bmax_low[i, j], Bmax_high[i, j] = min(bm, bp), max(bm, bp)
+        wells = {
             "s": s_grid,
             "alpha": alphas,
             "Bmin": Bmin,
             "Bmax_low": Bmax_low,
             "Bmax_high": Bmax_high,
-            "category": category,
         }
+        self._wells_cache[(ns, nalpha)] = wells
+        return wells
+
+    def plot_one_sided_fraction(
+        self,
+        Bcrits=None,
+        filename="trapped_one_sided_fraction.pdf",
+        ns=100,
+        nalpha=64,
+    ):
+        r"""
+        Fraction of field lines in each class of ``plot_field_line_wells`` as a
+        function of :math:`B_{\rm crit}`. The top panel shows the one-sided
+        (transitioning) field lines as a percentage of those that are not
+        forbidden; the bottom panel shows all classes as a percentage of the
+        :math:`(s, \alpha)` grid. Not parallelized; call on one MPI rank.
+
+        Args:
+            Bcrits : Values of Bcrit. If None, 200 values spanning the well
+                     minima and maxima on the grid.
+            filename : Name of the file to save the plot. If None, the figure
+                       is not saved.
+            ns : Number of surfaces. The curves are noisy if ns is too small
+                 to resolve the gap between the two maxima across surfaces.
+            nalpha : Number of field lines per surface.
+        Returns:
+            Bcrits : The Bcrit values.
+            fractions : Array of shape (len(Bcrits), 4), percentage of the grid
+                        in each class (forbidden, trapped, one-sided, passing).
+        """
+        import matplotlib as mpl
+
+        mpl.use("Agg")  # Don't use interactive backend
+        import matplotlib.pyplot as plt
+
+        wells = self.field_line_wells(ns, nalpha)
+        if Bcrits is None:
+            Bcrits = np.linspace(wells["Bmin"].min(), wells["Bmax_high"].max(), 200)
+        Bcrits = np.asarray(Bcrits)
+        fractions = np.array(
+            [
+                np.bincount(_classify_wells(wells, Bc).ravel(), minlength=4)
+                for Bc in Bcrits
+            ],
+            dtype=float,
+        )
+        fractions *= 100 / wells["Bmin"].size
+        allowed = 100 - fractions[:, 0]
+        one_sided = np.divide(
+            100 * fractions[:, 2],
+            allowed,
+            out=np.full(len(Bcrits), np.nan),
+            where=allowed > 0,
+        )
+
+        fig, axs = plt.subplots(
+            2, 1, figsize=(7, 7), sharex=True, constrained_layout=True
+        )
+        axs[0].plot(Bcrits, one_sided, color="tab:red")
+        axs[0].set_ylabel("one-sided (% of allowed field lines)")
+        axs[1].stackplot(
+            Bcrits,
+            fractions.T,
+            colors=["0.6", "tab:green", "tab:red", "tab:blue"],
+            labels=["forbidden", "trapped", "one-sided", "passing"],
+        )
+        axs[1].set_ylabel(r"% of $(s, \alpha)$ grid")
+        axs[1].set_xlabel(r"$B_{\rm crit}$")
+        axs[1].set_ylim([0, 100])
+        axs[1].legend(fontsize="small", loc="center right")
+        for ax in axs:
+            ax.axvline(self.modBcrit, color="k", ls="--", lw=1)
+            ax.set_xlim([Bcrits[0], Bcrits[-1]])
+        if filename is not None:
+            fig.savefig(filename)
+        plt.close(fig)
+
+        return Bcrits, fractions
 
     def outcome_counts(self):
         """

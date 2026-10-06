@@ -79,7 +79,7 @@ failure. ``poinc.outcome_counts()`` summarizes them, and
 Outcome codes are listed in ``firm3d.trajectory_helpers.poincare.TRAPPED_MAP_OUTCOMES``:
 
 - ``completed``: all ``Nmaps`` returns computed
-- ``surface_B_below_Bcrit`` / ``surface_B_above_Bcrit``: :math:`|B| < B_{\rm crit}` (or :math:`> B_{\rm crit}`) everywhere on the surface, so no mirror point exists on it at this :math:`\lambda`
+- ``surface_B_below_Bcrit`` / ``surface_B_above_Bcrit``: :math:`|B| < B_{\rm crit}` (or :math:`> B_{\rm crit}`) everywhere on the surface, so no mirror point exists on it at this :math:`\lambda`. With ``mirror_init="trace"``, a launch from a surface with :math:`|B| < B_{\rm crit}` everywhere is traced anyway, since drift can carry it to a bounce point elsewhere, and gets this label only if it does not bounce before ``tmax``
 - ``no_mirror_B_above`` / ``no_mirror_B_below``: :math:`|B| - B_{\rm crit}` has the same sign at :math:`\chi = 0, \pi`, so no mirror point is found at this :math:`(s, \eta)`
 - ``no_mirror_Bmin_above``: the minimum of :math:`|B|` in the launch field line's well exceeds :math:`B_{\rm crit}` (``mirror_init="trace"``)
 - ``root_solve_failed``: the mirror point root solve failed or did not converge
@@ -103,6 +103,10 @@ forbidden (:math:`B_{\rm crit}` below the well minimum), trapped
 (:math:`B_{\rm crit}` below both maxima bounding the well), one-sided
 (between them, so particles escape over the lower maximum and transition), or
 passing (above both).
+Since the wells do not depend on :math:`B_{\rm crit}`,
+``poinc.plot_one_sided_fraction()`` sweeps :math:`B_{\rm crit}` and plots the
+percentage of field lines that are one-sided, along with the share of each
+class.
 
 For fields far from omnigenity, ``mirror_init="trace"`` locates the initial
 mirror points by tracing rather than solving :math:`|B| = B_{\rm crit}` on
