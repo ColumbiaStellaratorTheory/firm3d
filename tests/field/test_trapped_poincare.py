@@ -103,6 +103,30 @@ class TrappedPoincareOutcomeTests(unittest.TestCase):
             poinc.plot_modB_range(filename=filename, ns=5)
             self.assertTrue(os.path.exists(filename))
 
+    def test_field_line_well_minimum(self):
+        poinc = trapped_map(qh_field(0.0), Nmaps=1)
+        for s in [0.2, 0.6]:
+            for alpha in [0.0, 1.0, 4.0]:
+                theta, zeta, Bmin = poinc.field_line_well_minimum(s, alpha)
+                self.assertAlmostEqual(
+                    Bmin, B0 * (1 - 0.12 * 1.7 * np.sqrt(s)), places=6
+                )
+                self.assertAlmostEqual(np.cos(theta - 4 * zeta), -1.0, places=6)
+
+    def test_field_line_wells(self):
+        poinc = trapped_map(qh_field(0.0), Nmaps=1)
+        with tempfile.TemporaryDirectory() as tmp:
+            wells = poinc.plot_field_line_wells(
+                filename=os.path.join(tmp, "wells.png"), ns=4, nalpha=3
+            )
+        r = 1.7 * np.sqrt(wells["s"])[:, None]
+        self.assertTrue(np.allclose(wells["Bmin"], B0 * (1 - 0.12 * r), atol=1e-6))
+        for key in ("Bmax_low", "Bmax_high"):
+            self.assertTrue(np.allclose(wells[key], B0 * (1 + 0.12 * r), atol=1e-4))
+        # QS: every field line on a surface is alike, trapped above s ~ 0.4
+        expected = np.where(wells["s"] < 0.5, 3, 1)[:, None]
+        self.assertTrue(np.all(wells["category"] == expected))
+
     def test_trace_mirror_init(self):
         poinc = trapped_map(qh_field(0.0), mirror_init="trace")
         reasons = poinc.outcomes["reason"]

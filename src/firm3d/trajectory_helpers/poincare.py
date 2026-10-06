@@ -31,7 +31,7 @@ TRAPPED_MAP_OUTCOMES = {
     "surface_B_above_Bcrit": r"$|B| > B_{\rm crit}$ on whole surface",
     "no_mirror_B_above": r"no mirror: $|B| > B_{\rm crit}$ at $\chi = 0, \pi$",
     "no_mirror_B_below": r"no mirror: $|B| < B_{\rm crit}$ at $\chi = 0, \pi$",
-    "no_mirror_Bmin_above": r"no mirror: $\min_\chi |B| > B_{\rm crit}$",
+    "no_mirror_Bmin_above": r"no mirror: well minimum $|B| > B_{\rm crit}$",
     "root_solve_failed": "mirror root solve failed",
     "lost_inner": r"lost: $s < 0.01$",
     "lost_outer": r"lost: $s > 0.99$",
@@ -39,6 +39,27 @@ TRAPPED_MAP_OUTCOMES = {
     "transition": r"transition: $|\Delta\chi| > 2\pi$",
     "integration_error": "integration error",
 }
+
+
+def _join_paths(segments, max_points=5000):
+    """
+    Concatenate traced segments with cumulative time, subsampled to max_points
+    per segment. Columns are [t, s, theta, zeta, vpar, segment index].
+    """
+    segments = [seg for seg in segments if seg is not None]
+    if not segments:
+        return None
+    t0 = 0.0
+    joined = []
+    for iseg, seg in enumerate(segments):
+        seg = np.array(seg, copy=True)
+        if len(seg) > max_points:
+            keep = np.linspace(0, len(seg) - 1, max_points).astype(int)
+            seg = seg[keep]
+        seg[:, 0] += t0
+        t0 = seg[-1, 0]
+        joined.append(np.column_stack([seg, np.full(len(seg), iseg)]))
+    return np.vstack(joined)
 
 
 class TrappedMapError(RuntimeError):
@@ -808,7 +829,9 @@ class TrappedPoincare:
                          (default: 2).
             s_init : List of initial s coordinates for the Poincare map.
                      (default: None, ns_poinc is used instead)
-            etas_init : List of initial eta coordinates for the Poincare map.
+            etas_init : List of initial eta coordinates for the Poincare map,
+                        or field-line labels alpha = theta - iota zeta (at
+                        zeta = 0) if mirror_init="trace".
                         (default: None, neta_poinc is used instead)
             Nmaps : Number of Poincare return maps to compute for each initial
                     condition (default: 500).
@@ -831,9 +854,11 @@ class TrappedPoincare:
                                   is used.
             mirror_init : Method for locating the initial mirror points. If
                           "root", solve |B| = B_crit along chi in [0, pi] at
-                          fixed (s, eta). If "trace", launch from the minimum
-                          of |B| along chi at fixed (s, eta) and trace to the
-                          first vpar = 0 crossing (default: "root").
+                          fixed (s, eta). If "trace", launches are on a grid of
+                          field lines (s, alpha); each is launched from the
+                          bottom of the |B| well along the field line through
+                          (theta = alpha, zeta = 0) and traced to the first
+                          vpar = 0 crossing (default: "root").
             sign_vpar_init : Sign of vpar at launch for mirror_init="trace",
                              selecting which bounce point is used (default: 1).
         """
@@ -965,6 +990,7 @@ class TrappedPoincare:
             self.helicity_Np,
         )
         res_tys, res_hit = self._trace_to_bounce(point[0], theta, zeta, 0.0)
+        self._last_path = res_tys[0]
         point[0] = res_hit[2]
         point[1] = chi(res_hit[3], res_hit[4], self.helicity_M, self.helicity_N)
         point[2] = eta(res_hit[3], res_hit[4], self.helicity_Mp, self.helicity_Np)
@@ -1027,66 +1053,92 @@ class TrappedPoincare:
         )
 
         if len(res_hits[0]) == 0:
-            raise TrappedMapError("tmax", "No stopping criterion reached.")
+            err = TrappedMapError("tmax", "No stopping criterion reached.")
+        else:
+            res_hit = res_hits[0][0, :]  # Only check the first hit or criterion
+            if res_hit[1] == 0:
+                return res_tys, res_hit
+            elif res_hit[1] == -1:
+                err = TrappedMapError("lost_inner")
+            elif res_hit[1] == -2:
+                err = TrappedMapError("lost_outer")
+            else:
+                err = TrappedMapError(
+                    "integration_error", "Alternative stopping criterion reached."
+                )
+        err.path = res_tys[0]
+        raise err
 
-        res_hit = res_hits[0][0, :]  # Only check the first hit or stopping criterion
-
-        if res_hit[1] == -1:
-            raise TrappedMapError("lost_inner")
-        elif res_hit[1] == -2:
-            raise TrappedMapError("lost_outer")
-        elif res_hit[1] != 0:
-            raise TrappedMapError(
-                "integration_error", "Alternative stopping criterion reached."
-            )
-        return res_tys, res_hit
-
-    def _bounce_point_from_Bmin(self, s, eta_init, nchi=64):
+    def field_line_well(self, s, alpha, n=4001):
         """
-        Launch from the minimum of |B| along chi at fixed (s, eta) and trace to
-        the first vpar = 0 crossing.
+        The |B| well containing (theta = alpha, zeta = 0) along the field line
+        theta = alpha + iota(s) zeta: its minimum and the maxima bounding it.
+
+        Returns:
+            theta, zeta, Bmin : Location and value of the well minimum.
+            Bmax_minus, Bmax_plus : The first local maxima of |B| from the
+                minimum toward decreasing and increasing zeta.
+        """
+        from scipy.optimize import minimize_scalar
+
+        self.field.set_points(np.array([[s, alpha, 0.0]]))
+        iota = self.field.iota()[0, 0]
+        rate = abs(self.helicity_M * iota - self.helicity_N)
+        span = 4 * np.pi / max(rate, 0.05)
+
+        def modB(zetas):
+            zetas = np.atleast_1d(zetas)
+            pts = np.column_stack([np.full(len(zetas), s), alpha + iota * zetas, zetas])
+            self.field.set_points(pts)
+            return self.field.modB()[:, 0].copy()
+
+        zetas = np.linspace(-span, span, n)
+        B = modB(zetas)
+        i = n // 2
+        step = -1 if B[i - 1] < B[i + 1] else 1
+        while 0 < i + step < n - 1 and B[i + step] < B[i]:
+            i += step
+        sol = minimize_scalar(
+            lambda z: modB(z)[0],
+            bounds=(zetas[max(i - 1, 0)], zetas[min(i + 1, n - 1)]),
+            method="bounded",
+        )
+        zeta_min, Bmin = (sol.x, sol.fun) if sol.fun < B[i] else (zetas[i], B[i])
+
+        def barrier(step):
+            k = i
+            while 0 < k + step < n - 1 and B[k + step] >= B[k]:
+                k += step
+            return B[k]
+
+        return alpha + iota * zeta_min, zeta_min, Bmin, barrier(-1), barrier(1)
+
+    def field_line_well_minimum(self, s, alpha):
+        """
+        Bottom of the |B| well containing (theta = alpha, zeta = 0) along the
+        field line theta = alpha + iota(s) zeta.
+
+        Returns:
+            theta, zeta, Bmin : Location and value of the well minimum.
+        """
+        return self.field_line_well(s, alpha)[:3]
+
+    def _bounce_point_from_well(self, s, theta, zeta, Bmin):
+        """
+        Launch from a well minimum with vpar set by lambda and trace to the
+        first vpar = 0 crossing.
 
         Returns:
             s, chi, eta : Coordinates of the bounce point.
         """
-        from scipy.optimize import minimize_scalar
-
-        def theta_zeta(chis):
-            return chi_eta_to_theta_zeta(
-                chis,
-                eta_init,
-                self.helicity_M,
-                self.helicity_N,
-                self.helicity_Mp,
-                self.helicity_Np,
-            )
-
-        def modB(chis):
-            chis = np.atleast_1d(chis)
-            theta, zeta = theta_zeta(chis)
-            self.field.set_points(np.column_stack([np.full(len(chis), s), theta, zeta]))
-            return self.field.modB()[:, 0]
-
-        chis = np.linspace(0, 2 * np.pi, nchi, endpoint=False)
-        i = np.argmin(modB(chis))
-        dchi = 2 * np.pi / nchi
-        sol = minimize_scalar(
-            lambda c: modB(c)[0],
-            bounds=(chis[i] - dchi, chis[i] + dchi),
-            method="bounded",
-        )
-        chi_min = sol.x if sol.fun < modB(chis[i])[0] else chis[i]
-        Bmin = modB(chi_min)[0]
         if Bmin >= self.modBcrit:
             raise TrappedMapError(
                 "no_mirror_Bmin_above",
-                f"min |B| along chi exceeds Bcrit! s = {s}, "
-                f"eta/(2*pi) = {eta_init / (2 * np.pi)}",
+                f"Well minimum |B| exceeds Bcrit! s = {s}, theta = {theta}, "
+                f"zeta = {zeta}",
             )
-
         vtotal = np.sqrt(2 * self.Ekin / self.mass)
         vpar = self.sign_vpar_init * vtotal * np.sqrt(1 - self.lam * Bmin)
-        theta, zeta = theta_zeta(chi_min)
         _, res_hit = self._trace_to_bounce(s, float(theta), float(zeta), vpar)
         return (
             res_hit[2],
@@ -1200,16 +1252,24 @@ class TrappedPoincare:
         first, last = parallel_loop_bounds(self.comm, len(etas2d))
         # For each point, find the mirror point in chi
         for i in range(first, last):
+            if self.mirror_init == "trace":
+                alpha = etas2d[i]
+                theta_l, zeta_l, Bmin = self.field_line_well_minimum(s2d[i], alpha)
+                eta_l = eta(theta_l, zeta_l, self.helicity_Mp, self.helicity_Np)
+            else:
+                alpha, eta_l = np.nan, etas2d[i]
             try:
                 if self.mirror_init == "trace":
-                    s0, chi0, eta0 = self._bounce_point_from_Bmin(s2d[i], etas2d[i])
+                    s0, chi0, eta0 = self._bounce_point_from_well(
+                        s2d[i], theta_l, zeta_l, Bmin
+                    )
                 else:
                     s0, eta0 = s2d[i], etas2d[i]
                     chi0 = chi_mirror_func(s0, eta0)
                 s_init.append(s0)
                 chis_init.append(chi0)
                 etas_init.append(eta0)
-                launch.append((s2d[i], etas2d[i]))
+                launch.append((s2d[i], eta_l, alpha))
             except RuntimeError as err:
                 reason = getattr(err, "reason", "root_solve_failed")
                 if reason.startswith("no_mirror"):
@@ -1218,7 +1278,7 @@ class TrappedPoincare:
                         reason = "surface_B_below_Bcrit"
                     elif Bmin > self.modBcrit:
                         reason = "surface_B_above_Bcrit"
-                init_failures.append((s2d[i], etas2d[i], reason))
+                init_failures.append((s2d[i], eta_l, alpha, reason))
                 warn(str(err), stacklevel=2)
 
         if self.comm is not None:
@@ -1266,7 +1326,10 @@ class TrappedPoincare:
             reason = "completed"
             particle_DAs = []
             particle_DA_times = []
+            path = None
             for jj in range(self.Nmaps):
+                self._last_path = None
+                segments = []
                 try:
                     if self.DA_poinc:
                         if jj == 0:
@@ -1275,6 +1338,7 @@ class TrappedPoincare:
                             tr, time1, Peta_iter = self.trapped_map(tr)
                             Peta_iter[:, 0] += Peta[-1, 0]
                             Peta = np.vstack((Peta, Peta_iter[1:, :]))
+                        segments.append(self._last_path)
 
                         tr, time2, Peta_iter = self.trapped_map(tr)
                         Peta_iter[:, 0] += Peta[-1, 0]
@@ -1282,6 +1346,7 @@ class TrappedPoincare:
                     else:
                         # Apply trapped map twice to return to same vpar = 0 plane
                         tr, time1 = self.trapped_map(tr)
+                        segments.append(self._last_path)
                         tr, time2 = self.trapped_map(tr)
                     if np.abs(tr[1] - chis_traj[-1]) > 2 * np.pi:
                         warn(
@@ -1290,6 +1355,8 @@ class TrappedPoincare:
                         )
                         broken = True
                         reason = "transition"
+                        segments.append(self._last_path)
+                        path = _join_paths(segments)
                         break
                     s_traj.append(tr[0])
                     chis_traj.append(tr[1])
@@ -1302,18 +1369,25 @@ class TrappedPoincare:
                 except RuntimeError as err:
                     broken = True
                     reason = getattr(err, "reason", "integration_error")
+                    segments.append(getattr(err, "path", None))
+                    path = _join_paths(segments)
                     # @NOTE: not returning DA
                     break
+            s_l, eta_l, alpha_l = self.launch[itrj]
             outcomes.append(
-                (
-                    s_traj[0],
-                    etas_traj[0],
-                    reason,
-                    len(s_traj) - 1,
-                    s_traj,
-                    etas_traj,
-                    *self.launch[itrj],
-                )
+                {
+                    "s_init": s_traj[0],
+                    "etas_init": etas_traj[0],
+                    "reason": reason,
+                    "nmaps": len(s_traj) - 1,
+                    "s_traj": s_traj,
+                    "chis_traj": chis_traj,
+                    "etas_traj": etas_traj,
+                    "s_launch": s_l,
+                    "etas_launch": eta_l,
+                    "alphas_launch": alpha_l,
+                    "path": path,
+                }
             )
             if not broken:
                 s_all.append(s_traj)
@@ -1332,17 +1406,34 @@ class TrappedPoincare:
             DA_times = [i for o in self.comm.allgather(DA_times) for i in o]
             outcomes = [i for o in self.comm.allgather(outcomes) for i in o]
 
-        outcomes += [(s, e, r, 0, [s], [e], s, e) for s, e, r in self.init_failures]
+        outcomes += [
+            {
+                "s_init": s,
+                "etas_init": e,
+                "reason": r,
+                "nmaps": 0,
+                "s_traj": [s],
+                "chis_traj": [np.nan],
+                "etas_traj": [e],
+                "s_launch": s,
+                "etas_launch": e,
+                "alphas_launch": a,
+                "path": None,
+            }
+            for s, e, a, r in self.init_failures
+        ]
         self.outcomes = {
-            "s_init": np.array([o[0] for o in outcomes]),
-            "etas_init": np.array([o[1] for o in outcomes]),
-            "reason": np.array([o[2] for o in outcomes], dtype=object),
-            "nmaps": np.array([o[3] for o in outcomes], dtype=int),
-            "s_traj": [o[4] for o in outcomes],
-            "etas_traj": [o[5] for o in outcomes],
-            "s_launch": np.array([o[6] for o in outcomes]),
-            "etas_launch": np.array([o[7] for o in outcomes]),
+            key: [o[key] for o in outcomes]
+            for key in ("s_traj", "chis_traj", "etas_traj", "path")
         }
+        for key in ("s_init", "etas_init", "nmaps", "s_launch", "etas_launch"):
+            self.outcomes[key] = np.array([o[key] for o in outcomes])
+        self.outcomes["alphas_launch"] = np.array(
+            [o["alphas_launch"] for o in outcomes], dtype=float
+        )
+        self.outcomes["reason"] = np.array(
+            [o["reason"] for o in outcomes], dtype=object
+        )
 
         return s_all, chis_all, etas_all, t_all, DA_all, DA_times
 
@@ -1585,6 +1676,269 @@ class TrappedPoincare:
             plt.close(created_fig)
 
         return ax
+
+    def modB_along_field_line(self, s, theta0, zeta0, zeta_span=2 * np.pi, n=2000):
+        """
+        |B| along the field line theta = theta0 + iota(s) (zeta - zeta0).
+
+        Args:
+            s, theta0, zeta0 : Point on the field line.
+            zeta_span : The line is evaluated on zeta0 +/- zeta_span.
+            n : Number of points.
+        Returns:
+            zetas, modB : Toroidal angle along the line and |B| there.
+        """
+        self.field.set_points(np.array([[s, theta0, zeta0]]))
+        iota = self.field.iota()[0, 0]
+        zetas = zeta0 + np.linspace(-zeta_span, zeta_span, n)
+        thetas = theta0 + iota * (zetas - zeta0)
+        self.field.set_points(np.column_stack([np.full(n, s), thetas, zetas]))
+        return zetas, self.field.modB()[:, 0].copy()
+
+    def trapping_margin(self, s, theta0, zeta0, zeta_span=2 * np.pi, n=2000):
+        """
+        Height of the |B| barrier beyond a bounce point, relative to Bcrit.
+
+        Follows the field line from (s, theta0, zeta0) in the direction of
+        increasing |B| to the first local maximum, B_barrier, and returns
+        B_barrier - Bcrit. A margin approaching zero indicates a transition.
+        """
+        zetas, B = self.modB_along_field_line(s, theta0, zeta0, zeta_span, 2 * n + 1)
+        i0 = n
+        step = 1 if B[i0 + 1] >= B[i0 - 1] else -1
+        i = i0
+        while 0 < i + step < len(B) - 1 and B[i + step] >= B[i]:
+            i += step
+        return B[i] - self.modBcrit
+
+    def chi_jump_decomposition(self, index):
+        r"""
+        Split the change in :math:`\chi` over the stored path of a failed orbit
+        into the part from motion along field lines,
+        :math:`\int (M \iota - N) d\zeta`, and the remainder from drift.
+
+        Args:
+            index : Index into ``outcomes``.
+        Returns:
+            dchi_total, dchi_parallel, dchi_drift : Changes in chi.
+        """
+        path = self.outcomes["path"][index]
+        if path is None:
+            raise ValueError(f"No traced path stored for outcome {index}.")
+        s_path, theta_path, zeta_path = path[:, 1:4].T
+        self.field.set_points(np.column_stack([s_path, theta_path, zeta_path]))
+        rate = self.helicity_M * self.field.iota()[:, 0] - self.helicity_N
+        dzeta = np.diff(zeta_path)
+        dchi_parallel = np.sum(0.5 * (rate[1:] + rate[:-1]) * dzeta)
+        chi_path = chi(theta_path, zeta_path, self.helicity_M, self.helicity_N)
+        dchi_total = chi_path[-1] - chi_path[0]
+        return dchi_total, dchi_parallel, dchi_total - dchi_parallel
+
+    def plot_orbit_diagnostics(self, index, filename="trapped_orbit_diagnostics.pdf"):
+        r"""
+        Diagnose a failed orbit (e.g., a transition) from ``outcomes``, using the
+        last traced segments of the guiding center orbit. Panels show, against
+        :math:`\zeta`: |B| along the orbit and along the field lines through
+        the bounce points that start each segment; :math:`v_{||}/v` and
+        :math:`s`; and
+        :math:`\chi` along the orbit and along those field lines, so that
+        departure from the field lines (drift) is visible. The last panel shows
+        the trapping margin :math:`B_{\rm barrier} - B_{\rm crit}` at each
+        bounce point of the orbit. It is recommended to only call this function
+        on MPI rank 0.
+
+        Args:
+            index : Index into ``outcomes``, e.g.
+                    ``np.flatnonzero(poinc.outcomes["reason"] == "transition")``.
+            filename : Name of the file to save the plot. If None, the figure
+                       is not saved.
+        Returns:
+            axs : The Matplotlib axes containing the plot.
+        """
+        import matplotlib as mpl
+
+        mpl.use("Agg")  # Don't use interactive backend
+        import matplotlib.pyplot as plt
+
+        path = self.outcomes["path"][index]
+        if path is None:
+            raise ValueError(
+                f"No traced path stored for outcome {index} "
+                f"({self.outcomes['reason'][index]})."
+            )
+        fig, axs = plt.subplots(4, 1, figsize=(7, 12), constrained_layout=True)
+        title = (
+            f"{TRAPPED_MAP_OUTCOMES[self.outcomes['reason'][index]]}, "
+            f"after {self.outcomes['nmaps'][index]} maps"
+        )
+        alpha = self.outcomes["alphas_launch"][index]
+        if np.isfinite(alpha):
+            title += (
+                f"\nlaunched on s = {self.outcomes['s_launch'][index]:.3f}, "
+                rf"$\alpha$ = {alpha:.3f}"
+            )
+        fig.suptitle(title)
+
+        s_path, theta_path, zeta_path, vpar_path, iseg = path[:, 1:6].T
+        self.field.set_points(np.column_stack([s_path, theta_path, zeta_path]))
+        B_path = self.field.modB()[:, 0].copy()
+        chi_path = chi(theta_path, zeta_path, self.helicity_M, self.helicity_N)
+        zlim = (zeta_path.min(), zeta_path.max())
+        span = np.ptp(zeta_path) + 2 * np.pi / self.field.nfp
+        starts = [np.flatnonzero(iseg == k)[0] for k in np.unique(iseg)]
+        for k, i0 in enumerate(starts):
+            zetas, B_line = self.modB_along_field_line(
+                s_path[i0], theta_path[i0], zeta_path[i0], zeta_span=span
+            )
+            self.field.set_points(np.array([[s_path[i0], theta_path[i0], 0.0]]))
+            iota = self.field.iota()[0, 0]
+            thetas = theta_path[i0] + iota * (zetas - zeta_path[i0])
+            style = {"color": "0.6", "ls": "-" if k == 0 else "--", "lw": 1}
+            label = f"field line through bounce {k}"
+            axs[0].plot(zetas, B_line, label=label, **style)
+            axs[2].plot(
+                zetas, chi(thetas, zetas, self.helicity_M, self.helicity_N), **style
+            )
+        axs[0].plot(zeta_path, B_path, "k", label="guiding center")
+        axs[0].plot(zeta_path[starts], B_path[starts], "o", color="tab:red", ms=4)
+        axs[0].axhline(self.modBcrit, color="tab:red", lw=1, label=r"$B_{\rm crit}$")
+        axs[0].set_ylabel(r"$|B|$")
+        axs[0].legend(fontsize="small")
+
+        vtotal = np.sqrt(2 * self.Ekin / self.mass)
+        axs[1].plot(zeta_path, vpar_path / vtotal, "k")
+        axs[1].plot(
+            zeta_path[starts], vpar_path[starts] / vtotal, "o", color="tab:red", ms=4
+        )
+        axs[1].axhline(0, color="0.6", lw=0.8)
+        axs[1].set_ylabel(r"$v_{||}/v$")
+        ax_spath = axs[1].twinx()
+        ax_spath.plot(zeta_path, s_path, color="tab:blue", lw=1)
+        ax_spath.set_ylabel(r"$s$", color="tab:blue")
+
+        axs[2].plot(zeta_path, chi_path, "k")
+        axs[2].plot(zeta_path[starts], chi_path[starts], "o", color="tab:red", ms=4)
+        for sign in (-1, 1):
+            axs[2].axhline(
+                chi_path[0] + sign * 2 * np.pi, color="tab:red", lw=0.8, ls=":"
+            )
+        dchi = self.chi_jump_decomposition(index)
+        axs[2].set_title(
+            rf"$\Delta\chi$ = {dchi[0]:.2f}: along field lines {dchi[1]:.2f}, "
+            f"drift {dchi[2]:.2f}",
+            fontsize="small",
+        )
+        axs[2].set_ylabel(r"$\chi$")
+        axs[2].set_xlabel(r"$\zeta$")
+        lo = min(chi_path.min(), chi_path[0] - 2 * np.pi)
+        hi = max(chi_path.max(), chi_path[0] + 2 * np.pi)
+        axs[2].set_ylim(lo - 0.5, hi + 0.5)
+        for ax in axs[:3]:
+            ax.set_xlim(zlim)
+
+        s_traj = np.array(self.outcomes["s_traj"][index])
+        thetas, zetas = chi_eta_to_theta_zeta(
+            np.array(self.outcomes["chis_traj"][index]),
+            np.array(self.outcomes["etas_traj"][index]),
+            self.helicity_M,
+            self.helicity_N,
+            self.helicity_Mp,
+            self.helicity_Np,
+        )
+        margin = [self.trapping_margin(*x) for x in zip(s_traj, thetas, zetas)]
+        axs[3].plot(margin, "o-", color="k", ms=3)
+        axs[3].axhline(0, color="tab:red", lw=0.8)
+        axs[3].set_xlabel("bounce")
+        axs[3].set_ylabel(r"$B_{\rm barrier} - B_{\rm crit}$")
+        ax_s = axs[3].twinx()
+        ax_s.plot(s_traj, ".", color="tab:blue", ms=3)
+        ax_s.set_ylabel(r"$s$", color="tab:blue")
+
+        if filename is not None:
+            fig.savefig(filename)
+        plt.close(fig)
+
+        return axs
+
+    def plot_field_line_wells(
+        self, ax=None, filename="trapped_field_line_wells.pdf", ns=30, nalpha=64
+    ):
+        r"""
+        Classify field lines :math:`(s, \alpha)` by their |B| well relative to
+        :math:`B_{\rm crit}`. The well containing
+        :math:`(\theta, \zeta) = (\alpha, 0)` has a minimum :math:`B_{\min}`
+        and is bounded by two maxima. A field line is forbidden if
+        :math:`B_{\rm crit} < B_{\min}`, trapped if :math:`B_{\rm crit}` is
+        below both maxima, one-sided if it lies between them (the particle
+        reflects on one side and escapes over the other), and passing if it is
+        above both. Not parallelized; call on one MPI rank.
+
+        Args:
+            ax : Matplotlib axis to plot on. If None, a new figure and axis are
+                 created and closed before returning.
+            filename : Name of the file to save the plot. If None, the figure
+                       is not saved.
+            ns : Number of surfaces.
+            nalpha : Number of field lines per surface.
+        Returns:
+            wells : Dictionary with "s" (ns,), "alpha" (nalpha,), and arrays of
+                    shape (ns, nalpha): "Bmin", "Bmax_low" and "Bmax_high" (the
+                    smaller and larger bounding maximum), and "category"
+                    (0 forbidden, 1 trapped, 2 one-sided, 3 passing).
+        """
+        import matplotlib as mpl
+
+        mpl.use("Agg")  # Don't use interactive backend
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import BoundaryNorm, ListedColormap
+
+        s_grid = np.linspace(0, 1, ns + 1, endpoint=False)[1:]
+        alphas = np.linspace(0, 2 * np.pi, nalpha, endpoint=False)
+        Bmin = np.zeros((ns, nalpha))
+        Bmax_low = np.zeros((ns, nalpha))
+        Bmax_high = np.zeros((ns, nalpha))
+        for i, si in enumerate(s_grid):
+            for j, alpha in enumerate(alphas):
+                _, _, Bmin[i, j], bm, bp = self.field_line_well(si, alpha)
+                Bmax_low[i, j], Bmax_high[i, j] = min(bm, bp), max(bm, bp)
+        Bcrit = self.modBcrit
+        category = np.select(
+            [Bcrit < Bmin, Bcrit < Bmax_low, Bcrit < Bmax_high], [0, 1, 2], default=3
+        )
+
+        created_fig = None
+        if ax is None:
+            created_fig, ax = plt.subplots()
+        fig = ax.get_figure()
+        labels = ["forbidden", "trapped", "one-sided", "passing"]
+        cmap = ListedColormap(["0.6", "tab:green", "tab:red", "tab:blue"])
+        im = ax.pcolormesh(
+            alphas,
+            s_grid,
+            category,
+            cmap=cmap,
+            norm=BoundaryNorm(np.arange(-0.5, 4.5), cmap.N),
+            shading="nearest",
+        )
+        cbar = fig.colorbar(im, ax=ax, ticks=range(4))
+        cbar.ax.set_yticklabels(labels)
+        ax.set_xlabel(r"$\alpha$")
+        ax.set_ylabel(r"$s$")
+        ax.set_title(rf"$B_{{\rm crit}}$ = {Bcrit:.4g}")
+        if filename is not None:
+            fig.savefig(filename)
+
+        if created_fig is not None:
+            plt.close(created_fig)
+
+        return {
+            "s": s_grid,
+            "alpha": alphas,
+            "Bmin": Bmin,
+            "Bmax_low": Bmax_low,
+            "Bmax_high": Bmax_high,
+            "category": category,
+        }
 
     def outcome_counts(self):
         """

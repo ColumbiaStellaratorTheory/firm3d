@@ -81,7 +81,7 @@ Outcome codes are listed in ``firm3d.trajectory_helpers.poincare.TRAPPED_MAP_OUT
 - ``completed``: all ``Nmaps`` returns computed
 - ``surface_B_below_Bcrit`` / ``surface_B_above_Bcrit``: :math:`|B| < B_{\rm crit}` (or :math:`> B_{\rm crit}`) everywhere on the surface, so no mirror point exists on it at this :math:`\lambda`
 - ``no_mirror_B_above`` / ``no_mirror_B_below``: :math:`|B| - B_{\rm crit}` has the same sign at :math:`\chi = 0, \pi`, so no mirror point is found at this :math:`(s, \eta)`
-- ``no_mirror_Bmin_above``: :math:`\min_\chi |B| > B_{\rm crit}` at this :math:`(s, \eta)` (``mirror_init="trace"``)
+- ``no_mirror_Bmin_above``: the minimum of :math:`|B|` in the launch field line's well exceeds :math:`B_{\rm crit}` (``mirror_init="trace"``)
 - ``root_solve_failed``: the mirror point root solve failed or did not converge
 - ``lost_inner`` / ``lost_outer``: the trajectory reached :math:`s < 0.01` or :math:`s > 0.99`
 - ``tmax``: no bounce point reached within ``tmax``
@@ -97,14 +97,37 @@ Outcome codes are listed in ``firm3d.trajectory_helpers.poincare.TRAPPED_MAP_OUT
 against :math:`B_{\rm crit}`, showing the range of :math:`s` on which mirror
 points can exist.
 
+``poinc.plot_field_line_wells()`` classifies field lines :math:`(s, \alpha)` by
+the :math:`|B|` well containing :math:`(\theta, \zeta) = (\alpha, 0)`:
+forbidden (:math:`B_{\rm crit}` below the well minimum), trapped
+(:math:`B_{\rm crit}` below both maxima bounding the well), one-sided
+(between them, so particles escape over the lower maximum and transition), or
+passing (above both).
+
 For fields far from omnigenity, ``mirror_init="trace"`` locates the initial
-mirror points by launching from the minimum of :math:`|B|` along
-:math:`\chi` at each :math:`(s, \eta)` and tracing to the first
-:math:`v_{||} = 0` crossing, rather than solving :math:`|B| = B_{\rm crit}`
-on :math:`\chi \in [0, \pi]`. The resulting initial conditions lie where the
-particles bounce, which can differ from the launch grid
-(``poinc.outcomes["s_launch"]``, ``poinc.outcomes["etas_launch"]``).
+mirror points by tracing rather than solving :math:`|B| = B_{\rm crit}` on
+:math:`\chi \in [0, \pi]`. Launches are on a grid of field lines
+:math:`(s, \alpha)`, with :math:`\alpha = \theta - \iota\zeta` evaluated at
+:math:`\zeta = 0` (``neta_poinc`` or ``etas_init`` give the :math:`\alpha`
+values). Each particle is launched from the bottom of the :math:`|B|` well along
+the field line through :math:`(\theta, \zeta) = (\alpha, 0)`, and traced to the
+first :math:`v_{||} = 0` crossing. The resulting initial conditions lie where the
+particles bounce, which can differ from the launch point
+(``poinc.outcomes["s_launch"]``, ``["etas_launch"]``, ``["alphas_launch"]``).
 ``sign_vpar_init`` selects which bounce point is used.
+
+Failed orbits keep their last traced segments in ``poinc.outcomes["path"]``.
+``poinc.plot_orbit_diagnostics(index)`` plots :math:`|B|`, :math:`v_{||}/v`,
+:math:`s` and :math:`\chi` along the guiding center path together with the
+field lines through its bounce points, and the trapping margin
+:math:`B_{\rm barrier} - B_{\rm crit}` at each bounce.
+``poinc.chi_jump_decomposition(index)`` splits the change in :math:`\chi` into
+the part from motion along field lines and the part from drift.
+
+.. code-block:: python
+
+    transitions = np.flatnonzero(poinc.outcomes["reason"] == "transition")
+    poinc.plot_orbit_diagnostics(transitions[0], filename="transition.pdf")
 
 Passing Poincaré Maps
 ---------------------
