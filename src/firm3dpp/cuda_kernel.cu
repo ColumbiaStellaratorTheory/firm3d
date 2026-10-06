@@ -522,9 +522,11 @@ __device__ void rhs_GC_BoozerNoKSAW(T* derivs, const T* __restrict__ x_temp, con
     T sdot = (-G*dphidtheta*T(charge_d) + I*dphidzeta*T(charge_d) + modB*T(charge_d)*v_par*(dalphadtheta*G-dalphadzeta*I) + (-dmodBdtheta*G + dmodBdzeta*I)*fak1)/(denom*T(psi0_d));
     T tdot = (G*T(charge_d)*dphidpsi + modB*T(charge_d)*v_par*(-dalphadpsi*G - alpha*dGdpsi + iota) - dGdpsi*T(mass_d)*v_par*v_par \
                     + dmodBdpsi*G*fak1)/denom;
+    T zetadot = (-I*(dmodBdpsi*T(mass_d)*mu_val + dphidpsi*T(charge_d)) + modB*T(charge_d)*v_par*(1 + dalphadpsi*I + alpha*dIdpsi) \
+                    + T(mass_d)*v_par*v_par/modB * (modB*dIdpsi - dmodBdpsi*I))/denom;
     derivs[(4*deriv_id + 0)*PARTICLES_PER_BLOCK] = sdot*cos(theta) - s * sin(theta) * tdot;
     derivs[(4*deriv_id + 1)*PARTICLES_PER_BLOCK] = sdot*sin(theta) + s*cos(theta)*tdot;
-    derivs[(4*deriv_id + 2)*PARTICLES_PER_BLOCK] = v_par*modB/G;
+    derivs[(4*deriv_id + 2)*PARTICLES_PER_BLOCK] = zetadot;
     derivs[(4*deriv_id + 3)*PARTICLES_PER_BLOCK] = (modB*T(charge_d)/T(mass_d) * ( -T(mass_d)*mu_val * (dmodBdzeta*(1 + dalphadpsi*I + alpha*dIdpsi) \
                     + dmodBdpsi*(dalphadtheta*G - dalphadzeta*I) + dmodBdtheta*(iota - alpha*dGdpsi - dalphadpsi*G)) \
                     - T(charge_d)*(alphadot*(G + I*(iota - alpha*dGdpsi) + alpha*G*dIdpsi) \
