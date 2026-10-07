@@ -232,11 +232,14 @@ __device__ void rhs_GC_CartesianVacuum(T* derivs, const T* __restrict__ x_temp, 
         GradAbsB_z *= T(-1.0);
     }
 
-    T phi = atan2(y, x);
-    T B_x = cos(phi) * B_r - sin(phi) * B_phi;
-    T B_y = sin(phi) * B_r + cos(phi) * B_phi;
-    T GradAbsB_x = cos(phi) * GradAbsB_r - sin(phi) * GradAbsB_phi;
-    T GradAbsB_y = sin(phi) * GradAbsB_r + cos(phi) * GradAbsB_phi;
+
+    T inv_r = rhypot(x, y);
+    T cos_phi = x*inv_r;
+    T sin_phi = y*inv_r;
+    T B_x = cos_phi * B_r - sin_phi * B_phi;
+    T B_y = sin_phi * B_r + cos_phi * B_phi;
+    T GradAbsB_x = cos_phi * GradAbsB_r - sin_phi * GradAbsB_phi;
+    T GradAbsB_y = sin_phi * GradAbsB_r + cos_phi * GradAbsB_phi;
 
     T AbsB = sqrt(B_x*B_x + B_y*B_y + B_z*B_z);
     T v_perp2 = 2*mu[0]*AbsB;
