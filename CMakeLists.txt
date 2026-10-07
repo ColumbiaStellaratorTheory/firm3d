@@ -31,9 +31,12 @@ if(DEFINED _cuda_skip)
     message(STATUS "GPU bindings skipped: ${_cuda_skip}")
 else()
     if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-        execute_process(COMMAND nvidia-smi --query-gpu=compute_cap --format=csv,noheader
-                        OUTPUT_VARIABLE _gpu_caps RESULT_VARIABLE _smi_result
-                        OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        find_program(NVIDIA_SMI nvidia-smi)
+        if(NVIDIA_SMI)
+            execute_process(COMMAND ${NVIDIA_SMI} --query-gpu=compute_cap --format=csv,noheader
+                            OUTPUT_VARIABLE _gpu_caps RESULT_VARIABLE _smi_result
+                            OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        endif()
         if(_smi_result EQUAL 0 AND _gpu_caps MATCHES "^[0-9]+\\.[0-9]+")
             string(REPLACE "." "" _gpu_caps "${_gpu_caps}")
             string(REPLACE "\n" ";" _gpu_caps "${_gpu_caps}")
