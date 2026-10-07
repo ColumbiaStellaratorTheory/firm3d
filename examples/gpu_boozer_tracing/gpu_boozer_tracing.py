@@ -21,6 +21,7 @@ from firm3d.util.constants import (
 from firm3d.util.functions import in_github_actions, in_gpu_benchmark, sigmav
 import json
 import time
+import firm3dpp
 
 if in_gpu_benchmark:
     resolution, nparticles, tol, tmax = 15, 100000, 1e-6, 1e-2
@@ -28,6 +29,19 @@ elif in_github_actions:
     resolution, nparticles, tol, tmax = 5, 100, 1e-4, 1e-4
 else:
     resolution, nparticles, tol, tmax = 15, 30000, 1e-6, 1e-4
+
+
+def _to_pseudo_cartesian(stz_inits, dtype):
+    """
+    A copy of (s, theta, zeta) initial conditions as (s cos theta, s sin theta,
+    zeta), the coordinates CATAPULT integrates in, in the given dtype.
+    """
+    x_inits = np.array(stz_inits, dtype=dtype, order="C")
+    s = x_inits[:, 0].copy()
+    theta = x_inits[:, 1].copy()
+    x_inits[:, 0] = s * np.cos(theta)
+    x_inits[:, 1] = s * np.sin(theta)
+    return x_inits
 
 ### CREATE A FIELD FOR TRACING
 boozmn_filename = "../inputs/boozmn_ariescs_low_res.nc"
@@ -72,87 +86,39 @@ start_setup = time.perf_counter()
 field_dbl = CatapultBoozerField(bri, resolution, resolution, resolution)
 setup_time_dbl = time.perf_counter() - start_setup
 
-field_flt = CatapultBoozerField(
-    bri, resolution, resolution, resolution, precision="single"
-)
 
 # Trace in double precision. As for the CPU tracer, res_tys holds each
 # particle's (t, s, theta, zeta, vpar) rows and res_hits its boundary crossing,
 # so the same post-processing serves both.
 start_dbl = time.perf_counter()
-res_tys_dbl, res_hits_dbl = trace_particles_boozer_gpu(
-    field_dbl,
-    stz_inits,
-    vpar_inits,
-    tmax=tmax,
-    mass=mass,
-    charge=charge,
-    Ekin=Ekin,
-    tol=tol,
-    forget_exact_path=True,
-)
-dbl_time = time.perf_counter() - start_dbl
 
-# trace in single precision: the inputs are cast to the field's precision
-start_flt = time.perf_counter()
-res_tys_flt, res_hits_flt = trace_particles_boozer_gpu(
-    field_flt,
-    stz_inits,
-    vpar_inits,
-    tmax=tmax,
-    mass=mass,
-    charge=charge,
-    Ekin=Ekin,
-    tol=tol,
-    forget_exact_path=True,
-)
-flt_time = time.perf_counter() - start_flt
+quad_info = field_dbl.quad_info
 
-final_dbl = np.array([traj[-1] for traj in res_tys_dbl])
-final_flt = np.array([traj[-1] for traj in res_tys_flt])
-particle_data = pd.DataFrame(
-    {
-        "s_start": stz_inits[:, 0],
-        "t_start": stz_inits[:, 1],
-        "z_start": stz_inits[:, 2],
-        "vpar_start": vpar_inits,
-        "last_time_dbl": final_dbl[:, 0],
-        "s_end_dbl": final_dbl[:, 1],
-        "t_end_dbl": final_dbl[:, 2],
-        "z_end_dbl": final_dbl[:, 3],
-        "vpar_end_dbl": final_dbl[:, 4],
-        "last_time_flt": final_flt[:, 0],
-        "s_end_flt": final_flt[:, 1],
-        "t_end_flt": final_flt[:, 2],
-        "z_end_flt": final_flt[:, 3],
-        "vpar_end_flt": final_flt[:, 4],
-    }
-)
+# save however you want
+np.save("quad_info.npy", quad_info)
 
-particle_data.to_csv("./particle_data.csv")
-loss_fraction_flt = float(np.mean([len(hits) > 0 for hits in res_hits_flt]))
-loss_fraction_dbl = float(np.mean([len(hits) > 0 for hits in res_hits_dbl]))
-
-print(f"tmax= {tmax}")
-print(f"Number of particles= {nparticles}")
-print(f"Flt. Loss fraction: {loss_fraction_flt:.3f}")
-print(f"Dbl. Loss fraction: {loss_fraction_dbl:.3f}")
-
-### record for regression testing
-timing_result = {
-    "nparticles": nparticles,
-    "tolerance": tol,
-    "resolution": resolution,
-    "loss_fraction_dbl": loss_fraction_dbl,
-    "loss_fraction_flt": loss_fraction_flt,
+# now read it
+read_quad_info = np.load("quad_info.npy")
+CUDA_VISIBLE_DEVICES = "2"
+kwargs = {
+    "quad_pts": read_quad_info,
+    "srange": field_dbl.srange,
+    "trange": field_dbl.trange,
+    "zrange": field_dbl.zrange,
+    "stz_init": _to_pseudo_cartesian(stz_inits, dtype=np.float64),
+    "m": mass,
+    "q": charge,
+    "vtotal": v0,
+    "vtang": vpar_inits,
     "tmax": tmax,
-    "times": {
-        "bri_setup": bri_time,
-        "field_interpolation": ibf_time,
-        "catapult_setup": setup_time_dbl,
-        "tracing_dbl": dbl_time,
-        "tracing_flt": flt_time,
-    },
+    "tol": tol,
+    "dt_in": -np.ones(nparticles),
+    "mu_in": -np.ones(nparticles),
+    "psi0": field_dbl.psi0,
+    "nparticles": nparticles,
 }
-with open("gpu_boozer_tracing_results.json", "w") as f:
-    json.dump(timing_result, f, indent=2)
+
+output = np.asarray(firm3dpp.boozer_gpu_tracing(**kwargs), dtype=np.float64).reshape(nparticles, 7)
+
+print(output)
+loss_times = output[:, 0]

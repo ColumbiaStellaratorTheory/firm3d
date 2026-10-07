@@ -344,8 +344,10 @@ __device__ void rhs_GC_Boozer(T* derivs, const T* __restrict__ x_temp, const T* 
     // F = - m v|| K,theta /|B| + q + m v|| I' / |B|
     // D = (F G - C I) / iota
 
-    T C = -T(mass_d) * v_par * dKdzeta / modB - T(charge_d) * iota + T(mass_d) * v_par * dGdpsi / modB;
-    T F = -T(mass_d) * v_par * dKdtheta / modB + T(charge_d) + T(mass_d) * v_par * dIdpsi / modB;
+    T mass_vpar_modB = T(mass_d) * v_par / modB;
+
+    T C = mass_vpar_modB * (-dKdzeta  + dGdpsi) - T(charge_d) * iota; 
+    T F = mass_vpar_modB * (-dKdtheta + dIdpsi) + T(charge_d) ;
     T D = (F * G - C * I) / iota;
 
     T fak1 = T(mass_d) * v_par * v_par / modB + T(mass_d) * mu_val;
@@ -422,9 +424,11 @@ __device__ void rhs_GC_BoozerVacuumSAW(T* derivs, const T* __restrict__ x_temp, 
     T dalphadtheta = 0.0;
     T alphadot = 0.0;
 
+    int phihat_offset_next = min(s_index+1, (int)saw_srange_d[2]-1)*saw_nharmonics;
+    int phihat_offset = s_index*saw_nharmonics;
     for(int i=0; i<saw_nharmonics; ++i){
-        T left_phihat = saw_phihats[s_index*saw_nharmonics + i];
-        T right_phihat = saw_phihats[min(s_index+1, (int)saw_srange_d[2]-1)*saw_nharmonics + i];
+        T left_phihat = saw_phihats[phihat_offset + i];
+        T right_phihat = saw_phihats[phihat_offset_next + i];
         T s_slope = (right_phihat - left_phihat) / saw_srange_d[3];
 
         int m = saw_m[i];
@@ -458,14 +462,16 @@ __device__ void rhs_GC_BoozerVacuumSAW(T* derivs, const T* __restrict__ x_temp, 
 
     }
 
-    T fak1 = T(mass_d)*v_par*v_par/modB + T(mass_d)*mu_val;
+    T vpar_over_modB = v_par / modB;
+    T vpar_modB_over_G = v_par*modB / G;
+    T fak1_over_q = T(mass_d) * (v_par*vpar_over_modB + mu_val) / T(charge_d);
 
-    T sdot = (-dmodBdtheta*fak1/T(charge_d) + dalphadtheta*modB*v_par - dphidtheta) / T(psi0_d);
-    T tdot = (dmodBdpsi*fak1 / T(charge_d)) + (iota - dalphadpsi*G)*v_par*modB / G + dphidpsi;
+    T sdot = (-dmodBdtheta*fak1_over_q + dalphadtheta*modB*v_par - dphidtheta) / T(psi0_d);
+    T tdot = (dmodBdpsi*fak1_over_q) + (iota - dalphadpsi*G)*vpar_modB_over_G + dphidpsi;
 
     derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = sdot*cos_theta - (x2 * tdot);
     derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK] = sdot*sin_theta + (x1 * tdot);
-    derivs[(nout*deriv_id + 2)*PARTICLES_PER_BLOCK] = v_par*modB/G;
+    derivs[(nout*deriv_id + 2)*PARTICLES_PER_BLOCK] = vpar_modB_over_G;
     derivs[(nout*deriv_id + 3)*PARTICLES_PER_BLOCK] = -modB/(G*T(mass_d)) * (T(mass_d)*mu_val*(dmodBdzeta + dalphadtheta*dmodBdpsi*G \
                 + dmodBdtheta*(iota - dalphadpsi*G)) + T(charge_d)*(alphadot*G \
                 + dalphadtheta*G*dphidpsi + (iota - dalphadpsi*G)*dphidtheta + dphidzeta)) \
