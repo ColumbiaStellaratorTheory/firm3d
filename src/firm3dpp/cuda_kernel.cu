@@ -426,6 +426,8 @@ __device__ void rhs_GC_BoozerVacuumSAW(T* derivs, const T* __restrict__ x_temp, 
 
     int phihat_offset_next = min(s_index+1, (int)saw_srange_d[2]-1)*saw_nharmonics;
     int phihat_offset = s_index*saw_nharmonics;
+
+    T inv_omegaG = 1 / (saw_omega * G);
     for(int i=0; i<saw_nharmonics; ++i){
         T left_phihat = saw_phihats[phihat_offset + i];
         T right_phihat = saw_phihats[phihat_offset_next + i];
@@ -433,25 +435,25 @@ __device__ void rhs_GC_BoozerVacuumSAW(T* derivs, const T* __restrict__ x_temp, 
 
         int m = saw_m[i];
         int n = saw_n[i];
-        T alpha_fac = (iota *m - n) / (saw_omega * G);
-        T dalpha_fac_dpsi = diotadpsi * m / (saw_omega * G);
+
+        T iota_mn = iota * m - n;
+        T dalpha_fac_dpsi = diotadpsi * m;
 
         // compute cos and sin at once
         T pt_cos, pt_sin;
         sincos(m*theta - n*zeta + saw_omega*time, &pt_sin, &pt_cos);
 
         T phihat_i = left_phihat + s_slope*(s_diff);
-        T dphihatdpsi = s_slope / T(psi0_d);
 
         T phi_i = phihat_i * pt_sin;
-        T dphidpsi_i = dphihatdpsi * pt_sin;
-        T phidot_i = phihat_i * pt_cos * saw_omega;
-        T dphidtheta_i = phidot_i * (m / saw_omega);
-        T dphidzeta_i = -phidot_i * (n / saw_omega);
+        T dphidpsi_i = s_slope * pt_sin / T(psi0_d);
+        // T phidot_i = phihat_i * pt_cos * saw_omega;
+        T dphidtheta_i = phihat_i * pt_cos * m;
+        T dphidzeta_i = -phihat_i * pt_cos * n;
 
-        T alphadot_i = -phidot_i * alpha_fac;
-        T dalphadpsi_i = -dphidpsi_i * alpha_fac - phi_i*dalpha_fac_dpsi;
-        T dalphadtheta_i = -dphidtheta_i * alpha_fac;
+        T alphadot_i = -phihat_i * pt_cos * iota_mn;
+        T dalphadpsi_i = -dphidpsi_i * iota_mn - phi_i*dalpha_fac_dpsi;
+        T dalphadtheta_i = -dphidtheta_i * iota_mn;
 
         dphidpsi += dphidpsi_i;
         dphidtheta += dphidtheta_i;
@@ -462,6 +464,9 @@ __device__ void rhs_GC_BoozerVacuumSAW(T* derivs, const T* __restrict__ x_temp, 
         dalphadtheta += dalphadtheta_i;
 
     }
+    dalphadtheta *= inv_omegaG;
+    dalphadpsi *= inv_omegaG;
+    alphadot /= G;
 
     T vpar_over_modB = v_par / modB;
     T vpar_modB_over_G = v_par*modB / G;
