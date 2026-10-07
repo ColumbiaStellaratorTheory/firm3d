@@ -436,8 +436,9 @@ __device__ void rhs_GC_BoozerVacuumSAW(T* derivs, const T* __restrict__ x_temp, 
         T alpha_fac = (iota *m - n) / (saw_omega * G);
         T dalpha_fac_dpsi = diotadpsi * m / (saw_omega * G);
 
-        T pt_cos = cos(m*theta - n*zeta + saw_omega*time);
-        T pt_sin = sin(m*theta - n*zeta + saw_omega*time);
+        // compute cos and sin at once
+        T pt_cos, pt_sin;
+        sincos(m*theta - n*zeta + saw_omega*time, &pt_sin, &pt_cos);
 
         T phihat_i = left_phihat + s_slope*(s_diff);
         T dphihatdpsi = s_slope / T(psi0_d);
