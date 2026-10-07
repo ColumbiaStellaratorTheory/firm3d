@@ -420,14 +420,13 @@ __device__ void rhs_GC_BoozerVacuumSAW(T* derivs, const T* __restrict__ x_temp, 
     T dphidtheta = 0.0;
     T dphidzeta = 0.0;
 
-    T dalphadpsi = 0.0;
-    T dalphadtheta = 0.0;
-    T alphadot = 0.0;
+    T dalphadpsi_G = 0.0;
+    T dalphadtheta_G = 0.0;
+    T alphadot_G = 0.0;
 
     int phihat_offset_next = min(s_index+1, (int)saw_srange_d[2]-1)*saw_nharmonics;
     int phihat_offset = s_index*saw_nharmonics;
 
-    T inv_omegaG = 1 / (saw_omega * G);
     for(int i=0; i<saw_nharmonics; ++i){
         T left_phihat = saw_phihats[phihat_offset + i];
         T right_phihat = saw_phihats[phihat_offset_next + i];
@@ -444,7 +443,6 @@ __device__ void rhs_GC_BoozerVacuumSAW(T* derivs, const T* __restrict__ x_temp, 
         sincos(m*theta - n*zeta + saw_omega*time, &pt_sin, &pt_cos);
 
         T phihat_i = left_phihat + s_slope*(s_diff);
-
         T phi_i = phihat_i * pt_sin;
         T dphidpsi_i = s_slope * pt_sin / T(psi0_d);
         // T phidot_i = phihat_i * pt_cos * saw_omega;
@@ -459,29 +457,31 @@ __device__ void rhs_GC_BoozerVacuumSAW(T* derivs, const T* __restrict__ x_temp, 
         dphidtheta += dphidtheta_i;
         dphidzeta += dphidzeta_i;
 
-        alphadot += alphadot_i;
-        dalphadpsi += dalphadpsi_i;
-        dalphadtheta += dalphadtheta_i;
+        alphadot_G += alphadot_i;
+        dalphadpsi_G += dalphadpsi_i;
+        dalphadtheta_G += dalphadtheta_i;
 
     }
-    dalphadtheta *= inv_omegaG;
-    dalphadpsi *= inv_omegaG;
-    alphadot /= G;
+    T inv_omega = 1 / saw_omega;
+    dalphadtheta_G *= inv_omega;
+    dalphadpsi_G *= inv_omega;
 
     T vpar_over_modB = v_par / modB;
     T vpar_modB_over_G = v_par*modB / G;
     T fak1_over_q = T(mass_d) * (v_par*vpar_over_modB + mu_val) / T(charge_d);
 
-    T sdot = (-dmodBdtheta*fak1_over_q + dalphadtheta*modB*v_par - dphidtheta) / T(psi0_d);
-    T tdot = (dmodBdpsi*fak1_over_q) + (iota - dalphadpsi*G)*vpar_modB_over_G + dphidpsi;
+    T iota_minus_dalphadpsi_G = iota - dalphadpsi_G;
+
+    T sdot = (-dmodBdtheta*fak1_over_q + dalphadtheta_G*vpar_modB_over_G - dphidtheta) / T(psi0_d);
+    T tdot = (dmodBdpsi*fak1_over_q) + iota_minus_dalphadpsi_G*vpar_modB_over_G + dphidpsi;
 
     derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = sdot*cos_theta - (x2 * tdot);
     derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK] = sdot*sin_theta + (x1 * tdot);
     derivs[(nout*deriv_id + 2)*PARTICLES_PER_BLOCK] = vpar_modB_over_G;
-    derivs[(nout*deriv_id + 3)*PARTICLES_PER_BLOCK] = -modB/(G*T(mass_d)) * (T(mass_d)*mu_val*(dmodBdzeta + dalphadtheta*dmodBdpsi*G \
-                + dmodBdtheta*(iota - dalphadpsi*G)) + T(charge_d)*(alphadot*G \
-                + dalphadtheta*G*dphidpsi + (iota - dalphadpsi*G)*dphidtheta + dphidzeta)) \
-                + v_par/modB * (dmodBdtheta*dphidpsi - dmodBdpsi*dphidtheta);
+    derivs[(nout*deriv_id + 3)*PARTICLES_PER_BLOCK] = -modB/(G*T(mass_d)) * (T(mass_d)*mu_val*(dmodBdzeta + dalphadtheta_G*dmodBdpsi \
+                + dmodBdtheta*iota_minus_dalphadpsi_G) + T(charge_d)*(alphadot_G \
+                + dalphadtheta_G*dphidpsi + iota_minus_dalphadpsi_G*dphidtheta + dphidzeta)) \
+                + vpar_over_modB * (dmodBdtheta*dphidpsi - dmodBdpsi*dphidtheta);
 
 };
 
