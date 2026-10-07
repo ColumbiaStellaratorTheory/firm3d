@@ -226,12 +226,10 @@ __device__ void rhs_GC_CartesianVacuum(T* derivs, const T* __restrict__ x_temp, 
     T GradAbsB_phi = block_interpolants[4*PARTICLES_PER_BLOCK];
     T GradAbsB_z = block_interpolants[5*PARTICLES_PER_BLOCK];
 
-    if(symmetry_exploited[0]){
-        B_r *= T(-1.0);
-        GradAbsB_phi *= T(-1.0);
-        GradAbsB_z *= T(-1.0);
-    }
-
+    T sign = symmetry_exploited[0] ? (T)-1.0 : (T)1.0;
+    B_r *= sign;
+    GradAbsB_phi *= sign;
+    GradAbsB_z *= sign;
 
     T inv_r = rhypot(x, y);
     T cos_phi = x*inv_r;
@@ -336,11 +334,10 @@ __device__ void rhs_GC_Boozer(T* derivs, const T* __restrict__ x_temp, const T* 
 
     T mu_val = mu[0];
 
-    if(symmetry_exploited[0]){
-        dmodBdtheta *= T(-1.0);
-        dmodBdzeta *= T(-1.0);
-        K *= T(-1.0);
-    }
+    T sign = symmetry_exploited[0] ? (T)-1.0 : (T)1.0;
+    dmodBdtheta *= sign;
+    dmodBdzeta *= sign;
+    K *= sign;
 
     // General guiding center equations (mode='gc')
     // C = - m v|| K,zeta /|B| - q iota + m v|| G' / |B|
@@ -407,10 +404,9 @@ __device__ void rhs_GC_BoozerVacuumSAW(T* derivs, const T* __restrict__ x_temp, 
 
     T mu_val = mu[0];
 
-    if(symmetry_exploited[0]){
-        dmodBdtheta *= T(-1.0);
-        dmodBdzeta *= T(-1.0);
-    }
+    T sign = symmetry_exploited[0] ? (T)-1.0 : (T)1.0;
+    dmodBdtheta *= sign;
+    dmodBdzeta *= sign;
 
     // accumulate over harmonics
     int s_index = (s - saw_srange_d[0]) / (saw_srange_d[3]);
@@ -506,10 +502,9 @@ __device__ void rhs_GC_BoozerNoKSAW(T* derivs, const T* __restrict__ x_temp, con
 
     T mu_val = mu[0];
 
-    if(symmetry_exploited[0]){
-        dmodBdtheta *= T(-1.0);
-        dmodBdzeta *= T(-1.0);
-    }
+    T sign = symmetry_exploited[0] ? (T)-1.0 : (T)1.0;
+    dmodBdtheta *= sign;
+    dmodBdzeta *= sign;
 
     // accumulate over harmonics
     int s_index = (s - saw_srange_d[0]) / (saw_srange_d[3]);
