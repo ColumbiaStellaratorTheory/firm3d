@@ -44,6 +44,8 @@ FIRM3D_HD inline double chandrasekhar_G_deriv(double x) {
     return (2.0 / COLL_SQRT_PI) * std::exp(-x * x) - 2.0 * chandrasekhar_G(x) / x;
 }
 
+
+
 // --------------------------------------------------------------------------
 // Background species specification.
 //

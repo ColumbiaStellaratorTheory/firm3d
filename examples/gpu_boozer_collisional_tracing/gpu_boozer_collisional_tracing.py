@@ -30,14 +30,14 @@ if in_gpu_benchmark:
 elif in_github_actions:
     resolution, nparticles, tol, tmax = 5, 100, 1e-4, 1e-1
 else:
-    resolution, nparticles, tol, tmax = 15, 30000, 1e-6, 1e-1
+    resolution, nparticles, tol, tmax = 15, 30000, 1e-6, 1e-3
 
 wout_filename = "../inputs/wout_aten_rescaled.nc"
 start_bri = time.perf_counter()
 bri = BoozerRadialInterpolant(
     wout_filename, 3, enforce_vacuum=True, write_boozmn=False
 )
-bri_time = time.perf_counter()
+bri_time = time.perf_counter() - start_bri
 
 start_ibf = time.perf_counter()
 field = InterpolatedBoozerField(
