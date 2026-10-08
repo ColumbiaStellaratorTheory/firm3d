@@ -130,6 +130,85 @@ approximately 0.140 s for endpoints only and 0.154 s for 1000 samples,
 about 10% more GPU execution time. Most of the full-call overhead in
 this case comes from output transfer and host trajectory assembly.
 
+Comparison with the previous saving method
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The previous implementation restarted tracing at every save interval,
+passing the last step size and magnetic moment to the next launch. It
+saved the first accepted endpoint at or after each requested time and
+skipped save intervals already passed by an earlier step.
+
+A separate double-precision comparison on one Perlmutter A100 40 GB GPU used
+the same 10,000 initial particles, field table, ``tmax=1e-4``, and ``tol=1e-8`` for
+both implementations. Timings are medians of three warm calls and include
+the full public API. The baseline GPU kernels and Python tracing code
+are from the parent revision ``76089f7a``. Its byte-identical CPU tracer
+object was reused when scratch-storage access stalled its compilation.
+
+.. list-table:: Previous saving versus dense output, measured on 2026-10-08
+   :header-rows: 1
+
+   * - Requested samples per survivor
+     - Previous method (s)
+     - Dense output (s)
+     - Speedup with dense output
+   * - Endpoints only
+     - 0.181
+     - 0.212
+     - 0.85
+   * - 10
+     - 0.344
+     - 0.294
+     - 1.17
+   * - 100
+     - 1.788
+     - 0.369
+     - 4.84
+   * - 1000
+     - 15.064
+     - 1.227
+     - 12.27
+
+At 1000 requested samples, the previous method returned a median of
+839 samples per survivor (10th--90th percentiles: 623--976); every
+survivor missed at least one requested sample. Dense output returned
+all 1000. The previous method used 1000 native tracing calls; dense
+output used one. Previous-method sample times were off the requested
+grid, and final times overshot ``tmax`` by a median of 51 ns, with a
+90th percentile of 128 ns. Double-precision dense output ended exactly
+at ``tmax`` and changing the save interval left terminal states identical.
+
+The tradeoff is GPU output storage: the previous method used at most
+0.56 MB per launch, while dense output used 5.6, 56, and 560 MB for
+10, 100, and 1000 samples respectively. Both methods also require field
+and integration storage and retain the returned trajectories on the host.
+For single precision, the 1000-sample case took 14.423 s previously and
+0.952 s with dense output, a 15.16-fold speedup, with a 280 MB dense buffer.
+
+Endpoint-only calls were approximately 17% slower in this comparison.
+Their native binding times were nearly unchanged (0.144 s versus
+0.146 s in double precision); most of the additional time was in host
+result assembly. The saving speedups therefore should not be interpreted
+as an endpoint-only speedup.
+
+Final-state comparisons were also repeated with dense output evaluated at
+each particle's previous-method terminal time, using the 9839 particles that
+survived in both runs. For 1000 saves, the median, 90th percentile, and maximum
+absolute circular differences in ``theta`` were ``4.5e-14``, ``6.0e-4``, and
+``0.98`` radians in double precision, and ``2.3e-5``, ``6.6e-4``, and ``0.45``
+in single precision. The previous method reported three additional survivors
+at this save cadence. Differences were not solely due to endpoint overshoot;
+restarting also changed the computed trajectory.
+These are differences between the two methods, not errors against an
+independent CPU reference.
+
+To repeat the comparison, run the benchmark once with the previous
+checkout's ``src`` directory in ``PYTHONPATH`` and ``--method existing``,
+then with the new checkout and ``--method dense``. The option verifies
+the loaded implementation; it does not select a different algorithm within
+one build. The JSON records launch counts, timing, grid offsets, and sample
+counts, and the accompanying NPZ stores terminal states for comparisons.
+
 Single precision
 ----------------
 
