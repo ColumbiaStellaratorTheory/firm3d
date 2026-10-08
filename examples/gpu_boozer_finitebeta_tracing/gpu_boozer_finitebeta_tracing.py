@@ -32,7 +32,7 @@ else:
 ### CREATE A FIELD FOR TRACING
 boozmn_filename = "../inputs/boozmn_ariescs_low_res.nc"
 start_bri = time.perf_counter()
-bri = BoozerRadialInterpolant(boozmn_filename, 3, enforce_vacuum=True)
+bri = BoozerRadialInterpolant(boozmn_filename, 3, enforce_vacuum=False)
 bri_time = time.perf_counter() - start_bri
 
 start_ibf = time.perf_counter()
@@ -154,5 +154,5 @@ timing_result = {
         "tracing_flt": flt_time,
     },
 }
-with open("gpu_boozer_vacuum_tracing_results.json", "w") as f:
+with open("gpu_boozer_finitebeta_tracing_results.json", "w") as f:
     json.dump(timing_result, f, indent=2)
