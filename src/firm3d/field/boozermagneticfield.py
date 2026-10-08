@@ -740,7 +740,12 @@ class BoozerAnalytic(BoozerMagneticField):
         self.set_points(self.get_points_ref())  # Force cache invalidation
 
     def set_B0z(self, B0z):
-        self.B0z = np.array(B0z)
+        B0z = np.array(B0z)
+        if B0z.shape != self.m.shape:
+            raise ValueError(
+                f"B0z has shape {B0z.shape}, expected {self.m.shape} to match m and n"
+            )
+        self.B0z = B0z
         self.set_points(self.get_points_ref())  # Force cache invalidation
 
     def set_Bbar(self, Bbar):

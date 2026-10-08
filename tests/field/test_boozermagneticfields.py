@@ -206,6 +206,11 @@ class TestingAnalytic(unittest.TestCase):
             ba.modB()[:, 0], 5.7 * (1 + 0.12 * np.sqrt(2 * 0.5 * 8.2 / 5.7)) + 0.57
         )
 
+        for bad in ([0.57], [0.57, 0.0, 0.1]):
+            with self.assertRaises(ValueError):
+                ba.set_B0z(bad)
+        np.testing.assert_array_equal(ba.B0z, [0.57, 0.0])
+
 
 class TestingFiniteBeta(unittest.TestCase):
     def test_boozerradialinterpolant_finite_beta(self):
