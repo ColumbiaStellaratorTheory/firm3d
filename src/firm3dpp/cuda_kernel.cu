@@ -350,21 +350,21 @@ __device__ void rhs_GC_Boozer(T* derivs, const T* __restrict__ x_temp, const T* 
 
     T C = mass_vpar_modB * (-dKdzeta  + dGdpsi) - T(charge_d) * iota; 
     T F = mass_vpar_modB * (-dKdtheta + dIdpsi) + T(charge_d) ;
-    T D = (F * G - C * I) / iota;
+    T inv_D_iota = 1 / (F * G - C * I);
 
-    T fak1 = T(mass_d) * v_par * v_par / modB + T(mass_d) * mu_val;
+    T fak1 = mass_vpar_modB * v_par + T(mass_d) * mu_val;
 
     // sdot = (I |B|,zeta - G |B|,theta) m (v||^2/|B| + mu) / (iota D psi0)
-    T sdot = (I * dmodBdzeta - G * dmodBdtheta) * fak1 / (iota * D * T(psi0_d));
+    T sdot = (I * dmodBdzeta - G * dmodBdtheta) * fak1 * inv_D_iota * T(inv_psi0_d);
 
     // tdot = ((G |B|,psi - K |B|,zeta) m (v||^2/|B| + mu) - C v|| |B|) / (iota D)
-    T tdot = ((G * dmodBdpsi - K * dmodBdzeta) * fak1 - C * v_par * modB) / (iota * D);
+    T tdot = ((G * dmodBdpsi - K * dmodBdzeta) * fak1 - C * v_par * modB) * inv_D_iota;
 
     // zetadot = (F v|| |B| - (|B|,psi I - |B|,theta K) m (v||^2/|B| + mu)) / (iota D)
-    T zetadot = (F * v_par * modB - (dmodBdpsi * I - dmodBdtheta * K) * fak1) / (iota * D);
+    T zetadot = (F * v_par * modB - (dmodBdpsi * I - dmodBdtheta * K) * fak1) * inv_D_iota;
 
     // v||dot = (C |B|,theta - F |B|,zeta) mu |B| / (iota D)
-    T vpardot = (C * dmodBdtheta - F * dmodBdzeta) * mu_val * modB / (iota * D);
+    T vpardot = (C * dmodBdtheta - F * dmodBdzeta) * mu_val * modB * inv_D_iota;
 
     derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = sdot*x1*inv_s - x2*tdot;
     derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK] = sdot*x2*inv_s + x1*tdot;
@@ -485,10 +485,6 @@ __device__ void rhs_GC_BoozerVacuumSAW(T* derivs, const T* __restrict__ x_temp, 
         }
 
         if(tid == 0 && is_valid[p]){
-            derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK + p] = 0.0;
-            derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK + p] = 0.0;
-            derivs[(nout*deriv_id + 2)*PARTICLES_PER_BLOCK + p] = 0.0;
-            derivs[(nout*deriv_id + 3)*PARTICLES_PER_BLOCK + p] = 0.0;
 
             T vpar_over_modB = v_par / modB;
             T vpar_modB_over_G = v_par*modB / G;
