@@ -1322,7 +1322,23 @@ class TestGPUTracingCartesian(unittest.TestCase):
             )
             return final_states(res_tys, boozer=False)
 
-        check_single_precision(self, run, 1e-6, [1, 2, 3, 4])
+        # With dense output both runs end at a common physical time. The
+        # difference between two double tolerances can then be below the
+        # float32 field/initial-condition roundoff floor; endpoint timing
+        # differences are no longer an appropriate precision-error budget.
+        double = run("double", 1e-8)
+        single = run("single", 1e-8)
+        np.testing.assert_array_equal(double[:, 0], np.full(len(xyz), 1e-6))
+        np.testing.assert_array_equal(
+            single[:, 0], np.full(len(xyz), float(np.float32(1e-6)))
+        )
+        error = np.abs(single[:, 1:5] - double[:, 1:5])
+        self.assertTrue(np.any(error != 0), "single precision matched double exactly")
+        # One metre and the launch speed set the units where a component is
+        # near zero. The 1e-5 relative budget matches the field precision
+        # checked separately above; retain the ensemble's 90th-percentile test.
+        scales = np.maximum(np.abs(double[:, 1:5]), [1, 1, 1, VELOCITY])
+        self.assertTrue(np.all(np.percentile(error / scales, 90, axis=0) < 1e-5))
 
 
 if __name__ == "__main__":

@@ -146,7 +146,7 @@ class TestCatapultPerturbedBoozerField(unittest.TestCase):
         # each tracer and saver keeps to its kind of field, on both backends
         with self.assertRaises(TypeError):
             trace_particles_boozer_gpu(perturbed, stz, vpar)
-        with self.assertRaises(TypeError):
+        with self.assertRaises(ValueError):
             save_trajectories_boozer_gpu(
                 perturbed, stz, vpar, 1e-6, 1e-7, 1.0, 1.0, 1e6, 1e-8
             )
@@ -187,15 +187,15 @@ class TestCatapultPerturbedBoozerField(unittest.TestCase):
                 equilibrium, stz, vpar, Ekin=np.nan, forget_exact_path=True
             )
 
-        # trajectories need one tmax for all particles, and cannot yet be
-        # saved in a perturbed field
-        with self.assertRaises(NotImplementedError):
+        # Invalid save intervals are refused before a GPU launch, including
+        # the perturbed trajectory path.
+        with self.assertRaises(ValueError):
             trace_particles_boozer_gpu(
-                equilibrium, stz, vpar, tmax=np.array([1e-6, 2e-6])
+                equilibrium, stz, vpar, tmax=np.array([1e-6, 2e-6]), dt_save=0
             )
-        with self.assertRaises(NotImplementedError):
+        with self.assertRaises(ValueError):
             trace_particles_boozer_perturbed_gpu(
-                perturbed, stz, vpar, mus, forget_exact_path=False
+                perturbed, stz, vpar, mus, forget_exact_path=False, dt_save=0
             )
 
 
