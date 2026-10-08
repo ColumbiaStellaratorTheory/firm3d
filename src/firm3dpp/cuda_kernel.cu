@@ -240,9 +240,9 @@ __device__ void rhs_GC_CartesianVacuum(T* derivs, const T* __restrict__ x_temp, 
     T GradAbsB_y = sin_phi * GradAbsB_r + cos_phi * GradAbsB_phi;
 
     T AbsB = sqrt(B_x*B_x + B_y*B_y + B_z*B_z);
-    T v_perp2 = 2*mu[0]*AbsB;
+    T half_v_perp2 = mu[0]*AbsB;
     T fak1 = (v_par/AbsB);
-    T fak2 = (T(mass_d)/(T(charge_d)*pow(AbsB, 3)))*(0.5*v_perp2 + v_par*v_par);
+    T fak2 = (T(mass_d)/(T(charge_d)*pow(AbsB, 3)))*(half_v_perp2 + v_par*v_par);
 
     T BcrossGradAbsB_elt = B_y*GradAbsB_z - B_z*GradAbsB_y;
     derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = fak1*B_x + fak2*BcrossGradAbsB_elt;
@@ -288,13 +288,14 @@ __device__ void rhs_GC_BoozerVacuum(T* derivs, const T* __restrict__ x_temp, con
     dmodBdzeta *= sign;
 
 
-    T fak1 = T(mass_d)*v_par*v_par/modB + T(mass_d)*mu_val;
+    T fak1 = T(mass_d)*(v_par*v_par/modB + mu_val);
     T sdot = -dmodBdtheta*(fak1 * T(inv_psi0_charge_d));
-    T tdot = dmodBds*(fak1 * T(inv_psi0_charge_d)) + iota*(v_par*modB_inv_G);
+    T zetadot = v_par*modB_inv_G;
+    T tdot = dmodBds*(fak1 * T(inv_psi0_charge_d)) + iota*zetadot;
 
     derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = sdot*x1*inv_s - x2*tdot;
     derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK] = sdot*x2*inv_s + x1*tdot;
-    derivs[(nout*deriv_id + 2)*PARTICLES_PER_BLOCK] = (v_par*modB_inv_G);
+    derivs[(nout*deriv_id + 2)*PARTICLES_PER_BLOCK] = zetadot;
     derivs[(nout*deriv_id + 3)*PARTICLES_PER_BLOCK] = -(iota*dmodBdtheta + dmodBdzeta)*mu_val*modB_inv_G;
 
     // if collisions are turned on, write out the magnetic field magnitude
