@@ -124,6 +124,7 @@ __constant__ int nparticles_d; // number of particles being traced
 __constant__ double v_total_d; // initial velocity
 
 __constant__ double psi0_d; // used for Boozer RHS only
+__constant__ double inv_psi0_d; // used for Boozer RHS only, precompute 1 / psi0_d
 __constant__ double inv_psi0_charge_d; // used for Boozer RHS only, precompute 1 / (charge_d * psi0_d)
 __constant__ double saw_srange_d[4]; // used for SAW RHS only
 
@@ -288,10 +289,10 @@ __device__ void rhs_GC_BoozerVacuum(T* derivs, const T* __restrict__ x_temp, con
     dmodBdzeta *= sign;
 
 
-    T fak1 = T(mass_d)*(v_par*v_par/modB + mu_val);
-    T sdot = -dmodBdtheta*(fak1 * T(inv_psi0_charge_d));
+    T fak1 = T(mass_d)*(v_par*v_par/modB + mu_val) * T(inv_psi0_charge_d);
+    T sdot = -dmodBdtheta*fak1;
     T zetadot = v_par*modB_inv_G;
-    T tdot = dmodBds*(fak1 * T(inv_psi0_charge_d)) + iota*zetadot;
+    T tdot = dmodBds*fak1 + iota*zetadot;
 
     derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = sdot*x1*inv_s - x2*tdot;
     derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK] = sdot*x2*inv_s + x1*tdot;
@@ -321,13 +322,13 @@ __device__ void rhs_GC_Boozer(T* derivs, const T* __restrict__ x_temp, const T* 
     T v_par = x_temp[4*PARTICLES_PER_BLOCK];
 
     T modB = block_interpolants[0*PARTICLES_PER_BLOCK];
-    T dmodBdpsi = block_interpolants[1*PARTICLES_PER_BLOCK] / T(psi0_d);
+    T dmodBdpsi = block_interpolants[1*PARTICLES_PER_BLOCK] * T(inv_psi0_d);
     T dmodBdtheta = block_interpolants[2*PARTICLES_PER_BLOCK];
     T dmodBdzeta = block_interpolants[3*PARTICLES_PER_BLOCK];
     T G = block_interpolants[4*PARTICLES_PER_BLOCK];
-    T dGdpsi = block_interpolants[5*PARTICLES_PER_BLOCK] / T(psi0_d);
+    T dGdpsi = block_interpolants[5*PARTICLES_PER_BLOCK] * T(inv_psi0_d);
     T I = block_interpolants[6*PARTICLES_PER_BLOCK];
-    T dIdpsi = block_interpolants[7*PARTICLES_PER_BLOCK] / T(psi0_d);
+    T dIdpsi = block_interpolants[7*PARTICLES_PER_BLOCK] * T(inv_psi0_d);
     T iota = block_interpolants[8*PARTICLES_PER_BLOCK];
     T K = block_interpolants[9*PARTICLES_PER_BLOCK];
     T dKdtheta = block_interpolants[10*PARTICLES_PER_BLOCK];
@@ -399,15 +400,15 @@ __device__ void rhs_GC_BoozerVacuumSAW(T* derivs, const T* __restrict__ x_temp, 
         T v_par = x_temp[4*PARTICLES_PER_BLOCK+p];
 
         T modB = block_interpolants[0*PARTICLES_PER_BLOCK+p];
-        T dmodBdpsi = block_interpolants[1*PARTICLES_PER_BLOCK+p] / T(psi0_d);
+        T dmodBdpsi = block_interpolants[1*PARTICLES_PER_BLOCK+p] * T(inv_psi0_d);
         T dmodBdtheta = block_interpolants[2*PARTICLES_PER_BLOCK+p];
         T dmodBdzeta = block_interpolants[3*PARTICLES_PER_BLOCK+p];
         T G = block_interpolants[4*PARTICLES_PER_BLOCK+p];
-        T dGdpsi = block_interpolants[5*PARTICLES_PER_BLOCK+p] / T(psi0_d);
+        T dGdpsi = block_interpolants[5*PARTICLES_PER_BLOCK+p] * T(inv_psi0_d);
         T I = block_interpolants[6*PARTICLES_PER_BLOCK+p];
-        T dIdpsi = block_interpolants[7*PARTICLES_PER_BLOCK+p] / T(psi0_d);
+        T dIdpsi = block_interpolants[7*PARTICLES_PER_BLOCK+p] * T(inv_psi0_d);
         T iota = block_interpolants[8*PARTICLES_PER_BLOCK+p];
-        T diotadpsi = block_interpolants[9*PARTICLES_PER_BLOCK+p] / T(psi0_d);
+        T diotadpsi = block_interpolants[9*PARTICLES_PER_BLOCK+p] * T(inv_psi0_d);
         T mu_val = mu[p];
 
         T sign = symmetry_exploited[p] ? (T)-1.0 : (T)1.0;
@@ -450,7 +451,7 @@ __device__ void rhs_GC_BoozerVacuumSAW(T* derivs, const T* __restrict__ x_temp, 
 
                 T phihat_i = left_phihat + s_slope*(s_diff);
                 T phi_i = phihat_i * pt_sin;
-                T dphidpsi_i = s_slope * pt_sin / T(psi0_d);
+                T dphidpsi_i = s_slope * pt_sin * T(inv_psi0_d);
                 // T phidot_i = phihat_i * pt_cos * saw_omega;
                 T dphidtheta_i = phihat_i * pt_cos * m;
                 T dphidzeta_i = -phihat_i * pt_cos * n;
@@ -495,7 +496,7 @@ __device__ void rhs_GC_BoozerVacuumSAW(T* derivs, const T* __restrict__ x_temp, 
 
             T iota_minus_dalphadpsi_G = iota - dalphadpsi_G;
 
-            T sdot = (-dmodBdtheta*fak1_over_q + dalphadtheta_G*vpar_modB_over_G - dphidtheta) / T(psi0_d);
+            T sdot = (-dmodBdtheta*fak1_over_q + dalphadtheta_G*vpar_modB_over_G - dphidtheta) * T(inv_psi0_d);
             T tdot = (dmodBdpsi*fak1_over_q) + iota_minus_dalphadpsi_G*vpar_modB_over_G + dphidpsi;
 
             derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK + p] = sdot*cos_theta - (x2 * tdot);
@@ -527,15 +528,15 @@ __device__ void rhs_GC_BoozerNoKSAW(T* derivs, const T* __restrict__ x_temp, con
     T v_par = x_temp[4*PARTICLES_PER_BLOCK];
 
     T modB = block_interpolants[0*PARTICLES_PER_BLOCK];
-    T dmodBdpsi = block_interpolants[1*PARTICLES_PER_BLOCK] / T(psi0_d);
+    T dmodBdpsi = block_interpolants[1*PARTICLES_PER_BLOCK] * T(inv_psi0_d);
     T dmodBdtheta = block_interpolants[2*PARTICLES_PER_BLOCK];
     T dmodBdzeta = block_interpolants[3*PARTICLES_PER_BLOCK];
     T G = block_interpolants[4*PARTICLES_PER_BLOCK];
-    T dGdpsi = block_interpolants[5*PARTICLES_PER_BLOCK] / T(psi0_d);
+    T dGdpsi = block_interpolants[5*PARTICLES_PER_BLOCK] * T(inv_psi0_d);
     T I = block_interpolants[6*PARTICLES_PER_BLOCK];
-    T dIdpsi = block_interpolants[7*PARTICLES_PER_BLOCK] / T(psi0_d);
+    T dIdpsi = block_interpolants[7*PARTICLES_PER_BLOCK] * T(inv_psi0_d);
     T iota = block_interpolants[8*PARTICLES_PER_BLOCK];
-    T diotadpsi = block_interpolants[9*PARTICLES_PER_BLOCK] / T(psi0_d);
+    T diotadpsi = block_interpolants[9*PARTICLES_PER_BLOCK] * T(inv_psi0_d);
 
     T mu_val = mu[0];
 
@@ -573,7 +574,7 @@ __device__ void rhs_GC_BoozerNoKSAW(T* derivs, const T* __restrict__ x_temp, con
         T pt_sin = sin(m*theta - n*zeta + saw_omega*time);
 
         T phihat_i = left_phihat + s_slope*(s_diff);
-        T dphihatdpsi = s_slope / T(psi0_d);
+        T dphihatdpsi = s_slope * T(inv_psi0_d);
 
         T phi_i = phihat_i * pt_sin;
         T dphidpsi_i = dphihatdpsi * pt_sin;
@@ -600,7 +601,7 @@ __device__ void rhs_GC_BoozerNoKSAW(T* derivs, const T* __restrict__ x_temp, con
     T fak1 = T(mass_d)*v_par*v_par/modB + T(mass_d)*mu_val;
     T denom = (T(charge_d)*(G + I*(-alpha*dGdpsi + iota) + alpha*G*dIdpsi)
             + T(mass_d)*v_par/modB * (-dGdpsi*I + G*dIdpsi));
-    T sdot = (-G*dphidtheta*T(charge_d) + I*dphidzeta*T(charge_d) + modB*T(charge_d)*v_par*(dalphadtheta*G-dalphadzeta*I) + (-dmodBdtheta*G + dmodBdzeta*I)*fak1)/(denom*T(psi0_d));
+    T sdot = (-G*dphidtheta*T(charge_d) + I*dphidzeta*T(charge_d) + modB*T(charge_d)*v_par*(dalphadtheta*G-dalphadzeta*I) + (-dmodBdtheta*G + dmodBdzeta*I)*fak1)*T(inv_psi0_d)/(denom);
     T tdot = (G*T(charge_d)*dphidpsi + modB*T(charge_d)*v_par*(-dalphadpsi*G - alpha*dGdpsi + iota) - dGdpsi*T(mass_d)*v_par*v_par \
                     + dmodBdpsi*G*fak1)/denom;
     derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = sdot*x1*inv_s - x2*tdot;
@@ -1572,6 +1573,8 @@ vector<T> boozer_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> srange
     double inv_psi0_charge = 1.0 / (psi0*q);
     gpuErrchk(cudaMemcpyToSymbol(psi0_d, &psi0, sizeof(double)));
     gpuErrchk(cudaMemcpyToSymbol(inv_psi0_charge_d, &inv_psi0_charge, sizeof(double)));
+    double inv_psi0 = 1.0 / psi0;
+    gpuErrchk(cudaMemcpyToSymbol(inv_psi0_d, &inv_psi0, sizeof(double)));
 
     std::vector<T> results;
     if (vacuum) {
@@ -1629,8 +1632,10 @@ vector<double> boozer_collision_gpu_tracing(py::array_t<double> quad_pts, py::ar
         const vector<ThermalBackground>& backgrounds, bool vacuum, unsigned long long rng_seed){
 
     double inv_psi0_charge = 1.0 / (psi0*q);
+    double inv_psi0 = 1.0 / psi0;
     gpuErrchk(cudaMemcpyToSymbol(psi0_d, &psi0, sizeof(double)));
     gpuErrchk(cudaMemcpyToSymbol(inv_psi0_charge_d, &inv_psi0_charge, sizeof(double)));
+    gpuErrchk(cudaMemcpyToSymbol(inv_psi0_d, &inv_psi0, sizeof(double)));
 
     py::array_t<double> mu_in = py::array_t<double>(nparticles);
     std::fill_n(mu_in.mutable_data(), nparticles, -1.0);
@@ -1687,6 +1692,10 @@ vector<T> boozer_saw_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> sr
     saw_srange_ext[3] = (saw_srange_ext[1] - saw_srange_ext[0]) / (saw_srange_ext[2] - 1);
     gpuErrchk(cudaMemcpyToSymbol(saw_srange_d, saw_srange_ext, 4*sizeof(double)) );
     gpuErrchk(cudaMemcpyToSymbol(psi0_d, &psi0, sizeof(double)));
+
+    // copy inv_psi0 to constant memory
+    double inv_psi0 = 1.0 / psi0;
+    gpuErrchk(cudaMemcpyToSymbol(inv_psi0_d, &inv_psi0, sizeof(double)));
 
     std::vector<T> results =  gpu_tracing<T, RHS::GC_BoozerVacuumSAW, false>(quad_pts, srange, trange, zrange, stz_init, m, q, vtotal, vtang, tmax, tol, dt_in, mu_in, nparticles,
                                                                         saw_omega, saw_m_d, saw_n_d, saw_phihats_d, saw_nharmonics);
@@ -1753,6 +1762,10 @@ vector<T> boozer_saw_nok_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double
     saw_srange_ext[3] = (saw_srange_ext[1] - saw_srange_ext[0]) / (saw_srange_ext[2] - 1);
     gpuErrchk(cudaMemcpyToSymbol(saw_srange_d, saw_srange_ext, 4*sizeof(double)) );
     gpuErrchk(cudaMemcpyToSymbol(psi0_d, &psi0, sizeof(double)));
+
+    // copy inv_psi0 to constant memory
+    double inv_psi0 = 1.0 / psi0;
+    gpuErrchk(cudaMemcpyToSymbol(inv_psi0_d, &inv_psi0, sizeof(double)));
 
     std::vector<T> results =  gpu_tracing<T, RHS::GC_BoozerNoKSAW, false>(quad_pts, srange, trange, zrange, stz_init, m, q, vtotal, vtang, tmax, tol, dt_in, mu_in, nparticles,
                                                                         saw_omega, saw_m_d, saw_n_d, saw_phihats_d, saw_nharmonics);
@@ -2197,6 +2210,8 @@ py::array_t<T> test_derivatives_boozer(py::array_t<T> quad_pts, py::array_t<doub
     gpuErrchk(cudaMemcpyToSymbol(psi0_d, &psi0, sizeof(double)));
     double inv_psi0_charge = 1.0 / (psi0*q);
     gpuErrchk(cudaMemcpyToSymbol(inv_psi0_charge_d, &inv_psi0_charge, sizeof(double)));
+    double inv_psi0 = 1.0 / psi0;
+    gpuErrchk(cudaMemcpyToSymbol(inv_psi0_d, &inv_psi0, sizeof(double)));
 
     py::array_t<T> time = py::array_t<T>(n_points); // dummy time
     std::fill(time.mutable_data(), time.mutable_data() + n_points, T(0.0));
@@ -2242,6 +2257,8 @@ py::array_t<T> test_derivatives_saw(py::array_t<T> quad_pts, py::array_t<double>
     saw_srange_ext[3] = (saw_srange_ext[1] - saw_srange_ext[0]) / (saw_srange_ext[2] - 1);
 
     gpuErrchk(cudaMemcpyToSymbol(psi0_d, &psi0, sizeof(double)));
+    double inv_psi0 = 1.0 / psi0;
+    gpuErrchk(cudaMemcpyToSymbol(inv_psi0_d, &inv_psi0, sizeof(double)));
     gpuErrchk(cudaMemcpyToSymbol(saw_srange_d, saw_srange_ext, 4*sizeof(double)) );
 
     py::array_t<T> out = test_gpu_derivatives<T, RHS::GC_BoozerVacuumSAW>(quad_pts, x1_range, x2_range, x3_range, loc, vpar, time, v_total, m, q, n_points,
@@ -2290,6 +2307,8 @@ py::array_t<T> test_derivatives_saw_nok(py::array_t<T> quad_pts, py::array_t<dou
     saw_srange_ext[3] = (saw_srange_ext[1] - saw_srange_ext[0]) / (saw_srange_ext[2] - 1);
 
     gpuErrchk(cudaMemcpyToSymbol(psi0_d, &psi0, sizeof(double)));
+    double inv_psi0 = 1.0 / psi0;
+    gpuErrchk(cudaMemcpyToSymbol(inv_psi0_d, &inv_psi0, sizeof(double)));
     gpuErrchk(cudaMemcpyToSymbol(saw_srange_d, saw_srange_ext, 4*sizeof(double)) );
 
     py::array_t<T> out = test_gpu_derivatives<T, RHS::GC_BoozerNoKSAW>(quad_pts, x1_range, x2_range, x3_range, loc, vpar, time, v_total, m, q, n_points,
@@ -2557,6 +2576,9 @@ vector<double> test_timestep_boozer(py::array_t<double> quad_pts, py::array_t<do
     gpuErrchk(cudaMemcpyToSymbol(psi0_d, &psi0, sizeof(double)));
     double inv_psi0_charge = 1.0 / (psi0*q);
     gpuErrchk(cudaMemcpyToSymbol(inv_psi0_charge_d, &inv_psi0_charge, sizeof(double)));
+    double inv_psi0 = 1.0 / psi0;
+    gpuErrchk(cudaMemcpyToSymbol(inv_psi0_d, &inv_psi0, sizeof(double)));
+
     vector<double> particle_output;
     if (vacuum) {
         particle_output = test_gpu_timestep<RHS::GC_BoozerVacuum>(quad_pts, x1_range, x2_range, x3_range, loc_init, m, q, vtotal, vtang, tol, nparticles);
@@ -2613,6 +2635,8 @@ vector<double> test_timestep_saw(py::array_t<double> quad_pts, py::array_t<doubl
     saw_srange_ext[3] = (saw_srange_ext[1] - saw_srange_ext[0]) / (saw_srange_ext[2] - 1);
 
     gpuErrchk(cudaMemcpyToSymbol(psi0_d, &psi0, sizeof(double)));
+    double inv_psi0 = 1.0 / psi0;
+    gpuErrchk(cudaMemcpyToSymbol(inv_psi0_d, &inv_psi0, sizeof(double)));
     gpuErrchk(cudaMemcpyToSymbol(saw_srange_d, saw_srange_ext, 4*sizeof(double)) );
     vector<double> particle_output = test_gpu_timestep<RHS::GC_BoozerVacuumSAW>(quad_pts, x1_range, x2_range, x3_range, loc_init, m, q, v_total, vtang, tol, nparticles,
                                                                         saw_omega, saw_m_d, saw_n_d, saw_phihats_d, saw_nharmonics);
@@ -2670,6 +2694,8 @@ vector<double> test_timestep_saw_nok(py::array_t<double> quad_pts, py::array_t<d
     saw_srange_ext[3] = (saw_srange_ext[1] - saw_srange_ext[0]) / (saw_srange_ext[2] - 1);
 
     gpuErrchk(cudaMemcpyToSymbol(psi0_d, &psi0, sizeof(double)));
+    double inv_psi0 = 1.0 / psi0;
+    gpuErrchk(cudaMemcpyToSymbol(inv_psi0_d, &inv_psi0, sizeof(double)));
     gpuErrchk(cudaMemcpyToSymbol(saw_srange_d, saw_srange_ext, 4*sizeof(double)) );
     vector<double> particle_output = test_gpu_timestep<RHS::GC_BoozerNoKSAW>(quad_pts, x1_range, x2_range, x3_range, loc_init, m, q, v_total, vtang, tol, nparticles,
                                                                         saw_omega, saw_m_d, saw_n_d, saw_phihats_d, saw_nharmonics);
