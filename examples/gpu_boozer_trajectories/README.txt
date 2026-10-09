@@ -8,4 +8,8 @@ Each trajectory is written to trajectories.h5 as its own dataset, of shape
 (nsaved, 5), whose rows are (t, s, theta, zeta, vpar); a particle that was
 lost has fewer rows. The example then traces the same particles in one
 uninterrupted call and reports how far the two final states differ, which is
-a measure of the integration error rather than of the saving.
+a check that saving leaves the adaptive trace unchanged. Both calls use
+dense output at tmax and neither restarts integration at save times.
+
+For a smaller example that also plots the saved trajectories and extracts
+Poincare sections, see examples/gpu_dense_output/README.md.

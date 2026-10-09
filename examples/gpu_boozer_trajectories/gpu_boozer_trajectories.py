@@ -75,6 +75,7 @@ res_tys, res_hits = trace_particles_boozer_gpu(
     charge=charge,
     tol=tol,
     dt_save=dt_save,
+    forget_exact_path=False,
 )
 
 with h5py.File("trajectories.h5", "w") as f:
@@ -86,12 +87,8 @@ with h5py.File("trajectories.h5", "w") as f:
         f.create_dataset(f"particle_{i:06d}", data=traj)
 
 ### CHECK AGAINST A SINGLE UNINTERRUPTED TRACE
-# Feeding dt and mu back between chunks continues the same adaptive step
-# sequence as a single trace, so while steps are error-limited the final
-# states agree to roundoff. When the tolerance is loose enough that steps
-# are capped by the maximum step size, which the kernel sets from the field
-# at the start of each call, the two runs take different steps and differ
-# at the level of the integration error.
+# Both calls integrate without restarts and evaluate the terminal state with
+# the same continuous extension. Saving does not change the adaptive trace.
 res_tys_single, res_hits_single = trace_particles_boozer_gpu(
     field_gpu,
     stz_inits,

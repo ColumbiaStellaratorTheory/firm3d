@@ -12,6 +12,13 @@ The three main classes are:
 2. **PassingPoincare**: For passing particles in unperturbed fields
 3. **PassingPerturbedPoincare**: For passing particles in fields with shear Alfvén wave perturbations
 
+GPU trajectories can also be used to plot approximate sections after tracing.
+The :ref:`GPU dense-output examples <gpu_dense_output_examples>` save paths
+and interpolate toroidal-plane crossings between saved samples, with an
+explicit choice of crossing direction. Section accuracy depends on the
+saving interval; these crossings are not the event roots computed by the
+classes below.
+
 Trapped Poincaré Maps
 ---------------------
 

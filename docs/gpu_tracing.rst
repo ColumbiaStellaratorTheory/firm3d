@@ -91,6 +91,11 @@ precision. It is freed before returning; no step history is retained.
 For large ensembles, use ``forget_exact_path=True`` when only endpoints are
 needed, or trace smaller batches.
 
+For runnable trajectory saving, reloading, and Poincaré plotting examples,
+see :ref:`gpu_dense_output_examples`. The Poincaré example extracts
+approximate sections from the saved samples on the CPU; it does not add
+coordinate-plane event detection to the GPU tracer.
+
 Saving also adds interpolation, transfer, and host assembly work. For
 10,000 particles on one Perlmutter A100 80 GB GPU, the following timings
 describe the initial dense-output implementation at ``6e0fcb4a``. These
@@ -140,7 +145,7 @@ about 10% more GPU execution time. Most of the full-call overhead in
 this case comes from output transfer and host trajectory assembly.
 
 Comparison with the previous saving method
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The previous implementation restarted tracing at every save interval,
 passing the last step size and magnetic moment to the next launch. It
@@ -339,7 +344,7 @@ to 10 milliseconds, in both precisions. JSON retains individual measurements,
 native-call timings, loaded source paths, and source/build hashes.
 
 Controlled cost of dense endpoints
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The comparison with master combines interpolation with changes that remove
 redundant GPU calculations and reduce host assembly cost. To isolate endpoint

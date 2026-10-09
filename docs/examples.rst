@@ -109,6 +109,63 @@ Traces 1 trapped particle in the Wistell-A configuration scaled to the size and 
    cd examples/plot_trajectory/
    python plot_trajectory.py
 
+.. _gpu_dense_output_examples:
+
+GPU Trajectory Saving and Poincaré Sections
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Location**: ``examples/gpu_dense_output/``
+
+Traces 32 co-passing alpha particles in the bundled ATEN equilibrium, in double
+precision, and saves their paths using the GPU's Dormand–Prince dense output.
+The default trace lasts 1 millisecond and saves every 0.1 microsecond. Run on
+a GPU node from the repository root:
+
+.. code-block:: console
+
+   python examples/gpu_dense_output/save_trajectories.py
+   python examples/gpu_dense_output/plot_poincare.py
+
+The first script writes ``trajectories.npz`` and ``trajectories.png`` in
+``examples/gpu_dense_output/output/``. The archive contains separate numeric
+arrays for each particle's ``(t, s, theta, zeta, vpar)`` rows, its loss hits,
+the initial conditions, and solver settings. Reload a path with:
+
+.. code-block:: python
+
+   import numpy as np
+
+   with np.load("examples/gpu_dense_output/output/trajectories.npz",
+                allow_pickle=False) as saved:
+       path = saved["particle_000000"]
+
+The second script can run without a GPU. It reads the saved paths, unwraps
+both Boozer angles, and interpolates positive crossings of ``zeta=0`` modulo
+``2*pi``. It writes ``poincare.csv`` and ``poincare.png``, showing the section
+in ``(theta, s)`` and the pseudo-poloidal plane.
+
+Section crossings are approximations from the saved samples. They use linear
+interpolation between dense-output samples, rather than the CPU tracer's
+event root finder. Each angle must advance by less than ``pi`` per saved
+interval. Check section convergence by decreasing ``dt_save``; for example:
+
+.. code-block:: console
+
+   python examples/gpu_dense_output/save_trajectories.py \
+       --dt-save 5e-8 --output-dir /tmp/gpu-dense-fine
+   python examples/gpu_dense_output/plot_poincare.py \
+       /tmp/gpu-dense-fine/trajectories.npz
+
+The particles are initialized deterministically, so corresponding crossings
+can be compared by particle ID. Options also select another section angle,
+crossing direction, tracing duration, table resolution, or ensemble size.
+The default GPU history buffer is approximately 18 MB; storage grows with
+particles times requested samples. See the example's ``README.md`` for details.
+
+The larger ``examples/gpu_boozer_trajectories/`` and
+``examples/gpu_cartesian_trajectories/`` examples demonstrate HDF5 trajectory
+storage and compare saved terminal states with endpoint-only tracing.
+
 Resolution Studies
 ~~~~~~~~~~~~~~~~~~
 

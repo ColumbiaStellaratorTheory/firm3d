@@ -9,3 +9,4 @@ Each trajectory is written to trajectories.h5 as its own dataset, of shape
 (nsaved, 5), whose rows are (t, x, y, z, vpar); a particle that was lost has
 fewer rows. The example then traces the same particles in one uninterrupted
 call and reports how far the two final states differ.
+Both calls use dense output at tmax without restarting at save times.
