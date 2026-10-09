@@ -42,6 +42,9 @@ jobs:
             "$WORK_DIR/run_gpu_tests.sh" "$WORK_DIR" "$GITHUB_WORKSPACE" \
             | awk '{print $NF}')
           echo "Submitted SLURM job $JOB_ID"
+          # Cancel the job if this step is cancelled or the runner dies.
+          trap 'scancel "$JOB_ID" 2>/dev/null || true' EXIT
+          trap 'exit 143' INT TERM
 
           echo "Polling job $JOB_ID every 60 s..."
           while true; do
@@ -50,7 +53,7 @@ jobs:
             STATE=$(squeue -j "$JOB_ID" -h -o '%T' 2>/dev/null || true)
             echo "  $(date '+%H:%M:%S')  state: ${STATE:-DONE}"
             case "$STATE" in
-              PENDING|CONFIGURING|RUNNING|COMPLETING) sleep 60 ;;
+              PENDING|CONFIGURING|RUNNING|COMPLETING) sleep 60 & wait $! ;;
               FAILED|TIMEOUT|CANCELLED|OUT_OF_MEMORY)
                 cat "$WORK_DIR/slurm-$JOB_ID.out" || true
                 echo "::error::SLURM job ended in state: $STATE"
@@ -58,6 +61,7 @@ jobs:
               *) break ;;
             esac
           done
+          trap - EXIT INT TERM
 
           cat "$WORK_DIR/slurm-$JOB_ID.out"
 
@@ -108,6 +112,9 @@ jobs:
               "$WORK_DIR/run_gpu_tests.sh" "$WORK_DIR" "$GITHUB_WORKSPACE/master-checkout" \
               | awk '{print $NF}')
             echo "Submitted SLURM job $JOB_ID"
+            # Cancel the job if this step is cancelled or the runner dies.
+            trap 'scancel "$JOB_ID" 2>/dev/null || true' EXIT
+            trap 'exit 143' INT TERM
 
             echo "Polling job $JOB_ID every 60 s..."
             while true; do
@@ -116,7 +123,7 @@ jobs:
               STATE=$(squeue -j "$JOB_ID" -h -o '%T' 2>/dev/null || true)
               echo "  $(date '+%H:%M:%S')  state: ${STATE:-DONE}"
               case "$STATE" in
-                PENDING|CONFIGURING|RUNNING|COMPLETING) sleep 60 ;;
+                PENDING|CONFIGURING|RUNNING|COMPLETING) sleep 60 & wait $! ;;
                 FAILED|TIMEOUT|CANCELLED|OUT_OF_MEMORY)
                   cat "$WORK_DIR/slurm-$JOB_ID.out" || true
                   echo "::error::SLURM job ended in state: $STATE"
@@ -124,6 +131,7 @@ jobs:
                 *) break ;;
               esac
             done
+            trap - EXIT INT TERM
 
             cat "$WORK_DIR/slurm-$JOB_ID.out"
 
