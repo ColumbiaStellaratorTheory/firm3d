@@ -1,51 +1,71 @@
-#!/usr/bin/env python
-
 import numpy as np
-import pandas as pd
 
-from firm3d.catapult.field import CatapultBoozerField
-from firm3d.catapult.tracing import trace_particles_boozer_gpu
+from firm3d.catapult.field import CatapultPerturbedBoozerField
+from firm3d.catapult.tracing import trace_particles_boozer_perturbed_gpu
 from firm3d.field.boozermagneticfield import (
     BoozerRadialInterpolant,
     InterpolatedBoozerField,
+    ShearAlfvenWavesSuperposition,
 )
-from firm3d.field.tracing_helpers import (
-    initialize_position_profile,
-    initialize_velocity_uniform,
-)
-from firm3d.util.constants import (
-    ALPHA_PARTICLE_CHARGE,
-    ALPHA_PARTICLE_MASS,
-    FUSION_ALPHA_PARTICLE_ENERGY,
-)
+from firm3d.field.tracing_helpers import initialize_position_profile
+
+# for SAW wave
+from firm3d.saw.ae3d import AE3DEigenvector
+from firm3d.util.constants import ALPHA_PARTICLE_CHARGE as CHARGE
+from firm3d.util.constants import ALPHA_PARTICLE_MASS as MASS
+from firm3d.util.constants import FUSION_ALPHA_PARTICLE_ENERGY as ENERGY
 from firm3d.util.functions import in_github_actions, in_gpu_benchmark, sigmav
+
+import pandas as pd
 import json
 import time
 
+np.random.seed(1800)
+
+### tracing parameters
 if in_gpu_benchmark:
-    resolution, nparticles, tol, tmax = 15, 100000, 1e-6, 1e-2
+    nparticles, tmax, tol, n_metagrid_pts = 100000, 1e-2, 1e-6, 15
 elif in_github_actions:
-    resolution, nparticles, tol, tmax = 5, 100, 1e-4, 1e-4
+    nparticles, tmax, tol, n_metagrid_pts = 100, 1e-4, 1e-4, 5
 else:
-    resolution, nparticles, tol, tmax = 15, 30000, 1e-6, 1e-4
+    nparticles, tmax, tol, n_metagrid_pts = 100000, 1e-4, 1e-6, 15
 
 ### CREATE A FIELD FOR TRACING
 boozmn_filename = "../inputs/boozmn_ariescs_low_res.nc"
+
 start_bri = time.perf_counter()
 bri = BoozerRadialInterpolant(boozmn_filename, 3, enforce_vacuum=True)
 bri_time = time.perf_counter() - start_bri
 
+nfp = bri.nfp
+degree = 3
+srange = (0, 1, n_metagrid_pts)
+thetarange = (0, np.pi, n_metagrid_pts)
+zetarange = (0, 2 * np.pi / nfp, n_metagrid_pts)
+
 start_ibf = time.perf_counter()
 field = InterpolatedBoozerField(
     bri,
-    3,
-    ns_interp=resolution,
-    ntheta_interp=resolution,
-    nzeta_interp=resolution,
+    degree,
+    ns_interp=n_metagrid_pts,
+    ntheta_interp=n_metagrid_pts,
+    nzeta_interp=n_metagrid_pts,
 )
 ibf_time = time.perf_counter() - start_ibf
-# set seed for consistency
-np.random.seed(8)
+
+### SET UP A PERTURBED B FIELD
+saw_filename = "../tracing_with_AE/ae.npy"
+
+# generate saw object
+saw = ShearAlfvenWavesSuperposition.from_ae3d(
+    eigenvector=AE3DEigenvector.load_from_numpy(
+        filename=saw_filename,
+    ),
+    B0=field,
+    max_dB_normal_by_B0=5e-3,
+    minor_radius_meters=1.7,
+)
+
 
 # Define fusion birth distribution
 # Bader, A., et al. "Modeling of energetic particle transport in optimized
@@ -54,59 +74,58 @@ nD = lambda s: 1 - s**5  # Normalized density
 nT = nD
 T = lambda s: 11.5 * (1 - s)  # Temperature in keV
 
-# D-T cross-section
 # Reactivity profile
 reactivity = lambda s: nD(s) * nT(s) * sigmav(T(s))
-stz_inits = initialize_position_profile(field, nparticles, reactivity, seed=1)
 
-Ekin = FUSION_ALPHA_PARTICLE_ENERGY
-mass = ALPHA_PARTICLE_MASS
-charge = ALPHA_PARTICLE_CHARGE
-# Isotropic pitch angle: v_par/v drawn uniformly in [-1, 1] at fixed birth energy
-v0 = np.sqrt(2 * Ekin / mass)
-vpar_inits = initialize_velocity_uniform(v0, nparticles, seed=1)
+stz_inits = initialize_position_profile(field, nparticles, reactivity)
 
-# The field is tabulated for the GPU once, at the resolution and precision to
-# trace in; the tracing calls then need neither.
+# tabulate the perturbed field for the GPU once
 start_setup = time.perf_counter()
-field_dbl = CatapultBoozerField(bri, resolution, resolution, resolution)
-setup_time_dbl = time.perf_counter() - start_setup
-
-field_flt = CatapultBoozerField(
-    bri, resolution, resolution, resolution, precision="single"
+field_gpu_dbl = CatapultPerturbedBoozerField(
+    saw, n_metagrid_pts, n_metagrid_pts, n_metagrid_pts
 )
+print(f"number of harmonics: {field_gpu_dbl.saw_nharmonics}")
 
-# Trace in double precision. As for the CPU tracer, res_tys holds each
-# particle's (t, s, theta, zeta, vpar) rows and res_hits its boundary crossing,
-# so the same post-processing serves both.
+setup_time_dbl = time.perf_counter() - start_setup
+field_gpu_flt = CatapultPerturbedBoozerField(
+    saw, n_metagrid_pts, n_metagrid_pts, n_metagrid_pts, precision="single"
+)
+VELOCITY = np.sqrt(2 * ENERGY / MASS)
+vpar_init = np.random.uniform(-VELOCITY, VELOCITY, (nparticles,))
+
+# The waves do work on the particles, so, as for trace_particles_boozer_perturbed,
+# the magnetic moment is given per particle rather than the energy.
+field.set_points(stz_inits)
+mu_init = (VELOCITY**2 - vpar_init**2) / (2 * field.modB()[:, 0])
+
 start_dbl = time.perf_counter()
-res_tys_dbl, res_hits_dbl = trace_particles_boozer_gpu(
-    field_dbl,
+res_tys_dbl, res_hits_dbl = trace_particles_boozer_perturbed_gpu(
+    field_gpu_dbl,
     stz_inits,
-    vpar_inits,
+    vpar_init,
+    mu_init,
     tmax=tmax,
-    mass=mass,
-    charge=charge,
-    Ekin=Ekin,
+    mass=MASS,
+    charge=CHARGE,
+    Ekin=ENERGY,
     tol=tol,
-    forget_exact_path=True,
 )
 dbl_time = time.perf_counter() - start_dbl
 
-# trace in single precision: the inputs are cast to the field's precision
 start_flt = time.perf_counter()
-res_tys_flt, res_hits_flt = trace_particles_boozer_gpu(
-    field_flt,
+res_tys_flt, res_hits_flt = trace_particles_boozer_perturbed_gpu(
+    field_gpu_flt,
     stz_inits,
-    vpar_inits,
+    vpar_init,
+    mu_init,
     tmax=tmax,
-    mass=mass,
-    charge=charge,
-    Ekin=Ekin,
+    mass=MASS,
+    charge=CHARGE,
+    Ekin=ENERGY,
     tol=tol,
-    forget_exact_path=True,
 )
 flt_time = time.perf_counter() - start_flt
+
 
 final_dbl = np.array([traj[-1] for traj in res_tys_dbl])
 final_flt = np.array([traj[-1] for traj in res_tys_flt])
@@ -115,7 +134,7 @@ particle_data = pd.DataFrame(
         "s_start": stz_inits[:, 0],
         "t_start": stz_inits[:, 1],
         "z_start": stz_inits[:, 2],
-        "vpar_start": vpar_inits,
+        "vpar_start": vpar_init,
         "last_time_dbl": final_dbl[:, 0],
         "s_end_dbl": final_dbl[:, 1],
         "t_end_dbl": final_dbl[:, 2],
@@ -142,7 +161,7 @@ print(f"Dbl. Loss fraction: {loss_fraction_dbl:.3f}")
 timing_result = {
     "nparticles": nparticles,
     "tolerance": tol,
-    "resolution": resolution,
+    "resolution": n_metagrid_pts,
     "loss_fraction_dbl": loss_fraction_dbl,
     "loss_fraction_flt": loss_fraction_flt,
     "tmax": tmax,
@@ -154,5 +173,5 @@ timing_result = {
         "tracing_flt": flt_time,
     },
 }
-with open("gpu_boozer_tracing_results.json", "w") as f:
+with open("gpu_saw_nok_tracing_results.json", "w") as f:
     json.dump(timing_result, f, indent=2)
