@@ -84,28 +84,28 @@ jobs:
           name: codecov-perlmutter
 
 
-      ### build master for timing comparison
-      - name: Checkout master
+      ### build base branch for timing comparison
+      - name: Checkout target branch
         if: github.event_name == 'pull_request'
         uses: actions/checkout@v4
         with:
-          ref: master
-          path: master-checkout
+          ref: ${{ github.base_ref }}
+          path: base-checkout
 
-      - name: Submit SLURM job and wait (master)
-        id: slurm_master
+      - name: Submit SLURM job and wait (base)
+        id: slurm_base
         if: github.event_name == 'pull_request' && steps.slurm.outcome == 'success'
         env:
           NERSC_ACCOUNT: ${{ secrets.NERSC_ACCOUNT }}
-          WORK_DIR: ${{ runner.temp }}/firm3d-master-${{ github.sha }}
+          WORK_DIR: ${{ runner.temp }}/firm3d-base-${{ github.sha }}
         run: |
             mkdir -p "$WORK_DIR"
-            cp master-checkout/.github/scripts/run_gpu_tests.sh "$WORK_DIR/run_gpu_tests.sh"
+            cp base-checkout/.github/scripts/run_gpu_tests.sh "$WORK_DIR/run_gpu_tests.sh"
 
             JOB_ID=$(sbatch \
               --account="$NERSC_ACCOUNT" \
               --output="$WORK_DIR/slurm-%j.out" \
-              "$WORK_DIR/run_gpu_tests.sh" "$WORK_DIR" "$GITHUB_WORKSPACE/master-checkout" \
+              "$WORK_DIR/run_gpu_tests.sh" "$WORK_DIR" "$GITHUB_WORKSPACE/base-checkout" \
               | awk '{print $NF}')
             echo "Submitted SLURM job $JOB_ID"
 
@@ -141,7 +141,7 @@ jobs:
             # Record whether coverage was produced for the next step.
             [ -f "$WORK_DIR/coverage.xml" ] && echo "coverage=true" >> "$GITHUB_OUTPUT" || true
 
-      - name: Compare against master
+      - name: Compare against base
         id: compare
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         run: |
@@ -159,17 +159,17 @@ jobs:
             "${{ runner.temp }}/firm3d-master-${{ github.sha }}/gpu_cartesian_tracing_results.json" \
             "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_cartesian_tracing_results.json" \
             "GC Cartesian Vacuum" \
-            "${{ runner.temp }}/firm3d-master-${{ github.sha }}/gpu_boozer_saw_tracing_results.json" \
+            "${{ runner.temp }}/firm3d-base-${{ github.sha }}/gpu_boozer_saw_tracing_results.json" \
             "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_boozer_saw_tracing_results.json" \
             "GC Boozer Vacuum + SAW" \
-            "${{ runner.temp }}/firm3d-master-${{ github.sha }}/gpu_boozer_collisional_tracing_results.json" \
+            "${{ runner.temp }}/firm3d-base-${{ github.sha }}/gpu_boozer_collisional_tracing_results.json" \
             "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_boozer_collisional_tracing_results.json" \
             "Boozer Vacuum Collisions" \
             "${{ runner.temp }}/firm3d-master-${{ github.sha }}/gpu_cartesian_collisional_tracing_results.json" \
             "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_cartesian_collisional_tracing_results.json" \
             "GC Cartesian Collisions" \
             --pr-status "${{ steps.slurm.outcome }}" \
-            --master-status "${{ steps.slurm_master.outcome }}" \
+            --base-status "${{ steps.slurm_base.outcome }}" \
             -o "${{ runner.temp }}/firm3d-${{ github.sha }}/pr_comment.md"
 
       - name: Comment PR with results
@@ -183,4 +183,4 @@ jobs:
         if: always()
         run: |
             rm -rf "${{ runner.temp }}/firm3d-${{ github.sha }}"
-            rm -rf "${{ runner.temp }}/firm3d-master-${{ github.sha }}"
+            rm -rf "${{ runner.temp }}/firm3d-base-${{ github.sha }}"
