@@ -1,0 +1,40 @@
+--- a/src/firm3dpp/cuda_kernel.cu
++++ b/src/firm3dpp/cuda_kernel.cu
+@@ -974,7 +974,7 @@
+     // All four component threads read the old state and all seven stages
+     // before FSAL overwrites k1. Rejected steps produce no samples.
+     size_t count = SaveHistory && out && is_valid[p] ? saved_counts[p] : 0;
+-    if(accept && out){
++    if(accept && out && SaveHistory){
+         const double end = double(t[p]) + double(dt_p);
+         if constexpr(SaveHistory){
+             const double limit = min(end, tmax[p]);
+@@ -1206,7 +1206,7 @@
+             size_t count = SaveHistory ? saved_counts[threadIdx.x] : 0;
+             const bool write_endpoint = SaveHistory
+                 ? (!finished[threadIdx.x] || count == 0)
+-                : (block_t[threadIdx.x] < block_tmax[threadIdx.x] || block_tmax[threadIdx.x] == 0.0);
++                : true;
+             if(write_endpoint){
+                 if(count > 0 && out[(size_t(idx) * (nsave + 1) + count - 1) * 7] == block_t[threadIdx.x]){
+                     --count;
+@@ -1412,7 +1412,7 @@
+     gpuErrchk(cudaMemcpy(out_d, particle_output.mutable_data(), out_bytes, cudaMemcpyHostToDevice));
+
+     EndpointSnapshot<T> terminal{};
+-    if(!nsave){
++    if(false && !nsave){
+         gpuErrchk(cudaMalloc((void**)&terminal.data, 28 * size_t(nparticles) * sizeof(T)));
+         gpuErrchk(cudaMalloc((void**)&terminal.h, size_t(nparticles) * sizeof(T)));
+         gpuErrchk(cudaMemset(terminal.h, 0, size_t(nparticles) * sizeof(T)));
+@@ -1454,10 +1454,6 @@
+         particle_trace_kernel<T, id, true><<<nblks, nthreads>>>(out_d, init_pos_d, quadpts_d, derivs_d, mu_d, tmax_d, t_d, dt_d, dtmax_d, save_times_d, nsave, terminal, args...);
+     } else {
+         particle_trace_kernel<T, id, false><<<nblks, nthreads>>>(out_d, init_pos_d, quadpts_d, derivs_d, mu_d, tmax_d, t_d, dt_d, dtmax_d, save_times_d, nsave, terminal, args...);
+-        gpuErrchk(cudaGetLastError());
+-        constexpr int threads = 128;
+-        const size_t blocks = (4 * size_t(nparticles) + threads - 1) / threads;
+-        interpolate_endpoints<T, id><<<blocks, threads>>>(out_d, terminal, tmax_d, nparticles);
+     }
+
+     gpuErrchk(cudaGetLastError());

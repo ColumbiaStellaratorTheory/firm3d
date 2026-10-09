@@ -338,6 +338,165 @@ The default cases cover 1,000--100,000 particles and durations from 1 microsecon
 to 10 milliseconds, in both precisions. JSON retains individual measurements,
 native-call timings, loaded source paths, and source/build hashes.
 
+Controlled cost of dense endpoints
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The comparison with master combines interpolation with changes that remove
+redundant GPU calculations and reduce host assembly cost. To isolate endpoint
+interpolation, a second comparison on 2026-10-09 used two builds of the updated
+code at ``82af7f82``. Both retained those optimizations, the double-precision
+integration clock, and identical Python tracing code. The control removed only
+terminal-step capture, its temporary allocations, and the interpolation kernel,
+and returned the first accepted endpoint at or beyond ``tmax``. The normal build
+returned the dense endpoint at exactly ``tmax``. Both calls used
+``forget_exact_path=True``.
+
+This comparison used one Perlmutter A100 40 GB GPU, the same ATEN equilibrium,
+table, particles, and tolerance as above, two warm-ups and five measured calls
+per build, and alternating call order. It covered 16 combinations of precision,
+1,000--100,000 particles, and durations of 1 microsecond, 0.1 millisecond, and
+1 millisecond. The ATEN endpoint integration kernel's register count was
+identical in the two builds: 88 in double precision and 90 in single precision.
+
+For the 1 millisecond traces, the full-call median differences were between
+-0.51% and +0.58%. At 100,000 particles, interpolation added approximately
+16 milliseconds to calls taking 5.6--7.6 seconds, or 0.21--0.28%.
+These small differences are comparable to the variation between repeated
+calls and should be treated as workload-specific estimates.
+
+.. list-table:: Controlled endpoint-only full public call
+   :header-rows: 1
+
+   * - Precision
+     - Particles
+     - tmax (s)
+     - Raw endpoint (s)
+     - Dense endpoint (s)
+     - Difference
+   * - Double
+     - 1,000
+     - 0.001
+     - 1.07022
+     - 1.07445
+     - +0.39%
+   * - Double
+     - 10,000
+     - 0.001
+     - 1.32415
+     - 1.32908
+     - +0.37%
+   * - Double
+     - 100,000
+     - 0.001
+     - 7.55068
+     - 7.56631
+     - +0.21%
+   * - Single
+     - 1,000
+     - 0.001
+     - 0.68300
+     - 0.68697
+     - +0.58%
+   * - Single
+     - 10,000
+     - 0.001
+     - 0.97066
+     - 0.96568
+     - -0.51%
+   * - Single
+     - 100,000
+     - 0.001
+     - 5.62857
+     - 5.64445
+     - +0.28%
+
+Shorter cases had substantial timing variation. For example, the initial
+five-repeat medians suggested +30% for 100,000 particles at 1 microsecond in
+double precision and +21% for 1,000 particles at 0.1 millisecond in single
+precision. A follow-up on an A100 80 GB GPU used five warm-ups and fifteen
+measured calls per build; the same cases then measured +2.32% and +0.55%.
+Both builds shared the same GPU within each comparison.
+
+.. list-table:: Short cases, fifteen-repeat full-call medians
+   :header-rows: 1
+
+   * - Precision
+     - Particles
+     - tmax (s)
+     - Raw endpoint (s)
+     - Dense endpoint (s)
+     - Difference
+   * - Double
+     - 10,000
+     - 1e-06
+     - 0.00991
+     - 0.01014
+     - +2.24%
+   * - Double
+     - 100,000
+     - 1e-06
+     - 0.07393
+     - 0.07564
+     - +2.32%
+   * - Double
+     - 1,000
+     - 0.0001
+     - 0.10680
+     - 0.11205
+     - +4.92%
+   * - Double
+     - 100,000
+     - 0.0001
+     - 0.83376
+     - 0.83555
+     - +0.21%
+   * - Single
+     - 1,000
+     - 0.0001
+     - 0.06957
+     - 0.06996
+     - +0.55%
+   * - Single
+     - 100,000
+     - 0.0001
+     - 0.63476
+     - 0.63896
+     - +0.66%
+
+Other short-case medians in the follow-up ranged from -3.31% to -1.11%; some
+changed sign between runs. Individual short calls also showed intermittent
+spikes in both builds. These data do not establish a precise universal
+interpolation overhead for short traces. Allocation and terminal processing
+costs can make a larger relative contribution when integration is short.
+
+The comparison includes allocations, transfers, the endpoint interpolation
+kernel, and public result assembly. Native-call timing includes allocations
+and transfers too; it is not a measurement of GPU kernel execution alone.
+With histories disabled, the additional GPU storage holds one terminal step
+per particle (``29 * Nparticles * sizeof(T)``), independent of integration
+duration. No additional right-hand-side evaluations are used for interpolation.
+
+The control passed analytic Cartesian checks for 50,000 particles including
+losses and zero-duration traces, in both precisions, and Compute Sanitizer
+reported zero memory errors. Dense-history CPU agreement and save-cadence
+independence tests also passed with the control build. Its overshooting
+endpoint is intentional and should not be used for exact-time results.
+
+To reproduce, apply ``examples/benchmark_gpu_endpoints_raw_control.patch`` to
+an isolated copy of the feature checkout and build it with the same CUDA
+configuration. Run from the normal feature checkout with:
+
+.. code-block:: console
+
+    python examples/benchmark_gpu_endpoints.py --baseline /path/to/raw-control \
+        --baseline-kind raw_endpoint --repeats 5 --warmups 2 \
+        --cases 10000:1e-6 100000:1e-6 1000:1e-4 10000:1e-4 100000:1e-4 \
+            1000:1e-3 10000:1e-3 100000:1e-3 --output gpu-endpoint-ablation.json
+
+``--baseline-kind`` labels and checks the baseline's API; it does not change
+the algorithm in the loaded extension. The JSON records both extension hashes
+and the matching Python source hashes along with individual measurements.
+
 Single precision
 ----------------
 

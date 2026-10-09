@@ -1,9 +1,11 @@
-"""Compare forget_exact_path=True with a separately built master checkout.
+"""Compare forget_exact_path=True with a separately built baseline checkout.
 
 Run on one GPU node with --baseline /path/to/master --output endpoints.json.
 Both implementations stay loaded in separate processes. Warm-up, tabulation,
 and garbage collection are excluded; alternating call order reduces timing
 bias. The full public call includes transfers and host result assembly.
+Use --baseline-kind raw_endpoint for a control with the same optimizations
+and terminal interpolation removed, keeping the dense-output API unchanged.
 """
 
 import argparse
@@ -146,6 +148,15 @@ def request(process, value):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", type=Path)
+    parser.add_argument(
+        "--baseline-kind",
+        choices=["master", "raw_endpoint"],
+        default="master",
+        help=(
+            "Use raw_endpoint for an optimized control build "
+            "with no terminal interpolation."
+        ),
+    )
     parser.add_argument("--output", type=Path, default=Path("gpu-endpoints.json"))
     parser.add_argument("--cases", nargs="+", default=DEFAULT_CASES)
     parser.add_argument("--repeats", type=int, default=9)
@@ -163,7 +174,7 @@ def main():
         worker(args)
         return
     if args.baseline is None:
-        parser.error("--baseline must name the separately built master checkout")
+        parser.error("--baseline must name a separately built baseline checkout")
     if args.repeats < 1 or args.warmups < 1:
         parser.error("repeats and warmups must be positive")
     cases = []
@@ -187,10 +198,11 @@ def main():
         "implementations": {},
         "results": [],
     }
+    baseline_label = args.baseline_kind
     for precision in ["double", "single"]:
         processes = {}
         try:
-            for name, checkout in [("master", args.baseline), ("dense", ROOT)]:
+            for name, checkout in [(baseline_label, args.baseline), ("dense", ROOT)]:
                 env = os.environ | {"PYTHONPATH": str(checkout / "src")}
                 processes[name] = subprocess.Popen(
                     [
@@ -198,7 +210,7 @@ def main():
                         "-u",
                         str(Path(__file__).resolve()),
                         "--worker",
-                        name,
+                        "master" if name == "master" else "dense",
                         "--precision",
                         precision,
                         "--tol",
@@ -216,7 +228,9 @@ def main():
                 measurements = {name: [] for name in processes}
                 for repeat in range(args.warmups + args.repeats):
                     order = (
-                        ["master", "dense"] if repeat % 2 == 0 else ["dense", "master"]
+                        [baseline_label, "dense"]
+                        if repeat % 2 == 0
+                        else ["dense", baseline_label]
                     )
                     for name in order:
                         result = request(processes[name], case)
@@ -237,8 +251,8 @@ def main():
                     record[f"{name}_native_seconds"] = statistics.median(
                         item["native_seconds"] for item in measurements[name]
                     )
-                record["dense_over_master"] = (
-                    record["dense_seconds"] / record["master_seconds"]
+                record[f"dense_over_{baseline_label}"] = (
+                    record["dense_seconds"] / record[f"{baseline_label}_seconds"]
                 )
                 data["results"].append(record)
                 print(
