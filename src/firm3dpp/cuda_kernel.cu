@@ -139,10 +139,11 @@ template <typename T, int n> __device__ void interpolate(T*  out, const T* __res
 
     // 8 threads per particles, iterate over particles in the block
     for(int p=threadIdx.x / 8; p<PARTICLES_PER_BLOCK; p+= THREADS_PER_BLOCK/8){
+        const bool p_valid = is_valid[p];
         // cell_ids from build_state
-        const int i = cell_index_start[3*p];
-        const int j = cell_index_start[3*p + 1];
-        const int k = cell_index_start[3*p + 2];
+        const int i = p_valid ? cell_index_start[3*p] : 0;
+        const int j = p_valid ? cell_index_start[3*p + 1] : 0;
+        const int k = p_valid ? cell_index_start[3*p + 2] : 0;
 
         // constant third dimension index for the thread
         const int kk = threadIdx.x % 4;
@@ -154,11 +155,8 @@ template <typename T, int n> __device__ void interpolate(T*  out, const T* __res
         const int base_offset = 64*n*(i*n_x2_d * n_x3_d + j*n_x3_d + k) + 4*jj + kk;
 
         // each thread handles two j,k pairs, compute shape contributions
-        const T shape_jk1 = shape_fun_vals[(8 + kk)*PARTICLES_PER_BLOCK + p] * shape_fun_vals[(4 + jj)*PARTICLES_PER_BLOCK + p];
-        const T shape_jk2 = shape_fun_vals[(8 + kk)*PARTICLES_PER_BLOCK + p] * shape_fun_vals[(4 + jj + 2)*PARTICLES_PER_BLOCK + p];
-
-        // only issue loads if the particle is still alive
-        const bool p_valid = is_valid[p];
+        const T shape_jk1 = p_valid ? shape_fun_vals[(8 + kk)*PARTICLES_PER_BLOCK + p] * shape_fun_vals[(4 + jj)*PARTICLES_PER_BLOCK + p] : T(0);
+        const T shape_jk2 = p_valid ? shape_fun_vals[(8 + kk)*PARTICLES_PER_BLOCK + p] * shape_fun_vals[(4 + jj + 2)*PARTICLES_PER_BLOCK + p] : T(0);
 
         // iterate over interpolant elements
         // in gc boozer vacuum, this is modB, dmodBds, dmodBdtheta, dmodBdzeta, G, iota
@@ -679,11 +677,15 @@ __device__ void build_state(T* x_temp, bool* symmetry_exploited, int* cell_index
         x_temp[threadIdx.x] = t[threadIdx.x] + T(dp5_t_wgts[deriv_id])*dt[threadIdx.x];
     }
 
-    // store current location in x_temp
-    for (int idx=threadIdx.x; idx<4*PARTICLES_PER_BLOCK; idx+=PARTICLES_PER_BLOCK) {
+    // Assign each component to one thread; a particle-stride loop repeats
+    // the later components in several lanes of the same warp.
+    for (int idx=threadIdx.x; idx<4*PARTICLES_PER_BLOCK; idx+=THREADS_PER_BLOCK) {
         int particle_id = idx % PARTICLES_PER_BLOCK;
         int state_var = idx / PARTICLES_PER_BLOCK;
 
+        // Inactive slots have no initialized stages (for example tmax=0).
+        // All threads still reach the shared-memory barriers below.
+        if(!is_valid[particle_id]){ continue; }
         x_temp[(state_var+1)*PARTICLES_PER_BLOCK + particle_id] = state[state_var*PARTICLES_PER_BLOCK + particle_id];
         T dt_particle = dt[particle_id];
         for(int j=0; j<deriv_id; ++j){
@@ -922,12 +924,20 @@ __device__ T dense_component(T y0, T h, double fraction, const T* derivs,
 
 // this function estimates error, accepts/rejects the proposed step
 // and adjust the step size
-template<typename T, RHS id, typename Time>
+template<typename T>
+struct EndpointSnapshot {
+    T* data;
+    T* h;
+    double* t;
+};
+
+template<typename T, RHS id, typename Time, bool SaveHistory = true>
 __device__ void adjust_time(Time* t, T* dt, double* tmax, T* state, T* __restrict__ derivs, const T* __restrict__ x_temp,
                             bool* has_left, const T* __restrict__ dtmax, const bool* __restrict__ is_valid,
                             T* out = nullptr, const double* save_times = nullptr, size_t nsave = 0,
                             const int* particle_ids = nullptr, size_t* saved_counts = nullptr,
-                            const T* mu = nullptr, bool* finished = nullptr){
+                            const T* mu = nullptr, bool* finished = nullptr,
+                            EndpointSnapshot<T> terminal = {}){
     // identify a particle and state index
     const int p = threadIdx.x % PARTICLES_PER_BLOCK;   // particle
     const int state_id = threadIdx.x / PARTICLES_PER_BLOCK; // state variable
@@ -963,30 +973,52 @@ __device__ void adjust_time(Time* t, T* dt, double* tmax, T* state, T* __restric
 
     // All four component threads read the old state and all seven stages
     // before FSAL overwrites k1. Rejected steps produce no samples.
-    size_t count = out && is_valid[p] ? saved_counts[p] : 0;
+    size_t count = SaveHistory && out && is_valid[p] ? saved_counts[p] : 0;
     if(accept && out){
         const double end = double(t[p]) + double(dt_p);
-        const double limit = min(end, tmax[p]);
-        while(count < nsave && save_times[count] <= limit){
-            const double tsave = save_times[count];
-            const size_t row = (size_t(particle_ids[p]) * (nsave + 1) + count) * 7;
-            out[row + state_id + 1] = dense_component<T, id>(
-                state[state_id*PARTICLES_PER_BLOCK + p], dt_p,
-                (tsave - double(t[p])) / double(dt_p), derivs, state_id, p);
-            if(state_id == 0){
-                out[row] = T(tsave);
-                out[row + 5] = dt_p;
-                out[row + 6] = mu[p];
+        if constexpr(SaveHistory){
+            const double limit = min(end, tmax[p]);
+            while(count < nsave && save_times[count] <= limit){
+                const double tsave = save_times[count];
+                const size_t row = (size_t(particle_ids[p]) * (nsave + 1) + count) * 7;
+                out[row + state_id + 1] = dense_component<T, id>(
+                    state[state_id*PARTICLES_PER_BLOCK + p], dt_p,
+                    (tsave - double(t[p])) / double(dt_p), derivs, state_id, p);
+                if(state_id == 0){
+                    out[row] = T(tsave);
+                    out[row + 5] = dt_p;
+                    out[row + 6] = mu[p];
+                }
+                ++count;
             }
-            ++count;
         }
         // The terminal time need not be on the save grid. Also used by the
         // final-state-only path, so both paths return the same state at tmax.
-        if(end >= tmax[p] && (count == 0 || save_times[count - 1] != tmax[p])){
-            const size_t row = (size_t(particle_ids[p]) * (nsave + 1) + count) * 7;
-            out[row + state_id + 1] = dense_component<T, id>(
-                state[state_id*PARTICLES_PER_BLOCK + p], dt_p,
-                (tmax[p] - double(t[p])) / double(dt_p), derivs, state_id, p);
+        if(end >= tmax[p] && (!SaveHistory || count == 0 || save_times[count - 1] != tmax[p])){
+            const size_t row = SaveHistory
+                ? (size_t(particle_ids[p]) * (nsave + 1) + count) * 7
+                : size_t(particle_ids[p]) * 7;
+            if constexpr(SaveHistory){
+                out[row + state_id + 1] = dense_component<T, id>(
+                    state[state_id*PARTICLES_PER_BLOCK + p], dt_p,
+                    (tmax[p] - double(t[p])) / double(dt_p), derivs, state_id, p);
+            } else {
+                // Keep double-precision interpolation registers out of the
+                // integration loop, including when the field is float32.
+                const size_t particle = size_t(particle_ids[p]);
+                terminal.data[particle * 28 + state_id] = state[state_id*PARTICLES_PER_BLOCK + p];
+                constexpr int stages[6] = {0, 2, 3, 4, 5, 6};
+                constexpr int nd = map_rhs_to_n_deriv_outputs<id>();
+                #pragma unroll
+                for(int j=0; j<6; ++j){
+                    terminal.data[particle * 28 + 4 + j*4 + state_id] =
+                        derivs[(nd*stages[j] + state_id)*PARTICLES_PER_BLOCK + p];
+                }
+                if(state_id == 0){
+                    terminal.h[particle] = dt_p;
+                    terminal.t[particle] = double(t[p]);
+                }
+            }
             if(state_id == 0){
                 out[row] = T(tmax[p]);
                 out[row + 5] = dt_p;
@@ -995,10 +1027,17 @@ __device__ void adjust_time(Time* t, T* dt, double* tmax, T* state, T* __restric
             ++count;
         }
     }
-    __syncthreads();
-    if(out && accept && state_id == 0){
-        saved_counts[p] = count;
-        finished[p] = double(t[p]) + double(dt_p) >= tmax[p];
+    if constexpr(SaveHistory){
+        __syncthreads();
+        if(out && accept && state_id == 0){
+            saved_counts[p] = count;
+            finished[p] = double(t[p]) + double(dt_p) >= tmax[p];
+        }
+    } else {
+        // The trace block is one warp. Complete terminal reads before
+        // advancing the shared time or replacing the FSAL stage.
+        static_assert(THREADS_PER_BLOCK == 32);
+        __syncwarp(FULL_MASK);
     }
     if(accept){
         state[state_id*PARTICLES_PER_BLOCK + p] = x_temp[(state_id+1)*PARTICLES_PER_BLOCK + p];
@@ -1066,10 +1105,11 @@ __device__ void dp5_one_step(T* x_temp, T* derivs, const T* __restrict__ quadpts
  * The inner loop computes the 7 Dormand Prince derivative estimates.
  * Everything lives in shared memory except the data for the interpolant
  */
-template<typename T, RHS id, typename... Args>
+template<typename T, RHS id, bool SaveHistory, typename... Args>
 __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict__ quadpts_arr, T* derivs, T* mu,
                                             double* tmax,double* t, T* dt, T* dtmax,
-                                            const double* save_times, size_t nsave, Args... args){
+                                            const double* save_times, size_t nsave,
+                                            EndpointSnapshot<T> terminal, Args... args){
     int idx = threadIdx.x + blockIdx.x*PARTICLES_PER_BLOCK;
 
     __shared__ T x_temp[5 * PARTICLES_PER_BLOCK];
@@ -1098,7 +1138,7 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
     // if thread is responsible for a valid particle id, load that particle's data
     if(is_valid){
         particle_ids[threadIdx.x] = idx;
-        saved_counts[threadIdx.x] = 0;
+        if constexpr(SaveHistory){ saved_counts[threadIdx.x] = 0; }
         // block_t[threadIdx.x] = 0.0;
         has_left[threadIdx.x] = false;
         for(int i=0; i<4; ++i){
@@ -1108,7 +1148,7 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
         block_mu[threadIdx.x] = mu[idx]; // copy input mu
         block_t[threadIdx.x] = t[idx]; // copy input t
         block_tmax[threadIdx.x] = tmax[idx]; // copy input tmax
-        finished[threadIdx.x] = block_tmax[threadIdx.x] == 0.0;
+        if constexpr(SaveHistory){ finished[threadIdx.x] = block_tmax[threadIdx.x] == 0.0; }
         block_dtmax[threadIdx.x] = dtmax[idx]; // copy input dtmax
 
     }
@@ -1126,7 +1166,9 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
         __shared__ bool needs_stage0[PARTICLES_PER_BLOCK];
         if(threadIdx.x < PARTICLES_PER_BLOCK){
             active_arr[threadIdx.x] = is_valid_arr[threadIdx.x] &&
-                !finished[threadIdx.x] && !has_left[threadIdx.x];
+                !(SaveHistory ? finished[threadIdx.x]
+                              : block_t[threadIdx.x] >= block_tmax[threadIdx.x]) &&
+                !has_left[threadIdx.x];
             needs_stage0[threadIdx.x] = active_arr[threadIdx.x] && (block_t[threadIdx.x] == 0.0);
         }
         __syncthreads();
@@ -1147,23 +1189,31 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
                             symmetry_exploited, state, block_mu, active_arr, args...);
         dp5_one_step<T, id, 6>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
                             symmetry_exploited, state, block_mu, active_arr, args...);
-        adjust_time<T, id>(block_t, block_dt, block_tmax, state, block_derivs, x_temp,
+        adjust_time<T, id, double, SaveHistory>(block_t, block_dt, block_tmax, state, block_derivs, x_temp,
                           has_left, block_dtmax, is_valid_arr, out, save_times, nsave,
-                          particle_ids, saved_counts, block_mu, finished);
+                          particle_ids, SaveHistory ? saved_counts : nullptr, block_mu,
+                          SaveHistory ? finished : nullptr, terminal);
         __syncthreads();
 
 
         // if the particle has left, go get another one
         if(threadIdx.x < PARTICLES_PER_BLOCK && is_valid_arr[threadIdx.x] && \
-            (finished[threadIdx.x] || has_left[threadIdx.x])){
+            ((SaveHistory ? finished[threadIdx.x]
+                          : block_t[threadIdx.x] >= block_tmax[threadIdx.x]) ||
+             has_left[threadIdx.x])){
             // Dense output already wrote tmax. For an earlier loss, retain
             // the kernel's accepted endpoint and trim unused rows on the host.
-            size_t count = saved_counts[threadIdx.x];
-            if(!finished[threadIdx.x] || count == 0){
+            size_t count = SaveHistory ? saved_counts[threadIdx.x] : 0;
+            const bool write_endpoint = SaveHistory
+                ? (!finished[threadIdx.x] || count == 0)
+                : (block_t[threadIdx.x] < block_tmax[threadIdx.x] || block_tmax[threadIdx.x] == 0.0);
+            if(write_endpoint){
                 if(count > 0 && out[(size_t(idx) * (nsave + 1) + count - 1) * 7] == block_t[threadIdx.x]){
                     --count;
                 }
-                const size_t row = (size_t(idx) * (nsave + 1) + count) * 7;
+                const size_t row = SaveHistory
+                    ? (size_t(idx) * (nsave + 1) + count) * 7
+                    : size_t(idx) * 7;
                 out[row] = block_t[threadIdx.x];
                 for(int i=0; i<4; ++i){
                     out[row + i + 1] = state[i*PARTICLES_PER_BLOCK + threadIdx.x];
@@ -1176,7 +1226,7 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
             idx = atomicAdd(&next_particle_d, 1);
             if(idx < nparticles_d){
                 particle_ids[threadIdx.x] = idx;
-                saved_counts[threadIdx.x] = 0;
+                if constexpr(SaveHistory){ saved_counts[threadIdx.x] = 0; }
                 T* loc_arr = init_pos + 4*idx;
                 for(int i=0; i<4; ++i){
                     state[i*PARTICLES_PER_BLOCK + threadIdx.x] = init_pos[4*idx + i];
@@ -1186,7 +1236,7 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
                 block_t[threadIdx.x] = t[idx];
                 block_dtmax[threadIdx.x] = dtmax[idx];
                 block_tmax[threadIdx.x] = tmax[idx];
-                finished[threadIdx.x] = block_tmax[threadIdx.x] == 0.0;
+                if constexpr(SaveHistory){ finished[threadIdx.x] = block_tmax[threadIdx.x] == 0.0; }
                 has_left[threadIdx.x] = false;
                 symmetry_exploited[threadIdx.x] = false;
             } else {
@@ -1196,6 +1246,31 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
         __syncthreads();
     }
     return;
+}
+
+// Endpoint-only tracing captures just the enclosing step. Evaluate its
+// continuous extension after integration, so its register footprint does
+// not reduce occupancy throughout a long trace. Lost/zero-time paths have h=0.
+template<typename T, RHS id>
+__global__ void interpolate_endpoints(T* out, EndpointSnapshot<T> terminal,
+                                     const double* tmax, int nparticles){
+    const size_t component = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t particle = component / 4;
+    const int state_id = component % 4;
+    if(particle >= size_t(nparticles) || terminal.h[particle] == T(0)){
+        return;
+    }
+    const T* snapshot = terminal.data + particle * 28 + state_id;
+    T value = dopri5_dense_state(snapshot[0], terminal.h[particle],
+        (tmax[particle] - terminal.t[particle]) / double(terminal.h[particle]),
+        snapshot[4], snapshot[8], snapshot[12], snapshot[16], snapshot[20], snapshot[24]);
+    if constexpr(map_rhs_to_coord<id>() == CoordSys::Boozer){
+        if(state_id == 2){
+            value = fmod(value, T(2*M_PI));
+            value += T(2*M_PI) * (value < 0);
+        }
+    }
+    out[particle * 7 + state_id + 1] = value;
 }
 
 
@@ -1336,6 +1411,16 @@ py::array_t<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range
     gpuErrchk(cudaMalloc((void**)&out_d, out_bytes));
     gpuErrchk(cudaMemcpy(out_d, particle_output.mutable_data(), out_bytes, cudaMemcpyHostToDevice));
 
+    EndpointSnapshot<T> terminal{};
+    if(!nsave){
+        gpuErrchk(cudaMalloc((void**)&terminal.data, 28 * size_t(nparticles) * sizeof(T)));
+        gpuErrchk(cudaMalloc((void**)&terminal.h, size_t(nparticles) * sizeof(T)));
+        gpuErrchk(cudaMemset(terminal.h, 0, size_t(nparticles) * sizeof(T)));
+        // Each persistent slot visits a particle once. Its global initial
+        // time can therefore retain the enclosing step's start after tracing.
+        terminal.t = t_d;
+    }
+
     // launch params
     int nthreads = THREADS_PER_BLOCK;
     int setup_nblks = nparticles / PARTICLES_PER_BLOCK + 1;
@@ -1344,8 +1429,13 @@ py::array_t<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range
     int numSMs;
     cudaDeviceGetAttribute(&numSMs, cudaDevAttrMultiProcessorCount, 0);
     int blocks_per_sm;
-    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks_per_sm,
-        particle_trace_kernel<T, id, Args...>, THREADS_PER_BLOCK, 0);
+    if(nsave){
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks_per_sm,
+            particle_trace_kernel<T, id, true, Args...>, THREADS_PER_BLOCK, 0);
+    } else {
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks_per_sm,
+            particle_trace_kernel<T, id, false, Args...>, THREADS_PER_BLOCK, 0);
+    }
     int nblks = blocks_per_sm * numSMs;
 
     int scratch_nblks = max(setup_nblks, nblks);
@@ -1360,7 +1450,15 @@ py::array_t<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range
     // initialize global counter
     int n_total_threads = nblks*PARTICLES_PER_BLOCK;
     gpuErrchk(cudaMemcpyToSymbol(next_particle_d, &n_total_threads, sizeof(int)) );
-    particle_trace_kernel<T, id><<<nblks, nthreads>>>(out_d, init_pos_d, quadpts_d, derivs_d, mu_d, tmax_d, t_d, dt_d, dtmax_d, save_times_d, nsave, args...);
+    if(nsave){
+        particle_trace_kernel<T, id, true><<<nblks, nthreads>>>(out_d, init_pos_d, quadpts_d, derivs_d, mu_d, tmax_d, t_d, dt_d, dtmax_d, save_times_d, nsave, terminal, args...);
+    } else {
+        particle_trace_kernel<T, id, false><<<nblks, nthreads>>>(out_d, init_pos_d, quadpts_d, derivs_d, mu_d, tmax_d, t_d, dt_d, dtmax_d, save_times_d, nsave, terminal, args...);
+        gpuErrchk(cudaGetLastError());
+        constexpr int threads = 128;
+        const size_t blocks = (4 * size_t(nparticles) + threads - 1) / threads;
+        interpolate_endpoints<T, id><<<blocks, threads>>>(out_d, terminal, tmax_d, nparticles);
+    }
 
     gpuErrchk(cudaGetLastError());
     gpuErrchk(cudaMemcpy(particle_output.mutable_data(), out_d, out_bytes, cudaMemcpyDeviceToHost));
@@ -1368,6 +1466,10 @@ py::array_t<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range
     gpuErrchk( cudaFree(quadpts_d) );
     gpuErrchk( cudaFree(init_pos_d) );
     gpuErrchk( cudaFree(out_d) );
+    if(terminal.data){
+        gpuErrchk(cudaFree(terminal.data));
+        gpuErrchk(cudaFree(terminal.h));
+    }
     gpuErrchk(cudaFree(derivs_d));
     gpuErrchk(cudaFree(dt_d));
     gpuErrchk(cudaFree(t_d));

@@ -60,7 +60,7 @@ samples can lie inside one accepted step; changing ``dt_save`` does not
 change the adaptive step sequence. Final-state-only tracing also evaluates
 the state at ``tmax`` rather than returning a later step endpoint.
 
-This is one uninterrupted GPU launch, including for
+This is one uninterrupted integration launch, including for
 ``trace_particles_boozer_perturbed_gpu(..., forget_exact_path=False,
 dt_save=...)``. The waves retain their absolute phase. Each particle may have
 its own ``tmax``. Lost particles still stop at the first accepted endpoint
@@ -81,12 +81,20 @@ saved value before converting the result back to an array.
 Trajectory storage requires a buffer of approximately
 ``7 * nparticles * (ceil(max(tmax) / dt_save) + 1)`` values on the GPU and
 host. Unused rows for lost particles are removed from the returned arrays.
+When there are no intermediate save times (including endpoint-only tracing),
+the tracer captures the last accepted step and evaluates its continuous
+extension in a short second GPU kernel. This keeps the interpolation's
+register footprint out of the integration loop. The temporary step buffer
+uses another ``29 * nparticles`` values in the field's precision on the GPU:
+23.2 MB for 100,000 particles in double precision, or 11.6 MB in single
+precision. It is freed before returning; no step history is retained.
 For large ensembles, use ``forget_exact_path=True`` when only endpoints are
 needed, or trace smaller batches.
 
 Saving also adds interpolation, transfer, and host assembly work. For
-10,000 particles on one Perlmutter A100 80 GB GPU, the following
-double-precision timings use ``tmax=1e-4``, ``tol=1e-8``, the bundled ATEN
+10,000 particles on one Perlmutter A100 80 GB GPU, the following timings
+describe the initial dense-output implementation at ``6e0fcb4a``. These
+double-precision runs use ``tmax=1e-4``, ``tol=1e-8``, the bundled ATEN
 equilibrium, and a ``15 x 15 x 15`` field table. They are medians of three
 warm runs of the public tracing API, including allocation and output
 assembly, with field tabulation excluded. Sample counts exclude the
@@ -125,7 +133,8 @@ relative cost depends on integration length, tolerance, and save cadence.
 Run ``python examples/benchmark_gpu_saving.py --output gpu-saving.json``
 from the repository root to measure another configuration.
 
-A separate Nsight Systems profile measured the integration kernel at
+A separate Nsight Systems profile of that initial implementation measured
+the integration kernel at
 approximately 0.140 s for endpoints only and 0.154 s for 1000 samples,
 about 10% more GPU execution time. Most of the full-call overhead in
 this case comes from output transfer and host trajectory assembly.
@@ -141,9 +150,11 @@ skipped save intervals already passed by an earlier step.
 A separate double-precision comparison on one Perlmutter A100 40 GB GPU used
 the same 10,000 initial particles, field table, ``tmax=1e-4``, and ``tol=1e-8`` for
 both implementations. Timings are medians of three warm calls and include
-the full public API. The baseline GPU kernels and Python tracing code
-are from the parent revision ``76089f7a``. Its byte-identical CPU tracer
-object was reused when scratch-storage access stalled its compilation.
+the full public API. Dense-output timings in this comparison describe the
+initial implementation at ``6e0fcb4a``. The baseline GPU kernels and Python
+tracing code are from the parent revision ``76089f7a``. Its byte-identical
+CPU tracer object was reused when scratch-storage access stalled its
+compilation.
 
 .. list-table:: Previous saving versus dense output, measured on 2026-10-08
    :header-rows: 1
@@ -185,11 +196,15 @@ and integration storage and retain the returned trajectories on the host.
 For single precision, the 1000-sample case took 14.423 s previously and
 0.952 s with dense output, a 15.16-fold speedup, with a 280 MB dense buffer.
 
-Endpoint-only calls were approximately 17% slower in this comparison.
+Endpoint-only calls in that initial implementation were approximately 17%
+slower.
 Their native binding times were nearly unchanged (0.144 s versus
 0.146 s in double precision); most of the additional time was in host
 result assembly. The saving speedups therefore should not be interpreted
-as an endpoint-only speedup.
+as an endpoint-only speedup. The endpoint-only host assembly was subsequently
+changed to build the two-row trajectories together, avoiding per-particle
+filtering and stacking. See the endpoint-only comparison below for the
+performance of this updated path.
 
 Final-state comparisons were also repeated with dense output evaluated at
 each particle's previous-method terminal time, using the 9839 particles that
@@ -208,6 +223,120 @@ then with the new checkout and ``--method dense``. The option verifies
 the loaded implementation; it does not select a different algorithm within
 one build. The JSON records launch counts, timing, grid offsets, and sample
 counts, and the accompanying NPZ stores terminal states for comparisons.
+
+Endpoint-only comparison with master
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+With ``forget_exact_path=True``, trajectories are assembled together on the
+host. A separate endpoint specialization captures the enclosing step and
+runs its dense interpolation after integration, keeping the polynomial's
+register footprint out of the integration loop. State construction now
+assigns each component to one thread, avoiding repeated calculations in
+other lanes. Inactive particle slots do not read uninitialized stages.
+
+A comparison on 2026-10-09 used current upstream master ``76089f7a`` and the
+updated branch on one Perlmutter A100 80 GB GPU. Both builds ran in persistent
+processes with identical initial particles, the ATEN equilibrium, a
+``15 x 15 x 15`` table, and ``tol=1e-8``. Each case had one warm-up followed by
+three measured calls per build, alternating their order. Field tabulation
+and garbage collection were excluded; GPU allocation, transfer, and host
+result assembly were included. The baseline used independently compiled
+GPU kernels and bindings, with the byte-identical CPU tracer object reused
+as described above.
+
+All 22 combinations of ensemble size, integration time, and precision had
+unchanged or lower median full-call times. The 1 ms and 10 ms cases improved
+by 4.9--10.8%. Selected timings follow; these are wall-clock seconds, and
+``tmax`` is the physical integration duration in seconds.
+
+.. list-table:: Endpoint-only full public call
+   :header-rows: 1
+
+   * - Precision
+     - Particles
+     - tmax (s)
+     - Master (s)
+     - Updated branch (s)
+   * - Double
+     - 1,000
+     - 1e-06
+     - 0.00746
+     - 0.00428
+   * - Double
+     - 10,000
+     - 0.0001
+     - 0.18352
+     - 0.13940
+   * - Double
+     - 100,000
+     - 0.0001
+     - 1.20816
+     - 0.83961
+   * - Double
+     - 100,000
+     - 0.001
+     - 8.34569
+     - 7.55746
+   * - Double
+     - 10,000
+     - 0.01
+     - 14.14503
+     - 13.25480
+   * - Single
+     - 1,000
+     - 1e-06
+     - 0.00678
+     - 0.00301
+   * - Single
+     - 10,000
+     - 0.0001
+     - 0.14665
+     - 0.11082
+   * - Single
+     - 100,000
+     - 0.0001
+     - 1.05046
+     - 0.63827
+   * - Single
+     - 100,000
+     - 0.001
+     - 6.31722
+     - 5.63245
+   * - Single
+     - 10,000
+     - 0.01
+     - 10.38244
+     - 9.67437
+
+The small single-precision case with 1,000 particles and ``tmax=1e-4`` was
+approximately unchanged: 0.0774 s on master and 0.0772 s on the branch.
+Its native binding was slightly slower (0.0731 s versus 0.0766 s); faster
+host assembly offset that cost. Endpoint interpolation still adds work, so
+the full-call gains should not be interpreted as zero native overhead for
+every workload.
+
+A separate nine-repeat check of that 1,000-particle case on an A100 40 GB
+GPU also found lower full-call medians: 0.1307 s versus 0.1206 s in double
+precision, and 0.0827 s versus 0.0770 s in single precision. This check used
+three warm-ups and alternating call order on the same GPU for both builds.
+
+The 33 GPU tests passed, including comparisons between endpoint-only and
+history terminal states for Cartesian, equilibrium, and wave fields.
+Compute Sanitizer memory, initialization, and race checks passed on the
+loss/zero-duration/work-stealing case and the multiple-sample case, with
+zero errors or hazards. The timing comparison covers the ATEN vacuum field;
+correctness checks also cover the other supported kernels.
+
+To repeat the paired comparison with a separately built master checkout:
+
+.. code-block:: console
+
+    python examples/benchmark_gpu_endpoints.py --baseline /path/to/master \
+        --repeats 3 --warmups 1 --output gpu-endpoints.json
+
+The default cases cover 1,000--100,000 particles and durations from 1 microsecond
+to 10 milliseconds, in both precisions. JSON retains individual measurements,
+native-call timings, loaded source paths, and source/build hashes.
 
 Single precision
 ----------------

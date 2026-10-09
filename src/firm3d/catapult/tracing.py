@@ -56,7 +56,7 @@ def _launch_boozer(
     save_times=None,
 ):
     """
-    One CATAPULT launch in a CatapultBoozerField or a
+    One uninterrupted CATAPULT trace in a CatapultBoozerField or a
     CatapultPerturbedBoozerField, from pseudo-Cartesian initial conditions
     x_inits of shape (nparticles, 3). Every T-typed array is cast to the
     field's dtype, which the bindings require, and the arguments are checked
@@ -141,7 +141,7 @@ def _launch_cartesian(
     save_times=None,
 ):
     """
-    One CATAPULT launch in a CatapultCartesianField. Returns the
+    One uninterrupted CATAPULT trace in a CatapultCartesianField. Returns the
     (nparticles, 7) array (t, x, y, z, vpar, dt, mu) in the field's dtype,
     or a list of trajectory arrays when save_times is given.
     """
@@ -257,8 +257,8 @@ def save_trajectories_boozer_gpu(
     mu=None,
 ):
     """
-    Trace in one GPU launch, sampling the Dormand-Prince dense output every
-    dt_save and at each particle's tmax. tmax may be scalar or per particle.
+    Trace in one integration launch, sampling the Dormand-Prince dense output
+    every dt_save and at each particle's tmax. tmax may be scalar or per particle.
 
     field is a CatapultBoozerField or CatapultPerturbedBoozerField. Waves
     require explicit mu; their absolute phase is preserved throughout the
@@ -312,8 +312,8 @@ def save_trajectories_cartesian_gpu(
     mu=None,
 ):
     """
-    Trace in one GPU launch, sampling the Dormand-Prince dense output every
-    dt_save and at each particle's tmax. tmax may be scalar or per particle.
+    Trace in one integration launch, sampling the Dormand-Prince dense output
+    every dt_save and at each particle's tmax. tmax may be scalar or per particle.
 
     Returns a list of (nsaved, 7) arrays with rows (t, x, y, z, vpar, dt, mu),
     excluding the initial state at t=0. Every requested time is sampled;
@@ -371,6 +371,23 @@ def _cpu_format(inits, parallel_speeds, bodies, tmax):
     first = np.column_stack(
         (np.zeros(nparticles), np.asarray(inits, dtype=np.float64), parallel_speeds)
     )
+    if isinstance(bodies, np.ndarray):
+        # Endpoint-only tracing returns a dense (nparticles, 1, 7) array.
+        # Assemble all two-row paths together instead of allocating and
+        # filtering an array for each particle. The views have disjoint rows.
+        paths = np.empty((nparticles, 2, 5), dtype=np.float64)
+        paths[:, 0] = first
+        paths[:, 1] = bodies[:, 0, :5]
+        res_tys = [path if path[1, 0] > 0 else path[:1] for path in paths]
+        lost = bodies[:, 0, 0] < tmax * (1 - 1e-6)
+        lost_indices = np.flatnonzero(lost)
+        hit_rows = np.column_stack(
+            (paths[lost, 1, 0], -np.ones(len(lost_indices)), paths[lost, 1, 1:])
+        )
+        res_hits = [np.empty(0) for _ in range(nparticles)]
+        for i, row in zip(lost_indices, hit_rows):
+            res_hits[i] = row[None, :]
+        return res_tys, res_hits
     res_tys = []
     res_hits = []
     for i in range(nparticles):
@@ -416,8 +433,8 @@ def trace_particles_boozer_gpu(
     dt_save: interval at which to record the trajectory when
         forget_exact_path is False
     forget_exact_path: if True, keep only the initial and final state of each
-        particle, in a single launch; if False, save the trajectory every
-        dt_save using dense output within accepted steps
+        particle, in one uninterrupted trace; if False, save the trajectory
+        every dt_save using dense output within accepted steps
 
     Returns: 2 element tuple containing
         - res_tys: a list with one (ntimesteps, 5) array per particle of rows
@@ -450,7 +467,7 @@ def trace_particles_boozer_gpu(
         "tol": tol,
     }
     if forget_exact_path:
-        # one launch, in the pseudo-Cartesian coordinates the kernel
+        # one uninterrupted trace, in the pseudo-Cartesian coordinates the kernel
         # integrates in, and back. The step and the magnetic moment are the
         # kernel's to choose: mu follows from Ekin and the parallel speed,
         # as it does for trace_particles_boozer.
@@ -509,7 +526,7 @@ def trace_particles_boozer_perturbed_gpu(
     tol: tolerance for the ODE solver
     forget_exact_path: if True (the default), save only the initial and
         final state; if False, sample dense output every dt_save. Both paths
-        use one launch and preserve the absolute phase of the waves.
+        use one uninterrupted integration and preserve the waves' absolute phase.
     dt_save: trajectory save interval when forget_exact_path is False.
 
     Returns:

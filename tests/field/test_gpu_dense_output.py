@@ -18,6 +18,7 @@ from firm3d.catapult.field import (
     CatapultPerturbedBoozerField,
 )
 from firm3d.catapult.tracing import (
+    _cpu_format,
     _save_times,
     save_trajectories_boozer_gpu,
     save_trajectories_cartesian_gpu,
@@ -39,6 +40,39 @@ SPEED = np.sqrt(2 * ENERGY / MASS)
 
 
 class TestDenseOutputHost(unittest.TestCase):
+    def test_endpoint_result_format(self):
+        # Both routes must preserve particle order, initial states, losses,
+        # float64 public output, and a single row for zero-duration paths.
+        inits = np.array([[0.3, 0.1, 0.2], [0.4, 0.2, 0.3], [0.5, 0.3, 0.4]])
+        speeds = np.array([1e6, 2e6, 3e6])
+        tmax = np.array([2, 2, 0])
+        for dtype in [np.float32, np.float64]:
+            with self.subTest(dtype=dtype):
+                endpoints = np.array(
+                    [
+                        [2, 0.6, 0.2, 0.3, 1e6, 0.1, 0.2],
+                        [1, 1.1, 0.3, 0.4, 2e6, 0.1, 0.2],
+                        [0, 0.5, 0.3, 0.4, 3e6, 0.1, 0.2],
+                    ],
+                    dtype=dtype,
+                )[:, None, :]
+                paths, hits = _cpu_format(inits, speeds, endpoints, tmax)
+                sampled_paths, sampled_hits = _cpu_format(
+                    inits, speeds, list(endpoints), tmax
+                )
+                self.assertEqual([len(path) for path in paths], [2, 2, 1])
+                self.assertEqual([len(hit) for hit in hits], [0, 1, 0])
+                for i, (path, hit) in enumerate(zip(paths, hits)):
+                    self.assertEqual(path.dtype, np.float64)
+                    np.testing.assert_array_equal(path[0], [0, *inits[i], speeds[i]])
+                    np.testing.assert_array_equal(path, sampled_paths[i])
+                    np.testing.assert_array_equal(hit, sampled_hits[i])
+                np.testing.assert_array_equal(hits[1], [[1, -1, *endpoints[1, 0, 1:5]]])
+        self.assertEqual(
+            _cpu_format(np.empty((0, 3)), [], np.empty((0, 1, 7)), np.array([])),
+            ([], []),
+        )
+
     def test_continuous_extension(self):
         compiler = shlex.split(os.environ.get("CXX", "c++"))
         if not shutil.which(compiler[0]):
@@ -300,6 +334,16 @@ class TestDenseOutputGPU(unittest.TestCase):
             tmax=tmax,
             dt_save=2e-10,
         )
+        endpoints, endpoint_hits = trace_particles_cartesian_gpu(
+            gpu, stz, vpar, tmax=tmax, forget_exact_path=True
+        )
+        np.testing.assert_array_equal(
+            [path[-1] for path in endpoints], [path[-1] for path in tys]
+        )
+        np.testing.assert_array_equal([bool(len(hit)) for hit in endpoint_hits], lost)
+        np.testing.assert_array_equal(
+            [len(path) for path in endpoints], np.where(zero, 1, 2)
+        )
         self.assertEqual(len(tys), nparticles)
         for i, traj in enumerate(tys):
             np.testing.assert_array_equal(traj[0], [0, *stz[i], vpar[i]])
@@ -356,11 +400,11 @@ class TestDenseOutputGPU(unittest.TestCase):
         mus = (SPEED**2 - self.vpar**2) / (2 * self.field.modB().ravel())
         for field in [equilibrium, waves, finite_beta_waves]:
 
-            def run(dt_save, field=field):
+            def run(dt_save, forget_exact_path=False, field=field):
                 kwargs = {
                     "tmax": 2.35e-7,
                     "dt_save": dt_save,
-                    "forget_exact_path": False,
+                    "forget_exact_path": forget_exact_path,
                     "Ekin": ENERGY,
                 }
                 if isinstance(field, CatapultPerturbedBoozerField):
@@ -377,8 +421,10 @@ class TestDenseOutputGPU(unittest.TestCase):
 
             coarse = run(1e-8)
             fine = run(1e-9)
-            for a, b in zip(coarse, fine):
+            endpoints = run(1e-8, forget_exact_path=True)
+            for a, b, endpoint in zip(coarse, fine, endpoints):
                 np.testing.assert_array_equal(a[-1], b[-1])
+                np.testing.assert_array_equal(a[-1], endpoint[-1])
                 self.assertAlmostEqual(a[-1, 0], 2.35e-7, places=15)
 
 
