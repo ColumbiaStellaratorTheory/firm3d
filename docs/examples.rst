@@ -116,73 +116,29 @@ GPU Trajectory Saving and Poincaré Sections
 
 **Location**: ``examples/gpu_dense_output/``
 
-To reproduce the physical parameters of the existing unperturbed CPU
-passing-map example and compare its section with GPU trajectories, run:
-
-.. code-block:: console
-
-   python examples/gpu_dense_output/compare_poincare.py
-
-This uses the full ATEN file, 120 co-passing 3.5 MeV alpha particles with
-``lambda=0``, cubic interpolation with 48 cells per coordinate, ``tol=1e-8``,
-and 1,000 requested returns. The CPU reference uses ``PassingPoincare``.
-The GPU table reproduces its no-K equations, including the radial variation
-of ``I`` and ``G``. A continuous CPU control and a halved GPU saving interval
-separate restart effects from section-interpolation errors. The script writes
-a comparison figure, CSV sections, saved GPU trajectories, and numerical
-errors/timings in ``output/comparison/``. See the example's README for
-the boundary and timing differences between these workflows.
-
-The smaller trajectory-saving demonstration traces 32 co-passing alpha
-particles in the bundled ATEN equilibrium, in double
-precision, and saves their paths using the GPU's Dormand–Prince dense output.
-The default trace lasts 1 millisecond and saves every 0.1 microsecond. Run on
-a GPU node from the repository root:
+Run the saving and plotting examples from the repository root on a GPU node:
 
 .. code-block:: console
 
    python examples/gpu_dense_output/save_trajectories.py
    python examples/gpu_dense_output/plot_poincare.py
 
-The first script writes ``trajectories.npz`` and ``trajectories.png`` in
-``examples/gpu_dense_output/output/``. The archive contains separate numeric
-arrays for each particle's ``(t, s, theta, zeta, vpar)`` rows, its loss hits,
-the initial conditions, and solver settings. Reload a path with:
+They write an NPZ trajectory archive, trajectory and Poincaré figures, and
+CSV section data. Plotting saved trajectories can run without a GPU.
+Sections use interpolation between saved samples; check convergence by
+reducing ``dt_save``.
 
-.. code-block:: python
-
-   import numpy as np
-
-   with np.load("examples/gpu_dense_output/output/trajectories.npz",
-                allow_pickle=False) as saved:
-       path = saved["particle_000000"]
-
-The second script can run without a GPU. It reads the saved paths, unwraps
-both Boozer angles, and interpolates positive crossings of ``zeta=0`` modulo
-``2*pi``. It writes ``poincare.csv`` and ``poincare.png``, showing the section
-in ``(theta, s)`` and the pseudo-poloidal plane.
-
-Section crossings are approximations from the saved samples. They use linear
-interpolation between dense-output samples, rather than the CPU tracer's
-event root finder. Each angle must advance by less than ``pi`` per saved
-interval. Check section convergence by decreasing ``dt_save``; for example:
+To compare with the parameters of the existing unperturbed CPU passing-map
+example, run:
 
 .. code-block:: console
 
-   python examples/gpu_dense_output/save_trajectories.py \
-       --dt-save 5e-8 --output-dir /tmp/gpu-dense-fine
-   python examples/gpu_dense_output/plot_poincare.py \
-       /tmp/gpu-dense-fine/trajectories.npz
+   python examples/gpu_dense_output/compare_poincare.py
 
-The particles are initialized deterministically, so corresponding crossings
-can be compared by particle ID. Options also select another section angle,
-crossing direction, tracing duration, table resolution, or ensemble size.
-The default GPU history buffer is approximately 18 MB; storage grows with
-particles times requested samples. See the example's ``README.md`` for details.
-
-The larger ``examples/gpu_boozer_trajectories/`` and
-``examples/gpu_cartesian_trajectories/`` examples demonstrate HDF5 trajectory
-storage and compare saved terminal states with endpoint-only tracing.
+The example README describes the shared physical parameters, output formats,
+controls, and boundary differences. The larger
+``examples/gpu_boozer_trajectories/`` and
+``examples/gpu_cartesian_trajectories/`` examples demonstrate HDF5 storage.
 
 Resolution Studies
 ~~~~~~~~~~~~~~~~~~

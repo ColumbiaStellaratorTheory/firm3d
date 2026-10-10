@@ -54,46 +54,6 @@ timing includes the momentum/WBA work; GPU timing includes trajectory saving
 and host result assembly. These are different workloads, and their ratio
 is not a pure integrator speedup. CPU tracing uses one MPI rank.
 
-The full parameter set was run on Perlmutter with an A100 80 GB GPU and an
-AMD EPYC 7763 CPU. All three methods returned 114,000 crossings: 114 particles
-completed all 1,000 returns, and the other six reached the CPU example's
-boundary before their first return. Return counts matched for every particle.
-The continuous integration horizon was 5.862 ms. The GPU and CPU table
-quantities agreed to a maximum scaled error of `1.25e-12`.
-
-Single-call times, excluding field setup and file/figure writing:
-
-| Workflow | Seconds |
-| --- | ---: |
-| Existing CPU map, including momentum and WBA | 213.98 |
-| Continuous CPU, saved at `5e-8` s plus event roots | 208.78 |
-| GPU trace, saved at `1e-7` s | 15.41 |
-| GPU trace, saved at `5e-8` s | 16.12 |
-| GPU section extraction, coarse / fine | 0.53 / 1.00 |
-
-Across all paired returns, using circular differences for `theta`:
-
-| Comparison | RMS difference in `s` | Maximum difference in `s` | Maximum difference in `theta` (rad) |
-| --- | ---: | ---: | ---: |
-| GPU fine vs existing CPU map | `7.73e-4` | `3.71e-2` | `0.369` |
-| Continuous CPU roots vs existing CPU map | `1.22e-3` | `5.99e-2` | `0.633` |
-| GPU coarse vs fine saving cadence | `1.72e-4` | `8.25e-4` | `3.01e-3` |
-| CPU fine sampled sections vs its own event roots | `5.50e-5` | `2.14e-4` | `7.61e-4` |
-
-The three plots show the same overall orbit structure, but corresponding
-long orbits do not agree exactly at the CPU example's tolerance. For the first
-ten returns, GPU fine versus CPU has maximum differences of `2.03e-4` in `s`
-and `7.38e-4` radians in `theta`. Differences grow with return number; the
-largest occurs for particle 101, launched at `s=102/121`. Halving the saving
-interval reduces section-interpolation error but has little effect on that
-long-orbit difference. The CPU continuous-versus-restarting control also
-diverges, so sampling cadence alone does not establish orbit convergence.
-Converge the integration tolerance separately for individual long orbits.
-
-Measured values are saved in `perlmutter_comparison.json`; the script regenerates
-the figures and a fresh `comparison.json`. The fine GPU history buffer in this
-run is approximately 788 MB, in addition to the field table and host copies.
-
 For a short check using the existing CPU example's CI parameters:
 
 ```console
@@ -106,15 +66,6 @@ To audit selected orbits at tighter tolerance while retaining the same
 ```console
 python examples/gpu_dense_output/compare_poincare.py --particle-ids 99 101 --tol 1e-10 --dt-save 1e-8 --output-dir /tmp/poincare-tight
 ```
-
-This selected-orbit check was also run on Perlmutter. With `tol=1e-10` and
-fine saving at `5e-9` s, the maximum GPU-versus-CPU-map differences fell to
-`1.17e-3` in `s` and `8.49e-3` radians in `theta`. The two GPU save cadences
-differed by at most `7.96e-6` in `s`. This supports converging integration
-separately from section sampling; it does not establish full convergence.
-For this two-particle workload, CPU map time was 13.26 s and GPU fine tracing
-plus extraction was 25.61 s. The GPU performance advantage of the full
-120-particle example does not extend to this small, tighter-tolerance workload.
 
 ## Small trajectory-saving demonstration
 
@@ -172,19 +123,10 @@ python examples/gpu_dense_output/plot_poincare.py /tmp/gpu-dense-fine/trajectori
 The initial particles are deterministic, so compare crossings for the same
 particle in `poincare.csv`. Changing `dt_save` changes section interpolation
 accuracy without changing the adaptive GPU integration. Full histories use
-memory proportional to particles times samples; the default GPU history
-buffer is approximately 18 MB. Use `--nparticles`, `--tmax`, `--dt-save`,
+memory proportional to particles times samples. Use `--nparticles`, `--tmax`, `--dt-save`,
 `--resolution`, and `--tol` to adjust the trace.
 
-The default example and the halved interval were validated on Perlmutter's
-A100 80 GB GPU on 2026-10-09. Both returned 4,272 positive crossings from 32
-surviving particles. Terminal states and all shared saved states were
-identical. The maximum differences between the section samples were
-`5.25e-10` seconds in time, `3.39e-4` in `s`, and `4.04e-4` radians in `theta`.
-The largest angle advance per default save interval was `0.105` radians.
-These differences compare save cadences; converge the field table and solver
-tolerance separately. Analytic wrapping, direction, endpoint-counting, and
-interpolation convergence checks can be run without a GPU:
+Analytic section-extraction checks can run without a GPU:
 
 ```console
 python -m unittest tests.test_gpu_poincare_example
