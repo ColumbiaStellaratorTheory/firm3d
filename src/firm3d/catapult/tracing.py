@@ -238,9 +238,10 @@ def _save_times(tmax, dt_save):
     ratio = end / dt_save
     if not np.isfinite(ratio):
         raise ValueError("tmax / dt_save is too large")
-    times = np.arange(1, np.ceil(ratio), dtype=np.float64) * dt_save
-    # Avoid a duplicate terminal row from rounding an exact multiple.
-    return times[times < end * (1 - 8 * np.finfo(float).eps)]
+    # Include the upper candidate in case division rounds the ratio down to
+    # an integer. Keep every represented grid time strictly before the endpoint.
+    times = np.arange(1, np.ceil(ratio) + 1, dtype=np.float64) * dt_save
+    return times[times < end]
 
 
 def save_trajectories_boozer_gpu(

@@ -109,6 +109,22 @@ class TestDenseOutputHost(unittest.TestCase):
             with self.subTest(tmax=tmax), self.assertRaises(ValueError):
                 _save_times([tmax], 1)
 
+    def test_save_grid_near_terminal_multiple(self):
+        # Adjacent float64 times remain distinct, even when division rounds
+        # tmax / dt_save to an integer or multiplication rounds the grid up.
+        for dt_save, multiple in [(1.0, 3), (0.1, 3), (0.01, 3), (1e-8, 5)]:
+            grid = np.arange(1, multiple + 1, dtype=np.float64) * dt_save
+            before = np.nextafter(grid[-1], 0.0)
+            after = np.nextafter(grid[-1], np.inf)
+            for end in [before, grid[-1], after]:
+                with self.subTest(dt_save=dt_save, end=end):
+                    expected = grid if end == after else grid[:-1]
+                    np.testing.assert_array_equal(
+                        _save_times([0, end], dt_save), expected
+                    )
+        # Here an exclusive ceil(tmax / dt_save) bound also drops a sample.
+        self.assertEqual(np.nextafter(0.03, np.inf) / 0.01, 3.0)
+
     def test_one_launch_and_particle_order(self):
         # Mock only the device launch. Exercise the public API's precision,
         # save grid, trimming, per-particle tmax, and CPU result assembly.
@@ -286,6 +302,25 @@ class TestDenseOutputGPU(unittest.TestCase):
         )
         for traj, times in zip(tys, ([0], [0, 1e-9], [0, 1e-9, 2e-9, 3e-9, 3.5e-9])):
             np.testing.assert_allclose(traj[:, 0], times, rtol=1e-14, atol=0)
+
+    def test_samples_adjacent_to_per_particle_tmax(self):
+        gpu = CatapultBoozerField(self.field, 3, 3, 3, precision="double")
+        stz = np.tile(self.stz[0], (3, 1))
+        vpar = np.full(3, self.vpar[0])
+        for dt_save, multiple in [(1e-9, 3), (1e-8, 5)]:
+            grid = np.arange(1, multiple + 1, dtype=np.float64) * dt_save
+            tmax = np.array(
+                [np.nextafter(grid[-1], 0.0), grid[-1], np.nextafter(grid[-1], np.inf)]
+            )
+            with self.subTest(dt_save=dt_save):
+                tys, hits = trace_particles_boozer_gpu(
+                    gpu, stz, vpar, tmax=tmax, dt_save=dt_save, tol=1e-10
+                )
+                for traj, hit, end in zip(tys, hits, tmax):
+                    expected = np.r_[0, grid[grid < end], end]
+                    np.testing.assert_array_equal(traj[:, 0], expected)
+                    self.assertTrue(np.all(np.diff(traj[:, 0]) > 0))
+                    self.assertEqual(len(hit), 0)
 
     def test_save_cadence_does_not_change_adaptive_trace(self):
         gpu = CatapultBoozerField(self.field, 3, 3, 3)
