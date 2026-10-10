@@ -47,6 +47,17 @@ def _catapult_tolerance(options):
     return absolute
 
 
+def _gather_lists(comm, *lists):
+    """Gather related trajectory lists in rank order with one collective."""
+    if comm is None:
+        return lists
+    gathered = comm.allgather(lists)
+    return tuple(
+        [item for rank in gathered for item in rank[column]]
+        for column in range(len(lists))
+    )
+
+
 class PassingPoincare:
     def __init__(
         self,
@@ -265,12 +276,7 @@ class PassingPoincare:
                 s_init.append(s_flat[i])
                 thetas_init.append(thetas_flat[i])
 
-        if self.comm is not None:
-            vpars_init = [i for o in self.comm.allgather(vpars_init) for i in o]
-            s_init = [i for o in self.comm.allgather(s_init) for i in o]
-            thetas_init = [i for o in self.comm.allgather(thetas_init) for i in o]
-
-        return vpars_init, s_init, thetas_init
+        return _gather_lists(self.comm, vpars_init, s_init, thetas_init)
 
     def passing_map(self, point):
         r"""
@@ -297,10 +303,7 @@ class PassingPoincare:
         if self.catapult_field is not None:
             raise ValueError("CATAPULT computes the ensemble in compute_passing_map")
 
-        points = np.zeros((1, 3))
-        points[:, 0] = point[0]
-        points[:, 1] = point[1]
-        points[:, 2] = 0
+        points = np.array([[point[0], point[1], 0]])
         # Set solver options needed for passing map
         res_tys, res_hits = trace_particles_boozer(
             self.field,
@@ -327,36 +330,15 @@ class PassingPoincare:
             raise RuntimeError("No stopping criterion reached in passing_map.")
 
         res_hit = res_hits[0][0, :]  # Only check the first hit or stopping criterion
-        time_momentum = res_tys[0][:, 0]
-
-        points_traj = np.zeros((res_tys[0].shape[0], 3))
-        points_traj[:, 0] = res_tys[0][:, 1]
-        points_traj[:, 1] = res_tys[0][:, 2]
-        points_traj[:, 2] = res_tys[0][:, 3]
-        vpar_path = res_tys[0][:, 4]
+        peta = []
         if self.peta_profile:
-            peta = compute_peta(
-                self.field,
-                points_traj,
-                vpar_path,
-                self.mass,
-                self.charge,
-                self.helicity_M,
-                self.helicity_N,
-                helicity_Mp=self.helicity_Mp,
-                helicity_Np=self.helicity_Np,
+            peta = np.column_stack(
+                (res_tys[0][:, 0], self._sampled_momentum(res_tys[0]))
             )
-            peta = np.column_stack((time_momentum, peta))
 
         if res_hit[1] == 0:  # Check that the zetas=[0] plane was hit
-            point[0] = res_hit[2]
-            point[1] = res_hit[3]
-            point[2] = res_hit[5]
-            time = res_hit[0]
-            if self.peta_profile:
-                return point, time, peta
-            else:
-                return point, time, []
+            point[:] = res_hit[[2, 3, 5]]
+            return point, res_hit[0], peta
         else:
             raise RuntimeError("Alternative stopping criterion reached in passing_map.")
 
@@ -376,46 +358,37 @@ class PassingPoincare:
             DA_all : List of WBA digit-accuracy lists, one per trajectory.
             DA_times : List of transit indices at which DA was evaluated.
         """
-        if self.catapult_field is not None:
-            return self._compute_passing_map_catapult()
+        first, last = parallel_loop_bounds(self.comm, len(self.s_init))
+        trajectories = (
+            self._passing_maps_catapult(first, last)
+            if self.catapult_field is not None
+            else self._passing_maps_cpu(first, last)
+        )
+        result = tuple([] for _ in range(7))
+        s_all, thetas_all, vpars_all, t_all, peta_all, DA_all, DA_times = result
+        for points, times, momentum, accuracies, steps in trajectories:
+            s_all.append(points[:, 0].tolist())
+            thetas_all.append(points[:, 1].tolist())
+            vpars_all.append(points[:, 2].tolist())
+            t_all.append(times)
+            if self.peta_profile:
+                peta_all.append(momentum)
+            DA_all.append(accuracies)
+            DA_times.append(steps)
+        return _gather_lists(self.comm, *result)
 
-        Ntrj = len(self.s_init)
-
-        s_all = []
-        peta_all = []
-        thetas_all = []
-        vpars_all = []
-        DA_all = []
-        DA_times = []
-        t_all = []
-        first, last = parallel_loop_bounds(self.comm, Ntrj)
+    def _passing_maps_cpu(self, first, last):
+        """Restart at each CPU return, retaining its history and WBA convention."""
         for itrj in range(first, last):
             tr = [self.s_init[itrj], self.thetas_init[itrj], self.vpars_init[itrj]]
-            s_traj = [tr[0]]
-            points_traj = np.zeros((1, 3))
-            points_traj[:, 0] = self.s_init[itrj]
-            points_traj[:, 1] = self.thetas_init[itrj]
-            points_traj[:, 2] = 0
-
+            points = [tr.copy()]
+            peta_traj = []
             if self.peta_profile:
-                peta = compute_peta(
-                    self.field,
-                    points_traj,
-                    self.vpars_init[itrj],
-                    self.mass,
-                    self.charge,
-                    self.helicity_M,
-                    self.helicity_N,
-                    helicity_Mp=self.helicity_Mp,
-                    helicity_Np=self.helicity_Np,
-                )
+                launch = np.array([[0, tr[0], tr[1], 0, tr[2]]])
+                peta = self._sampled_momentum(launch)
                 peta_traj = [peta[0]]
                 Peta = np.array([[0, peta[0]]])
-            else:
-                peta_traj = []
 
-            thetas_traj = [tr[1]]
-            vpars_traj = [tr[2]]
             particle_DAs = []
             particle_DA_times = []
             t_traj = [0]
@@ -428,39 +401,15 @@ class PassingPoincare:
                         # shift time column by orbit time
                         Peta_iter[:, 0] += Peta[-1, 0]
                         Peta = np.vstack((Peta, Peta_iter[1:, :]))
-                    else:
-                        peta_traj.append(np.nan)
-
                     t_traj.append(time)
-                    s_traj.append(tr[0])
-
-                    thetas_traj.append(tr[1])
-                    vpars_traj.append(tr[2])
+                    points.append(tr.copy())
                     if self.DA_poinc and _jj in self.WBA_transit_steps:
                         time_at_evaluation, DA_at_evaluation = return_DA(Peta)
                         particle_DAs.append(DA_at_evaluation)
                         particle_DA_times.append(_jj)
                 except RuntimeError:
                     break
-            if self.peta_profile:
-                peta_all.append(peta_traj)
-            s_all.append(s_traj)
-            thetas_all.append(thetas_traj)
-            vpars_all.append(vpars_traj)
-            t_all.append(t_traj)
-            DA_all.append(particle_DAs)
-            DA_times.append(particle_DA_times)
-
-        if self.comm is not None:
-            peta_all = [i for o in self.comm.allgather(peta_all) for i in o]
-            s_all = [i for o in self.comm.allgather(s_all) for i in o]
-            thetas_all = [i for o in self.comm.allgather(thetas_all) for i in o]
-            vpars_all = [i for o in self.comm.allgather(vpars_all) for i in o]
-            t_all = [i for o in self.comm.allgather(t_all) for i in o]
-            DA_all = [i for o in self.comm.allgather(DA_all) for i in o]
-            DA_times = [i for o in self.comm.allgather(DA_times) for i in o]
-
-        return s_all, thetas_all, vpars_all, t_all, peta_all, DA_all, DA_times
+            yield np.asarray(points), t_traj, peta_traj, particle_DAs, particle_DA_times
 
     def _sampled_momentum(self, samples):
         return compute_peta(
@@ -475,11 +424,10 @@ class PassingPoincare:
             helicity_Np=self.helicity_Np,
         )
 
-    def _compute_passing_map_catapult(self):
+    def _passing_maps_catapult(self, first, last):
         """Trace continuously with the CPU per-return deadline and map format."""
         from ..catapult.tracing import trace_particles_boozer_gpu
 
-        first, last = parallel_loop_bounds(self.comm, len(self.s_init))
         initial = np.column_stack(
             (
                 self.s_init[first:last],
@@ -540,9 +488,6 @@ class PassingPoincare:
             ]
             hits = [np.empty((0, 6)) for _ in paths]
 
-        s_all, thetas_all, vpars_all, t_all, peta_all, DA_all, DA_times = (
-            [] for _ in range(7)
-        )
         incomplete = 0
         for path, particle_hits in zip(paths, hits):
             launch = path[:1]
@@ -553,15 +498,12 @@ class PassingPoincare:
             if not stopped and len(returns) < self.Nmaps:
                 incomplete += 1
             samples = np.vstack((launch, returns))
-            s_all.append(samples[:, 1].tolist())
-            thetas_all.append(samples[:, 2].tolist())
-            vpars_all.append(samples[:, 4].tolist())
             # Match the CPU helper: zero followed by individual transit times.
-            t_all.append(np.r_[0, np.diff(samples[:, 0])].tolist())
+            times = np.r_[0, np.diff(samples[:, 0])].tolist()
             particle_DAs, particle_DA_times = [], []
+            momentum = []
             if self.peta_profile:
                 momentum = self._sampled_momentum(samples)
-                peta_all.append(momentum.tolist())
                 if self.DA_poinc and len(returns):
                     history = path[path[:, 0] < returns[-1, 0]]
                     time_momentum = np.column_stack(
@@ -578,8 +520,14 @@ class PassingPoincare:
                         _, accuracy = return_DA(values)
                         particle_DAs.append(accuracy)
                         particle_DA_times.append(step)
-            DA_all.append(particle_DAs)
-            DA_times.append(particle_DA_times)
+                momentum = momentum.tolist()
+            yield (
+                samples[:, [1, 2, 4]],
+                times,
+                momentum,
+                particle_DAs,
+                particle_DA_times,
+            )
 
         if incomplete:
             warn(
@@ -587,13 +535,6 @@ class PassingPoincare:
                 "tmax for one section; increase tmax.",
                 stacklevel=3,
             )
-        result = (s_all, thetas_all, vpars_all, t_all, peta_all, DA_all, DA_times)
-        if self.comm is not None:
-            result = tuple(
-                [item for group in self.comm.allgather(values) for item in group]
-                for values in result
-            )
-        return result
 
     def compute_frequencies(self, s_profile=True):
         """

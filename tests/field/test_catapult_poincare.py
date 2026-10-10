@@ -20,6 +20,7 @@ PERIOD = 2 * np.pi
 SPEED = np.sqrt(2 * ENERGY / MASS)
 GPU_TRACE = "firm3d.catapult.tracing.trace_particles_boozer_gpu"
 HAS_CUDA = hasattr(firm3dpp, "boozer_gpu_tracing")
+CPU_TRACE = "firm3d.trajectory_helpers.poincare.trace_particles_boozer"
 
 
 def constant_field():
@@ -65,6 +66,78 @@ def native_hits(transit=7, count=2):
             np.full(count, SPEED),
         )
     )
+
+
+class TestPassingPoincareCPU(unittest.TestCase):
+    def test_returns_preserve_cpu_history_momentum_and_wba(self):
+        # CPU histories omit the dense section root. Preserve the existing
+        # last-saved momentum and history time offsets while sharing assembly.
+        path = np.array(
+            [
+                [0, 0.3, 0.2, 0, SPEED],
+                [3, 0.31, 0.3, 1, SPEED],
+                [6, 0.32, 0.4, 2, SPEED],
+            ]
+        )
+        hits = native_hits(count=1)
+        with (
+            patch(
+                CPU_TRACE, side_effect=lambda *args, **kwargs: ([path.copy()], [hits])
+            ) as trace,
+            patch.object(
+                PassingPoincare,
+                "_sampled_momentum",
+                side_effect=lambda samples: samples[:, 1],
+            ),
+            patch(
+                "firm3d.trajectory_helpers.poincare.return_DA", return_value=(12, 9)
+            ) as wba,
+        ):
+            poinc = PassingPoincare(
+                constant_field(),
+                **map_options(),
+                tmax=10,
+                helicity_M=1,
+                helicity_N=0,
+                chaos_detection=True,
+            )
+        self.assertEqual(trace.call_count, 2)
+        np.testing.assert_allclose(trace.call_args_list[1].args[1], [[0.335, 0.41, 0]])
+        for call in trace.call_args_list:
+            self.assertEqual(call.kwargs["tmax"], 10)
+            self.assertTrue(call.kwargs["phases_stop"])
+            self.assertTrue(call.kwargs["vpars_stop"])
+        np.testing.assert_allclose(poinc.s_all, [[0.3, 0.335, 0.335]])
+        np.testing.assert_allclose(poinc.t_all, [[0, 7, 7]])
+        np.testing.assert_allclose(poinc.peta_all, [[0.3, 0.32, 0.32]])
+        np.testing.assert_allclose(wba.call_args.args[0][:, 0], [0, 3, 6, 9, 12])
+        self.assertEqual(poinc.DA_all, [[9]])
+        self.assertEqual(poinc.DA_times, [[1]])
+
+    def test_stopping_and_empty_maps_keep_completed_returns(self):
+        for stop in [np.empty((0, 6)), np.array([[8, -1, 0.99, 0.5, 0, SPEED]])]:
+            with (
+                self.subTest(stop=stop),
+                patch(
+                    CPU_TRACE,
+                    side_effect=[
+                        ([sampled_path()], [native_hits(count=1)]),
+                        ([sampled_path()], [stop]),
+                    ],
+                ),
+            ):
+                poinc = PassingPoincare(constant_field(), **map_options(), tmax=10)
+            np.testing.assert_allclose(poinc.s_all, [[0.3, 0.335]])
+            self.assertEqual(poinc.t_all, [[0, 7]])
+            self.assertEqual(poinc.peta_all, [])
+            self.assertEqual(poinc.DA_all, [[]])
+        for changes, expected in [({"lam": 1}, []), ({"Nmaps": 0}, [[0.3]])]:
+            options = map_options()
+            options.update(changes)
+            with patch(CPU_TRACE) as trace:
+                poinc = PassingPoincare(constant_field(), **options)
+            trace.assert_not_called()
+            self.assertEqual(poinc.s_all, expected)
 
 
 class TestCatapultPoincareHost(unittest.TestCase):
