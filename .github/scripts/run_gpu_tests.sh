@@ -55,7 +55,7 @@ python -c "import firm3dpp; print('firm3dpp loaded OK')"
 # and always write EXIT_CODE_FILE even when tests fail.
 echo "--- Running GPU tests ---"
 set +e
-python -m coverage run -m unittest tests.field.test_gpu
+python -m coverage run -m unittest tests.field.test_gpu tests.field.test_gpu_collisions
 TEST_EXIT=$?
 set -e
 
@@ -82,13 +82,18 @@ cp examples/gpu_saw_tracing/gpu_boozer_saw_tracing_results.json "$WORK_DIR/gpu_b
 (cd examples/gpu_cartesian_tracing && python gpu_cartesian_tracing.py)
 CARTESIAN_EXIT=$?
 cp examples/gpu_cartesian_tracing/gpu_cartesian_tracing_results.json "$WORK_DIR/gpu_cartesian_tracing_results.json"
+
+(cd examples/gpu_boozer_collisional_tracing && python gpu_boozer_collisional_tracing.py)
+BOOZER_COLLISONS_EXIT=$?
+cp examples/gpu_boozer_collisional_tracing/gpu_boozer_collisional_tracing_results.json "$WORK_DIR/gpu_boozer_collisional_tracing_results.json"
 set -e
 
 echo "boozer_tracing exit    : $BOOZER_EXIT"
 echo "saw_tracing exit       : $SAW_EXIT"
 echo "cartesian_tracing exit : $CARTESIAN_EXIT"
+echo "boozer_collisions_tracing exit : $BOOZER_COLLISONS_EXIT"
 
-if [ "$BOOZER_EXIT" -ne 0 ] || [ "$SAW_EXIT" -ne 0 ] || [ "$CARTESIAN_EXIT" -ne 0 ]; then
+if [ "$BOOZER_EXIT" -ne 0 ] || [ "$SAW_EXIT" -ne 0 ] || [ "$CARTESIAN_EXIT" -ne 0 ] || [ "$BOOZER_COLLISONS_EXIT" -ne 0 ]; then
   EXAMPLES_EXIT=1
 else
   EXAMPLES_EXIT=0

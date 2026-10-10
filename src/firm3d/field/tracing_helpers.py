@@ -285,11 +285,12 @@ def initialize_position_uniform_vol(
     )
 
 
-def initialize_velocity_uniform(vpar0, nParticles, comm=None, seed=None):
+def initialize_velocity_uniform(v0, nParticles, comm=None, seed=None):
     r"""
-    Initialize parallel velocities uniformly distributed in the range [-vpar0, vpar0].
+    Initialize parallel velocities uniformly distributed in the range [-v0, v0].
     Args:
-        vpar0: Maximum parallel velocity magnitude.
+        v0: Total speed. Drawing the parallel velocity uniformly in
+            [-v0, v0] at fixed energy gives an isotropic pitch angle.
         nParticles: Number of particles to initialize.
         comm: MPI communicator (default: None).
         seed: Random seed for reproducibility (default: None, uses random seed
@@ -305,8 +306,24 @@ def initialize_velocity_uniform(vpar0, nParticles, comm=None, seed=None):
         np.random.seed(seed)
 
     # Initialize uniformly distributed parallel velocities
-    vpar_init = np.random.uniform(-vpar0, vpar0, (nParticles,)) if verbose else None
+    vpar_init = np.random.uniform(-v0, v0, (nParticles,)) if verbose else None
     if comm is not None:
         vpar_init = comm.bcast(vpar_init, root=0)
 
     return vpar_init
+
+
+def _validate_parallel_speeds(parallel_speeds, vtotal):
+    r"""
+    Raise if ``vtotal`` is not finite and positive, since it sets the velocity
+    and time normalization, or if any :math:`|v_\parallel|` exceeds it, which
+    would make :math:`\mu = (v^2 - v_\parallel^2)/(2|B|)` negative.  ``vtotal``
+    may be a scalar or a per-particle array; the "not" forms also reject NaN.
+    """
+    vtotal = np.asarray(vtotal, dtype=float)
+    if not np.all(np.isfinite(vtotal) & (vtotal > 0.0)):
+        raise ValueError("vtotal must be finite and positive")
+    if not np.all(np.abs(parallel_speeds) <= vtotal):
+        raise ValueError(
+            "|parallel_speeds| must not exceed vtotal, else mu is negative"
+        )

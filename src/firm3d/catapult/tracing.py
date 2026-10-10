@@ -1,7 +1,9 @@
 __all__ = [
     "trace_particles_boozer_gpu",
     "trace_particles_boozer_perturbed_gpu",
+    "trace_particles_boozer_with_collisions_gpu",
     "trace_particles_cartesian_gpu",
+    "trace_particles_cartesian_with_collisions_gpu",
     "save_trajectories_boozer_gpu",
     "save_trajectories_cartesian_gpu",
 ]
@@ -14,6 +16,7 @@ from firm3d.catapult.field import (
     CatapultCartesianField,
     CatapultPerturbedBoozerField,
 )
+from firm3d.field.tracing_helpers import _validate_parallel_speeds
 from firm3d.util.constants import (
     ALPHA_PARTICLE_CHARGE,
     ALPHA_PARTICLE_MASS,
@@ -71,6 +74,10 @@ def _launch_boozer(
     _check_per_particle(
         nparticles, parallel_speeds=parallel_speeds, tmax=tmax, dt=dt, mu=mu
     )
+    # a sentinel mu leaves the kernel to derive it from vtotal and the
+    # parallel speed, where |vpar| > vtotal would make it negative
+    if np.any(mu < 0):
+        _validate_parallel_speeds(parallel_speeds, vtotal)
     kwargs = {
         "quad_pts": cfield.quad_info,
         "srange": cfield.srange,
@@ -134,6 +141,10 @@ def _launch_cartesian(
     _check_per_particle(
         nparticles, parallel_speeds=parallel_speeds, tmax=tmax, dt=dt, mu=mu
     )
+    # a sentinel mu leaves the kernel to derive it from vtotal and the
+    # parallel speed, where |vpar| > vtotal would make it negative
+    if np.any(mu < 0):
+        _validate_parallel_speeds(parallel_speeds, vtotal)
     out = firm3dpp.cartesian_gpu_tracing(
         quad_pts=cfield.quad_info,
         rrange=cfield.rrange,
@@ -182,6 +193,17 @@ def _to_boozer(result):
     result[:, 1] = np.hypot(x1, x2)
     result[:, 2] = np.arctan2(x2, x1)
     return result
+
+
+def _collision_columns(result):
+    """
+    The collisional entry points' (nparticles, 7) rows
+    (t, x1, x2, x3, vpar, v, dt) from the kernel's (nparticles, 8)
+    (t, x1, x2, x3, vpar, dt, mu, v): mu is dropped, since collisions leave it
+    recoverable from v, vpar and |B| at the returned position, and v takes the
+    column before dt as it does for the CPU entry point.
+    """
+    return np.column_stack((result[:, :5], result[:, 7], result[:, 5]))
 
 
 def _save_trajectories(
@@ -679,3 +701,334 @@ def trace_particles_cartesian_gpu(
             field, xyz_inits, parallel_speeds, _one_tmax(tmax), dt_save, **kwargs
         )
     return _cpu_format(xyz_inits, parallel_speeds, bodies, tmax)
+
+
+def _prepare_backgrounds(backgrounds, mass, charge, collisionless_entry_point):
+    """
+    Normalize the backgrounds argument to the list of C++ views the kernel
+    takes, refusing the cases the kernel cannot express.
+    """
+    from firm3d.field.collisions import (
+        ThermalBackground,
+        _validate_coulomb_log,
+        _validate_species_count,
+    )
+
+    if isinstance(backgrounds, ThermalBackground):
+        backgrounds = [backgrounds]
+    if len(backgrounds) == 0:
+        raise ValueError(
+            f"backgrounds is empty; use {collisionless_entry_point} for a "
+            "collisionless trace"
+        )
+    _validate_species_count(backgrounds)
+    cpp_backgrounds = [b._to_cpp() for b in backgrounds]
+    _validate_coulomb_log(cpp_backgrounds, float(mass), float(charge))
+    return cpp_backgrounds
+
+
+def _launch_boozer_collision(
+    cfield,
+    x_inits,
+    parallel_speeds,
+    tmax,
+    dt,
+    mass,
+    charge,
+    vtotal,
+    tol,
+    backgrounds,
+    rng_seed,
+):
+    """
+    One collisional CATAPULT launch in a CatapultBoozerField, from
+    pseudo-Cartesian initial conditions x_inits of shape (nparticles, 3).
+
+    Unlike _launch_boozer this takes no mu: collisions change the magnetic
+    moment, so a run cannot be continued from one and the kernel always
+    derives the initial mu from vtotal and the parallel speed. Returns the
+    (nparticles, 8) array (t, x1, x2, zeta, vpar, dt, mu, v) in float64.
+    """
+    x_inits = np.ascontiguousarray(x_inits, dtype=np.float64)
+    if x_inits.ndim != 2 or x_inits.shape[1] != 3:
+        raise ValueError(
+            f"initial positions must have shape (nparticles, 3), got {x_inits.shape}"
+        )
+    if not np.all(np.isfinite(x_inits)):
+        raise ValueError("initial positions contain NaN or infinite values")
+    _check_finite_scalar("vtotal", vtotal)
+    nparticles = x_inits.shape[0]
+    parallel_speeds = np.ascontiguousarray(parallel_speeds, dtype=np.float64)
+    tmax = np.ascontiguousarray(tmax, dtype=np.float64)
+    dt = np.ascontiguousarray(dt, dtype=np.float64)
+    _check_per_particle(nparticles, parallel_speeds=parallel_speeds, tmax=tmax, dt=dt)
+    _validate_parallel_speeds(parallel_speeds, vtotal)
+    out = firm3dpp.boozer_collision_gpu_tracing(
+        quad_pts=cfield.quad_info,
+        srange=cfield.srange,
+        trange=cfield.trange,
+        zrange=cfield.zrange,
+        stz_init=x_inits,
+        m=mass,
+        q=charge,
+        vtotal=vtotal,
+        vtang=parallel_speeds,
+        tmax=tmax,
+        tol=tol,
+        dt_in=dt,
+        psi0=cfield.psi0,
+        nparticles=nparticles,
+        backgrounds=backgrounds,
+        vacuum=cfield.vacuum,
+        rng_seed=int(rng_seed),
+    )
+    return np.asarray(out, dtype=np.float64).reshape(nparticles, 8)
+
+
+def _launch_cartesian_collision(
+    cfield,
+    xyz_inits,
+    parallel_speeds,
+    tmax,
+    dt,
+    mass,
+    charge,
+    vtotal,
+    tol,
+    backgrounds,
+    rng_seed,
+):
+    """
+    One collisional CATAPULT launch in a CatapultCartesianField. Returns the
+    (nparticles, 8) array (t, x, y, z, vpar, dt, mu, v) in float64.
+    """
+    xyz_inits = np.ascontiguousarray(xyz_inits, dtype=np.float64)
+    if xyz_inits.ndim != 2 or xyz_inits.shape[1] != 3:
+        raise ValueError(
+            f"initial positions must have shape (nparticles, 3), got {xyz_inits.shape}"
+        )
+    if not np.all(np.isfinite(xyz_inits)):
+        raise ValueError("initial positions contain NaN or infinite values")
+    _check_finite_scalar("vtotal", vtotal)
+    nparticles = xyz_inits.shape[0]
+    parallel_speeds = np.ascontiguousarray(parallel_speeds, dtype=np.float64)
+    tmax = np.ascontiguousarray(tmax, dtype=np.float64)
+    dt = np.ascontiguousarray(dt, dtype=np.float64)
+    _check_per_particle(nparticles, parallel_speeds=parallel_speeds, tmax=tmax, dt=dt)
+    _validate_parallel_speeds(parallel_speeds, vtotal)
+    out = firm3dpp.cartesian_collision_gpu_tracing(
+        quad_pts=cfield.quad_info,
+        rrange=cfield.rrange,
+        phirange=cfield.phirange,
+        zrange=cfield.zrange,
+        xyz_init=xyz_inits,
+        m=mass,
+        q=charge,
+        vtotal=vtotal,
+        vtang=parallel_speeds,
+        tmax=tmax,
+        tol=tol,
+        dt_in=dt,
+        nparticles=nparticles,
+        backgrounds=backgrounds,
+        rng_seed=int(rng_seed),
+    )
+    return np.asarray(out, dtype=np.float64).reshape(nparticles, 8)
+
+
+def trace_particles_boozer_with_collisions_gpu(
+    field,
+    stz_inits,
+    parallel_speeds,
+    backgrounds,
+    tmax=1e-4,
+    mass=ALPHA_PARTICLE_MASS,
+    charge=ALPHA_PARTICLE_CHARGE,
+    Ekin=FUSION_ALPHA_PARTICLE_ENERGY,
+    tol=1e-9,
+    dt=None,
+    rng_seed=0,
+):
+    r"""
+    Trace particles in Boozer coordinates on the GPU, including Monte Carlo
+    Coulomb collisions.
+
+    The collision operator is the one
+    :func:`~firm3d.field.collisions.trace_particles_boozer_with_collisions`
+    uses. It is applied as a kick after each accepted orbit step, sub-cycled
+    when the collision rates are fast relative to that step.
+
+    The output has seven columns: ``[t, s, theta, zeta, v_par, v, dt]``.
+    Collisions change the total speed ``v``, so it is reported: it carries
+    the kinetic energy :math:`E = \tfrac{1}{2} m v^2`, and with :math:`|B|`
+    at the returned position it gives back
+    :math:`\mu = (v^2 - v_\parallel^2)/(2|B|)`. The first six columns match
+    the CPU entry point, which appends ``v`` for the same reason; the final
+    step size ``dt`` sits in the last column.
+
+    Differences from the CPU entry point:
+
+    * ``Ekin`` sets the initial speed of every particle, not merely a
+      normalization: ``mu`` is derived from it as
+      ``(vtotal**2 - v_par**2) / (2 |B|)``. Passing ``|v_par| > vtotal``
+      would therefore give a negative ``mu``, so it is rejected.
+    * only the final state is returned, not the trajectory, so unlike
+      :func:`trace_particles_boozer_gpu` there is no ``forget_exact_path``
+      option and no ``(res_tys, res_hits)`` form;
+    * stopping criteria are not available.
+
+    Results are not comparable element-by-element with the CPU tracer even at
+    a fixed seed: the two draw from different generators (Philox against
+    mt19937_64) and take different step sequences, so agreement is
+    statistical.
+
+    Args:
+        field: A :class:`~firm3d.catapult.field.CatapultBoozerField` built in
+            double precision.
+        stz_inits: ``(nparticles, 3)`` array of initial ``(s, theta, zeta)``.
+        parallel_speeds: ``(nparticles,)`` array of initial ``v_par`` in m/s.
+        backgrounds: A :class:`~firm3d.field.collisions.ThermalBackground` or
+            a list of them; coefficients are summed over species.
+        tmax: Integration time in seconds, either a scalar applied to every
+            particle or a per-particle array of shape ``(nparticles,)``.
+        mass: EP mass in kg.
+        charge: EP charge in C.
+        Ekin: Kinetic energy in Joule, one value for all particles.
+        tol: Tolerance for the adaptive step control.
+        dt: Initial step size; ``None`` lets the tracer choose.
+        rng_seed: Base seed. Each particle uses a Philox stream keyed on its
+            global index, so results do not depend on the block layout.
+
+    Returns:
+        ``(nparticles, 7)`` array of final states,
+        ``[t, s, theta, zeta, v_par, v, dt]``.
+
+    Raises:
+        ValueError: If ``field`` is not in double precision; if
+            ``backgrounds`` is empty or holds more than
+            ``firm3dpp.COLL_MAX_SPECIES`` species; if ``parallel_speeds``
+            does not match ``stz_inits`` in length or exceeds ``vtotal`` in
+            magnitude; or if the profiles give an unphysical Coulomb
+            logarithm.
+    """
+    if not isinstance(field, CatapultBoozerField):
+        raise TypeError(
+            f"field must be a CatapultBoozerField, got {type(field).__name__}"
+        )
+    if field.dtype != np.float64:
+        raise ValueError(
+            "collisional tracing runs in double precision; build the field "
+            "with precision='double'"
+        )
+    nparticles = stz_inits.shape[0]
+    vtotal = _vtotal(Ekin, mass)
+    cpp_backgrounds = _prepare_backgrounds(
+        backgrounds, mass, charge, "trace_particles_boozer_gpu"
+    )
+    out = _launch_boozer_collision(
+        field,
+        _to_pseudo_cartesian(stz_inits, np.float64),
+        parallel_speeds,
+        _per_particle(tmax, nparticles, np.float64, None),
+        _per_particle(dt, nparticles, np.float64, -1.0),
+        mass,
+        charge,
+        vtotal,
+        tol,
+        cpp_backgrounds,
+        rng_seed,
+    )
+    return _collision_columns(_to_boozer(out))
+
+
+def trace_particles_cartesian_with_collisions_gpu(
+    field,
+    xyz_inits,
+    parallel_speeds,
+    backgrounds,
+    tmax=1e-4,
+    mass=ALPHA_PARTICLE_MASS,
+    charge=ALPHA_PARTICLE_CHARGE,
+    Ekin=FUSION_ALPHA_PARTICLE_ENERGY,
+    tol=1e-9,
+    dt=None,
+    rng_seed=0,
+):
+    """
+    Trace particles in Cartesian coordinates on the GPU, including Monte
+    Carlo Coulomb collisions.
+
+    The collision operator matches
+    :func:`trace_particles_boozer_with_collisions_gpu`. The thermal profiles
+    remain functions of the flux label ``s``; since the Cartesian state does
+    not carry ``s``, the field must be built with a ``flux_label``, which is
+    tabulated alongside the magnetic field and evaluated at the particle
+    position after each accepted orbit step.
+
+    The output has seven columns: ``[t, x, y, z, v_par, v, dt]``; see
+    :func:`trace_particles_boozer_with_collisions_gpu` for why the total
+    speed ``v`` is reported and for the other differences from CPU tracing.
+
+    Args:
+        field: A :class:`~firm3d.catapult.field.CatapultCartesianField` built
+            in double precision with a ``flux_label``.
+        xyz_inits: ``(nparticles, 3)`` array of initial ``(x, y, z)``.
+        parallel_speeds: ``(nparticles,)`` array of initial ``v_par`` in m/s.
+        backgrounds: A :class:`~firm3d.field.collisions.ThermalBackground` or
+            a list of them; coefficients are summed over species.
+        tmax: Integration time in seconds, either a scalar applied to every
+            particle or a per-particle array of shape ``(nparticles,)``.
+        mass: EP mass in kg.
+        charge: EP charge in C.
+        Ekin: Kinetic energy in Joule, one value for all particles.
+        tol: Tolerance for the adaptive step control.
+        dt: Initial step size; ``None`` lets the tracer choose.
+        rng_seed: Base seed. Each particle uses a Philox stream keyed on its
+            global index, so results do not depend on the block layout.
+
+    Returns:
+        ``(nparticles, 7)`` array of final states,
+        ``[t, x, y, z, v_par, v, dt]``.
+
+    Raises:
+        ValueError: If the field carries no flux label or is not in double
+            precision; if ``backgrounds`` is empty or holds more than
+            ``firm3dpp.COLL_MAX_SPECIES`` species; if ``parallel_speeds``
+            does not match ``xyz_inits`` in length or exceeds ``vtotal`` in
+            magnitude; or if the profiles give an unphysical Coulomb
+            logarithm.
+    """
+    if not isinstance(field, CatapultCartesianField):
+        raise TypeError(
+            f"field must be a CatapultCartesianField, got {type(field).__name__}"
+        )
+    if not getattr(field, "has_flux_label", False):
+        raise ValueError(
+            "the collisional kernel reads the flux label as an interpolant "
+            "column, so the field must be built with a flux_label; use "
+            "trace_particles_cartesian_gpu for a collisionless trace"
+        )
+    if field.dtype != np.float64:
+        raise ValueError(
+            "collisional tracing runs in double precision; build the field "
+            "with precision='double'"
+        )
+    nparticles = xyz_inits.shape[0]
+    vtotal = _vtotal(Ekin, mass)
+    cpp_backgrounds = _prepare_backgrounds(
+        backgrounds, mass, charge, "trace_particles_cartesian_gpu"
+    )
+    out = _launch_cartesian_collision(
+        field,
+        xyz_inits,
+        parallel_speeds,
+        _per_particle(tmax, nparticles, np.float64, None),
+        _per_particle(dt, nparticles, np.float64, -1.0),
+        mass,
+        charge,
+        vtotal,
+        tol,
+        cpp_backgrounds,
+        rng_seed,
+    )
+    return _collision_columns(out)
