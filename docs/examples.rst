@@ -116,7 +116,25 @@ GPU Trajectory Saving and Poincaré Sections
 
 **Location**: ``examples/gpu_dense_output/``
 
-Traces 32 co-passing alpha particles in the bundled ATEN equilibrium, in double
+To reproduce the physical parameters of the existing unperturbed CPU
+passing-map example and compare its section with GPU trajectories, run:
+
+.. code-block:: console
+
+   python examples/gpu_dense_output/compare_poincare.py
+
+This uses the full ATEN file, 120 co-passing 3.5 MeV alpha particles with
+``lambda=0``, cubic interpolation with 48 cells per coordinate, ``tol=1e-8``,
+and 1,000 requested returns. The CPU reference uses ``PassingPoincare``.
+The GPU table reproduces its no-K equations, including the radial variation
+of ``I`` and ``G``. A continuous CPU control and a halved GPU saving interval
+separate restart effects from section-interpolation errors. The script writes
+a comparison figure, CSV sections, saved GPU trajectories, and numerical
+errors/timings in ``output/comparison/``. See the example's README for
+the boundary and timing differences between these workflows.
+
+The smaller trajectory-saving demonstration traces 32 co-passing alpha
+particles in the bundled ATEN equilibrium, in double
 precision, and saves their paths using the GPU's Dormand–Prince dense output.
 The default trace lasts 1 millisecond and saves every 0.1 microsecond. Run on
 a GPU node from the repository root:

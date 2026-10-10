@@ -1,0 +1,233 @@
+{
+  "parameters": {
+    "input": "/global/u1/e/epaul/firm3d-gpu-dense-trajectories/examples/inputs/boozmn_aten_rescaled.nc",
+    "ns_poinc": 120,
+    "nmaps": 1000,
+    "resolution": 48,
+    "tol": 1e-08,
+    "dt_save_s": 1e-07,
+    "horizon_s": 0.005861741440250795,
+    "lambda": 0.0,
+    "sign_vpar": 1,
+    "cpu_stop_s": 0.99,
+    "gpu_stop_s": 1.0
+  },
+  "field_table_max_scaled_error": 1.2546212720001163e-12,
+  "max_saved_angle_step_rad": [
+    0.17996496155774366,
+    0.09017975592763605
+  ],
+  "timings_s": {
+    "cpu_field_setup": 19.292675437012804,
+    "gpu_table_setup": 10.2169045979972,
+    "cpu_map_including_momentum_and_WBA": 213.98153997700138,
+    "cpu_continuous_trace_with_history_and_event_roots": 208.77571530999558,
+    "gpu_trace_coarse_fine": [
+      15.40698130200326,
+      16.115152557991678
+    ],
+    "gpu_section_postprocessing_coarse_fine": [
+      0.5274914120091125,
+      1.0018141540058423
+    ]
+  },
+  "gpu_coarse_vs_cpu_map": {
+    "paired_returns": 114000,
+    "actual_returns": 114000,
+    "reference_returns": 114000,
+    "particles_with_different_counts": 0,
+    "max_abs_time_s": 3.191260651916328e-08,
+    "max_abs_s": 0.03724044593837128,
+    "rms_s": 0.0008008573634425922,
+    "max_abs_theta_rad": 0.36954865541649085,
+    "rms_theta_rad": 0.012795646063224494,
+    "max_abs_vpar_m_per_s": 0.0
+  },
+  "gpu_fine_vs_cpu_map": {
+    "paired_returns": 114000,
+    "actual_returns": 114000,
+    "reference_returns": 114000,
+    "particles_with_different_counts": 0,
+    "max_abs_time_s": 3.197549477453043e-08,
+    "max_abs_s": 0.03713667492266137,
+    "rms_s": 0.0007725886881441602,
+    "max_abs_theta_rad": 0.36932719815687776,
+    "rms_theta_rad": 0.012789866360532445,
+    "max_abs_vpar_m_per_s": 0.0
+  },
+  "gpu_fine_vs_cpu_continuous": {
+    "paired_returns": 114000,
+    "actual_returns": 114000,
+    "reference_returns": 114000,
+    "particles_with_different_counts": 0,
+    "max_abs_time_s": 3.289029561464457e-08,
+    "max_abs_s": 0.047000739128678415,
+    "rms_s": 0.0008946550711529564,
+    "max_abs_theta_rad": 0.4245169697210933,
+    "rms_theta_rad": 0.01478602776942208,
+    "max_abs_vpar_m_per_s": 0.0
+  },
+  "gpu_coarse_vs_gpu_fine": {
+    "paired_returns": 114000,
+    "actual_returns": 114000,
+    "reference_returns": 114000,
+    "particles_with_different_counts": 0,
+    "max_abs_time_s": 9.555427091939572e-10,
+    "max_abs_s": 0.0008246843504313706,
+    "rms_s": 0.00017239672134838256,
+    "max_abs_theta_rad": 0.0030134981602714106,
+    "rms_theta_rad": 0.0002992221557993024,
+    "max_abs_vpar_m_per_s": 0.0
+  },
+  "cpu_sampled_fine_vs_cpu_event_roots": {
+    "paired_returns": 114000,
+    "actual_returns": 114000,
+    "reference_returns": 114000,
+    "particles_with_different_counts": 0,
+    "max_abs_time_s": 2.4046135557991705e-10,
+    "max_abs_s": 0.00021420728929788524,
+    "rms_s": 5.495216668509114e-05,
+    "max_abs_theta_rad": 0.000760910156760275,
+    "rms_theta_rad": 9.488027610406587e-05,
+    "max_abs_vpar_m_per_s": 0.0
+  },
+  "cpu_continuous_vs_cpu_map": {
+    "paired_returns": 114000,
+    "actual_returns": 114000,
+    "reference_returns": 114000,
+    "particles_with_different_counts": 0,
+    "max_abs_time_s": 4.883419078751533e-08,
+    "max_abs_s": 0.05990512666333392,
+    "rms_s": 0.0012224610981766187,
+    "max_abs_theta_rad": 0.6334342858847539,
+    "rms_theta_rad": 0.01987882583530571,
+    "max_abs_vpar_m_per_s": 0.0
+  },
+  "hardware": {
+    "gpu": "NVIDIA A100-SXM4-80GB",
+    "driver": "580.178.04",
+    "cpu": "AMD EPYC 7763",
+    "mpi_ranks": 1,
+    "OMP_NUM_THREADS": 4
+  },
+  "native_binary_sha256": "a378dbcf6ffbe8b401929e84cea7a661bab2b42a33f45e3aec2439f9cbd2fc51",
+  "timing_notes": "Single calls. Field setup and file/figure writing excluded. CPU map includes momentum/WBA; GPU times include saving/host assembly, with section extraction separately timed. CPU continuous additionally computes event roots.",
+  "particles_without_returns": [
+    114,
+    115,
+    116,
+    117,
+    118,
+    119
+  ],
+  "selected_orbit_tolerance_check": {
+    "parameters": {
+      "input": "/global/u1/e/epaul/firm3d-gpu-dense-trajectories/examples/inputs/boozmn_aten_rescaled.nc",
+      "ns_poinc": 120,
+      "particle_ids": [
+        99,
+        101
+      ],
+      "nmaps": 1000,
+      "resolution": 48,
+      "tol": 1e-10,
+      "dt_save_s": 1e-08,
+      "horizon_s": 0.00580562925214319,
+      "lambda": 0.0,
+      "sign_vpar": 1,
+      "cpu_stop_s": 0.99,
+      "gpu_stop_s": 1.0
+    },
+    "field_table_max_scaled_error": 1.2546212720001163e-12,
+    "max_saved_angle_step_rad": [
+      0.014227083981040778,
+      0.0071135919447442575
+    ],
+    "timings_s": {
+      "cpu_field_setup": 21.722113032999914,
+      "gpu_table_setup": 10.049144317003083,
+      "cpu_map_including_momentum_and_WBA": 13.259458009997616,
+      "cpu_continuous_trace_with_history_and_event_roots": 14.53538326099806,
+      "gpu_trace_coarse_fine": [
+        24.43331752299855,
+        25.398286127994652
+      ],
+      "gpu_section_postprocessing_coarse_fine": [
+        0.09908611900755204,
+        0.2077051779924659
+      ]
+    },
+    "gpu_coarse_vs_cpu_map": {
+      "paired_returns": 2000,
+      "actual_returns": 2000,
+      "reference_returns": 2000,
+      "particles_with_different_counts": 0,
+      "max_abs_time_s": 7.480428238643144e-10,
+      "max_abs_s": 0.0011779841949125514,
+      "rms_s": 0.00010981524846718596,
+      "max_abs_theta_rad": 0.008486141621030896,
+      "rms_theta_rad": 0.0012084886762196516,
+      "max_abs_vpar_m_per_s": 0.0
+    },
+    "gpu_fine_vs_cpu_map": {
+      "paired_returns": 2000,
+      "actual_returns": 2000,
+      "reference_returns": 2000,
+      "particles_with_different_counts": 0,
+      "max_abs_time_s": 7.516113963851323e-10,
+      "max_abs_s": 0.0011745390498058006,
+      "rms_s": 0.00010975722067799996,
+      "max_abs_theta_rad": 0.008489496502331662,
+      "rms_theta_rad": 0.001208498969919914,
+      "max_abs_vpar_m_per_s": 0.0
+    },
+    "gpu_fine_vs_cpu_continuous": {
+      "paired_returns": 2000,
+      "actual_returns": 2000,
+      "reference_returns": 2000,
+      "particles_with_different_counts": 0,
+      "max_abs_time_s": 2.6741672071173284e-09,
+      "max_abs_s": 0.00445800620083503,
+      "rms_s": 0.00043539065853806915,
+      "max_abs_theta_rad": 0.03095266575317268,
+      "rms_theta_rad": 0.004793414981988432,
+      "max_abs_vpar_m_per_s": 0.0
+    },
+    "gpu_coarse_vs_gpu_fine": {
+      "paired_returns": 2000,
+      "actual_returns": 2000,
+      "reference_returns": 2000,
+      "particles_with_different_counts": 0,
+      "max_abs_time_s": 8.878933395808919e-12,
+      "max_abs_s": 7.955201860920802e-06,
+      "rms_s": 2.4178657472817334e-06,
+      "max_abs_theta_rad": 4.510137841862161e-06,
+      "rms_theta_rad": 1.5257429905193e-06,
+      "max_abs_vpar_m_per_s": 0.0
+    },
+    "cpu_sampled_fine_vs_cpu_event_roots": {
+      "paired_returns": 2000,
+      "actual_returns": 2000,
+      "reference_returns": 2000,
+      "particles_with_different_counts": 0,
+      "max_abs_time_s": 2.2731443463652745e-12,
+      "max_abs_s": 2.0094724016983534e-06,
+      "rms_s": 7.607584701856802e-07,
+      "max_abs_theta_rad": 1.140433763424653e-06,
+      "rms_theta_rad": 4.83664896289812e-07,
+      "max_abs_vpar_m_per_s": 0.0
+    },
+    "cpu_continuous_vs_cpu_map": {
+      "paired_returns": 2000,
+      "actual_returns": 2000,
+      "reference_returns": 2000,
+      "particles_with_different_counts": 0,
+      "max_abs_time_s": 1.932325847942007e-09,
+      "max_abs_s": 0.003283467151029229,
+      "rms_s": 0.00033385148870242973,
+      "max_abs_theta_rad": 0.022463169250130477,
+      "rms_theta_rad": 0.003681490680255038,
+      "max_abs_vpar_m_per_s": 0.0
+    }
+  }
+}

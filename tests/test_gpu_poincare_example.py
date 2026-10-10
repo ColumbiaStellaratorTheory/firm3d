@@ -2,6 +2,8 @@
 
 from pathlib import Path
 import runpy
+import sys
+from types import SimpleNamespace
 import unittest
 
 import numpy as np
@@ -14,6 +16,13 @@ crossings = runpy.run_path(
     )
 )["section_crossings"]
 PERIOD = 2 * np.pi
+
+example_dir = Path(__file__).resolve().parents[1] / "examples/gpu_dense_output"
+sys.path.insert(0, str(example_dir))
+try:
+    comparison = runpy.run_path(str(example_dir / "compare_poincare.py"))
+finally:
+    sys.path.pop(0)
 
 
 def linear_path(times, rate):
@@ -31,6 +40,36 @@ def linear_path(times, rate):
 
 
 class PoincareExampleTests(unittest.TestCase):
+    def test_cpu_map_transit_times_and_launch_exclusion(self):
+        data = SimpleNamespace(
+            t_all=[[0, 2, 3]],
+            s_all=[[0.4, 0.5, 0.6]],
+            thetas_all=[[0, 1, 2]],
+            vpars_all=[[10, 10, 10]],
+        )
+        sections = comparison["map_sections"](data)
+        np.testing.assert_array_equal(
+            sections[0], [[2, 0.5, 1, 0, 10], [5, 0.6, 2, 0, 10]]
+        )
+
+    def test_comparison_counts_and_circular_theta_error(self):
+        ref = [np.array([[1, 0.5, PERIOD - 0.01, 0, 10], [2, 0.5, 1, 0, 10]])]
+        actual = [np.array([[1.01, 0.51, 0.01, 0, 10]])]
+        result = comparison["differences"](actual, ref)
+        self.assertEqual(result["paired_returns"], 1)
+        self.assertEqual(result["particles_with_different_counts"], 1)
+        self.assertEqual(result["actual_returns"], 1)
+        self.assertEqual(result["reference_returns"], 2)
+        self.assertAlmostEqual(result["max_abs_theta_rad"], 0.02)
+
+    def test_cpu_boundary_cut_and_return_limit(self):
+        path = linear_path(np.arange(0, 25, 0.13), PERIOD / 7)
+        path[path[:, 0] >= 15, 1] = 0.995
+        sections = comparison["sampled_sections"]([path], 10)[0]
+        self.assertEqual(len(sections), 2)
+        limited = comparison["sampled_sections"]([path], 1)[0]
+        np.testing.assert_array_equal(limited, sections[:1])
+
     def test_wrapped_angles_and_directions(self):
         times = np.arange(0, 25, 0.13)
         for rate in [PERIOD / 7, -PERIOD / 7]:
