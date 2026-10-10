@@ -121,11 +121,13 @@ Run these examples from the repository root:
    python examples/gpu_dense_output/save_trajectories.py
    python examples/passing_map_unperturbed/passing_map.py --backend catapult
 
-The first saves trajectories to an NPZ archive and plots saved orbits. The
+The first mirrors the CPU fusion-birth loss-classification example in ARIES-CS,
+saving and classifying lost GPU trajectories in bounded batches. The
 second uses ``PassingPoincare`` to plot a kinetic section; ``--backend cpu``
 runs the same example with CPU event roots. Both backends use the existing
 ATEN passing-map parameters. GPU sections interpolate saved samples, so
-check convergence by reducing ``--dt-save``. See :doc:`poincare_maps` for the
+check convergence by reducing ``--dt-save`` for mirror hits and sections.
+See :doc:`poincare_maps` for the
 helper interface and tracing-duration conventions.
 
 Resolution Studies
