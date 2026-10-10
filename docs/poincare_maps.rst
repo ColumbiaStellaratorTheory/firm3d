@@ -144,8 +144,6 @@ separately from the integration tolerance. Equal absolute and relative
 tolerances are required for CATAPULT. The same data, frequency, momentum,
 WBA, and plotting methods remain available.
 GPU section angles retain accumulated turns; plotting wraps them periodically.
-``section_crossings(path)`` also extracts approximate sections from saved
-five-column Boozer paths without tracing again.
 
 Perturbed Passing Poincaré Maps
 -------------------------------
