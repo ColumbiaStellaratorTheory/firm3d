@@ -101,6 +101,8 @@ class TestCatapultPoincareHost(unittest.TestCase):
         self.assertEqual(trace.call_args.kwargs["vpars"], [0])
         self.assertTrue(trace.call_args.kwargs["vpars_stop"])
         self.assertEqual(trace.call_args.kwargs["max_phase_hits"], 2)
+        self.assertEqual(trace.call_args.kwargs["tmax"], 50)
+        self.assertEqual(trace.call_args.kwargs["max_phase_interval"], 25)
         self.assertEqual(trace.call_args.kwargs["tol"], 1e-8)
         self.assertIs(poinc.field, self.source)
         self.assertEqual(poinc.backend, "catapult")
@@ -129,12 +131,12 @@ class TestCatapultPoincareHost(unittest.TestCase):
                     poinc = PassingPoincare(self.field, **map_options(), tmax=25)
                 np.testing.assert_allclose(poinc.t_all, [[0, 7]])
 
-    def test_short_horizon_warns_and_keeps_completed_returns(self):
+    def test_return_timeout_warns_and_keeps_completed_returns(self):
         path = sampled_path()
         path = path[path[:, 0] < 10]
         with (
             patch(GPU_TRACE, return_value=([path], [native_hits(count=1)])),
-            self.assertWarnsRegex(UserWarning, "reached tmax before Nmaps"),
+            self.assertWarnsRegex(UserWarning, "did not return within tmax"),
         ):
             poinc = PassingPoincare(self.field, **map_options(), tmax=10)
         np.testing.assert_allclose(poinc.t_all, [[0, 7]])
@@ -146,7 +148,7 @@ class TestCatapultPoincareHost(unittest.TestCase):
             patch(
                 GPU_TRACE,
                 return_value=([sampled_path(PERIOD / 4)], [native_hits(4, 4)]),
-            ),
+            ) as trace,
             patch(
                 "firm3d.trajectory_helpers.poincare.return_DA",
                 side_effect=lambda values: (values[-1, 0], 9),
@@ -162,6 +164,12 @@ class TestCatapultPoincareHost(unittest.TestCase):
                 nconvergence_points=2,
             )
         self.assertEqual(len(poinc.peta_all[0]), 5)
+        self.assertEqual(trace.call_count, 2)
+        first, second = trace.call_args_list
+        self.assertEqual(first.kwargs["tmax"], 100)
+        self.assertTrue(first.kwargs["forget_exact_path"])
+        np.testing.assert_array_equal(second.kwargs["tmax"], [16])
+        self.assertFalse(second.kwargs["forget_exact_path"])
         self.assertTrue(np.all(np.isfinite(poinc.peta_all[0])))
         self.assertEqual(poinc.DA_times, [[2, 3]])
         self.assertEqual(poinc.DA_all, [[9, 9]])
@@ -179,6 +187,25 @@ class TestCatapultPoincareHost(unittest.TestCase):
                 poinc = PassingPoincare(self.field, **options)
             trace.assert_not_called()
             self.assertEqual(poinc.s_all, expected)
+
+    def test_wba_with_no_completed_returns_does_not_allocate_history(self):
+        with (
+            patch(
+                GPU_TRACE, return_value=([sampled_path()[[0, -1]]], [np.empty((0, 6))])
+            ) as trace,
+            self.assertWarnsRegex(UserWarning, "did not return within tmax"),
+        ):
+            poinc = PassingPoincare(
+                self.field,
+                **map_options(),
+                tmax=25,
+                helicity_M=1,
+                helicity_N=0,
+                chaos_detection=True,
+            )
+        trace.assert_called_once()
+        self.assertTrue(trace.call_args.kwargs["forget_exact_path"])
+        self.assertEqual(poinc.DA_all, [[]])
 
     def test_unsupported_solver_settings_and_invalid_cadence(self):
         for options in [
@@ -223,12 +250,15 @@ class TestCatapultPoincareGPU(unittest.TestCase):
 
     def test_constant_nok_field_matches_analytic_returns_and_cpu(self):
         source = constant_field()
+        period = PERIOD * (25 + 0.4 * 0.2) / (SPEED * 5)
         for precision in ["double", "single"]:
             field = CatapultBoozerField(source, 2, 2, 2, precision=precision)
             for sign in [1, -1]:
                 with self.subTest(precision=precision, sign=sign):
                     options = map_options(
-                        tmax=1.5e-5,
+                        # Four returns fit the total bound, while the old GPU
+                        # interpretation would keep only the first return.
+                        tmax=1.1 * period,
                         solver_options={
                             "tol": 1e-10 if precision == "double" else 1e-8
                         },
@@ -236,7 +266,6 @@ class TestCatapultPoincareGPU(unittest.TestCase):
                     options.update(sign_vpar=sign, Nmaps=4)
                     cpu = PassingPoincare(source, **options)
                     gpu = PassingPoincare(field, **options, dt_save=1e-8)
-                    period = PERIOD * (25 + 0.4 * 0.2) / (SPEED * 5)
                     tolerance = 1e-6 if precision == "double" else 3e-4
                     np.testing.assert_allclose(gpu.s_all, cpu.s_all, atol=tolerance)
                     # CPU event maps wrap each return; a continuous GPU trace
@@ -257,6 +286,18 @@ class TestCatapultPoincareGPU(unittest.TestCase):
                     np.testing.assert_allclose(
                         gpu.t_all, cpu.t_all, rtol=tolerance, atol=2e-12
                     )
+
+    def test_return_deadline_matches_cpu_for_both_precisions(self):
+        source = constant_field()
+        period = PERIOD * (25 + 0.4 * 0.2) / (SPEED * 5)
+        options = map_options(tmax=0.5 * period, solver_options={"tol": 1e-8})
+        cpu = PassingPoincare(source, **options)
+        for precision in ["double", "single"]:
+            field = CatapultBoozerField(source, 2, 2, 2, precision=precision)
+            with self.assertWarnsRegex(UserWarning, "did not return within tmax"):
+                gpu = PassingPoincare(field, **options)
+            self.assertEqual(gpu.t_all, cpu.t_all)
+            np.testing.assert_allclose(gpu.s_all, cpu.s_all)
 
     def test_cpu_nok_interpolant_agreement_and_physical_sections(self):
         filename = (

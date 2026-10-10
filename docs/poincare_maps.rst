@@ -135,14 +135,17 @@ To use CATAPULT, pass a ``CatapultBoozerField`` to the same helper:
     )
     poinc.plot_poincare(filename="passing_poincare_gpu.png")
 
-CATAPULT integrates continuously for the total ``tmax`` and keeps up to
-``Nmaps`` returns. CPU tracing limits each return by ``tmax``. GPU tracing
+Both backends limit each return by ``tmax``. CATAPULT integrates continuously
+with a total upper bound of ``Nmaps * tmax`` and stops if a section takes longer
+than ``tmax``. GPU tracing
 records dense-output section roots, stops at a parallel-velocity reversal,
 and checks ``s >= 0.99`` at accepted endpoints. Section roots are independent
 of ``dt_save``. WBA still uses saved history: converge its saving interval
 separately from the integration tolerance. Equal absolute and relative
 tolerances are required for CATAPULT. The same data, frequency, momentum,
 WBA, and plotting methods remain available.
+For WBA, CATAPULT first finds returns without saving history, then saves only
+through the completed returns to bound the history buffer.
 GPU section angles retain accumulated turns; plotting wraps them periodically.
 
 Perturbed Passing Poincaré Maps

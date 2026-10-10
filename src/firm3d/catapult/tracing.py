@@ -56,6 +56,7 @@ def _event_options(
     vpars_stop=False,
     max_hits=1024,
     max_phase_hits=0,
+    max_phase_interval=None,
     boozer=True,
 ):
     """Validate CPU-style event requests before launching any GPU work."""
@@ -75,6 +76,7 @@ def _event_options(
         and not phases_stop
         and not vpars_stop
         and not max_phase_hits
+        and max_phase_interval is None
     ):
         return None
     if zetas is not None:
@@ -121,6 +123,12 @@ def _event_options(
             raise ValueError(f"{name} must be an integer >= {minimum}")
     if max_phase_hits and not count:
         raise ValueError("max_phase_hits requires phase planes")
+    if max_phase_interval is not None:
+        if np.ndim(max_phase_interval) != 0:
+            raise ValueError("max_phase_interval must be a scalar")
+        _check_finite_scalar("max_phase_interval", max_phase_interval)
+        if not count:
+            raise ValueError("max_phase_interval requires phase planes")
     if not boozer and count:
         raise ValueError("phase planes require Boozer coordinates")
     if not (count or len(vpars) or criteria):
@@ -134,6 +142,7 @@ def _event_options(
         "vpars_stop": vpars_stop,
         "max_hits": max_hits if count or len(vpars) else 1,
         "max_phase_hits": max_phase_hits,
+        "max_phase_interval": 0 if max_phase_interval is None else max_phase_interval,
         "theta_offsets": (
             inits[:, 1] - np.arctan2(np.sin(inits[:, 1]), np.cos(inits[:, 1]))
             if boozer
@@ -567,6 +576,7 @@ def trace_particles_boozer_gpu(
     vpars_stop=False,
     max_hits=1024,
     max_phase_hits=0,
+    max_phase_interval=None,
     dt=None,
 ):
     """
@@ -601,6 +611,8 @@ def trace_particles_boozer_gpu(
         remains enforced. Custom CPU callbacks cannot run on the GPU.
     max_hits: per-particle event capacity (default 1024); overflow raises.
     max_phase_hits: stop after this many phase hits; zero disables the limit.
+    max_phase_interval: optional maximum time from launch or the last phase
+        hit to the next hit. Stop at this deadline without recording a hit.
     dt: optional initial step, scalar or per particle.
 
     Returns (res_tys, res_hits). Paths have rows (t, s, theta, zeta, vpar),
@@ -641,6 +653,7 @@ def trace_particles_boozer_gpu(
         vpars_stop=vpars_stop,
         max_hits=max_hits,
         max_phase_hits=max_phase_hits,
+        max_phase_interval=max_phase_interval,
     )
     if events is not None:
         output, hits = _launch_boozer(
@@ -715,6 +728,7 @@ def trace_particles_boozer_perturbed_gpu(
     vpars_stop=False,
     max_hits=1024,
     max_phase_hits=0,
+    max_phase_interval=None,
     dt=None,
 ):
     """
@@ -792,6 +806,7 @@ def trace_particles_boozer_perturbed_gpu(
         vpars_stop=vpars_stop,
         max_hits=max_hits,
         max_phase_hits=max_phase_hits,
+        max_phase_interval=max_phase_interval,
     )
     output = _launch_boozer(
         perturbed_field,

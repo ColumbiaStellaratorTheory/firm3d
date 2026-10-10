@@ -9,9 +9,11 @@ python examples/passing_map_unperturbed/passing_map.py --backend cpu
 python examples/passing_map_unperturbed/passing_map.py --backend catapult
 
 Both use PassingPoincare and save numeric NPZ data and a PNG plot under output/.
-CATAPULT requires a GPU. Its --tmax is the total continuous tracing duration;
-CPU tracing limits each return separately. GPU sections interpolate saved
-samples, so converge --dt-save independently of the integration tolerance.
+CATAPULT requires a GPU. Both backends limit each return by --tmax; CATAPULT
+uses Nmaps * tmax as the total upper bound for its continuous trace. GPU sections
+use dense-output roots. Converge --dt-save separately for WBA, which uses saved
+history. CATAPULT finds return times first, then saves history only through
+completed returns.
 
 The passing map is computed with the chaos_detection parameter enabled. Weighted Birkhoff Averaging is
 added as a setting to the passing map and applied to a particle canonical momentum

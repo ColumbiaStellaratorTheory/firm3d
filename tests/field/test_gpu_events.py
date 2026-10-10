@@ -81,6 +81,10 @@ class TestGPUEventsHost(unittest.TestCase):
             {"zetas": [0], "max_hits": 0},
             {"zetas": [0], "max_hits": 2.5},
             {"zetas": [np.nan]},
+            {"max_phase_interval": 1},
+            {"zetas": [0], "max_phase_interval": 0},
+            {"zetas": [0], "max_phase_interval": np.inf},
+            {"zetas": [0], "max_phase_interval": [1]},
             {"vpars": [[0]]},
             {"phases": [0], "n_zetas": [1, 2]},
             {"zetas": [0], "boozer": False},
@@ -118,6 +122,53 @@ class TestGPUEventsHost(unittest.TestCase):
 
 @unittest.skipUnless(HAS_CUDA, "requires CUDA bindings and a GPU")
 class TestGPUEventsDevice(unittest.TestCase):
+    def test_phase_interval_resets_and_stops_at_deadline(self):
+        speed = 0.8 * SPEED
+        interval = 0.3 / speed
+        for precision in ["double", "single"]:
+            field = CatapultBoozerField(constant_field(0), 2, 2, 2, precision=precision)
+            for saved in [False, True]:
+                paths, hits = trace_particles_boozer_gpu(
+                    field,
+                    np.array([[0.3, 0, 0]]),
+                    [speed],
+                    tmax=4e-6,
+                    dt=1e-7,
+                    dt_save=1e-9,
+                    tol=1e-8,
+                    zetas=[0.1, 0.2],
+                    max_phase_interval=interval,
+                    max_hits=8,
+                    forget_exact_path=not saved,
+                )
+                self.assertEqual(hits[0].shape, (2, 6))
+                np.testing.assert_allclose(
+                    hits[0][:, 0], np.array([0.1, 0.2]) / speed, rtol=2e-6
+                )
+                # Reset by both returns; no return appears during the next gap.
+                self.assertEqual(paths[0][-1, 0], hits[0][-1, 0] + interval)
+                self.assertTrue(np.all(paths[0][:, 0] <= paths[0][-1, 0]))
+
+    def test_phase_hit_exactly_at_deadline_is_included(self):
+        speed = 0.8 * SPEED
+        field = CatapultBoozerField(constant_field(0), 2, 2, 2)
+        interval = 0.125 / speed
+        paths, hits = trace_particles_boozer_gpu(
+            field,
+            np.array([[0.3, 0, 0]]),
+            [speed],
+            tmax=3 * interval,
+            dt=interval,
+            zetas=[0.125],
+            max_phase_interval=interval,
+            max_phase_hits=1,
+            max_hits=2,
+            forget_exact_path=True,
+        )
+        self.assertEqual(hits[0].shape, (1, 6))
+        np.testing.assert_allclose(hits[0][0, 0], interval, rtol=1e-14)
+        self.assertEqual(paths[0][-1, 0], hits[0][0, 0])
+
     def test_sections_both_directions_and_cadence_independence(self):
         points = np.array([[0.3, 7, 0.2], [0.4, -7, 6.1], [0.2, 0.1, 0]])
         speeds = np.array([0.8, -0.7, 0.5]) * SPEED

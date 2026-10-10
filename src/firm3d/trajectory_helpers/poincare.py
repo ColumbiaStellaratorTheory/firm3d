@@ -98,8 +98,9 @@ class PassingPoincare:
             Nmaps : Number of Poincare return maps to compute for each initial
                     condition (default: 500).
             comm : MPI communicator for parallel execution (default: None).
-            tmax : Maximum integration time for each CPU return, or the total
-                   continuous tracing duration with CATAPULT (default: 1e-2 s).
+            tmax : Maximum integration time for each return, with either
+                   backend (default: 1e-2 s). CATAPULT traces continuously with
+                   a total upper bound of Nmaps * tmax.
             solver_options : Dictionary of options to pass to the ODE solver
                              (default: {}).
             helicity_M : Poloidal helicity of the field-strength contours.
@@ -475,7 +476,7 @@ class PassingPoincare:
         )
 
     def _compute_passing_map_catapult(self):
-        """Trace each MPI rank's ensemble once, then use the common map format."""
+        """Trace continuously with the CPU per-return deadline and map format."""
         from ..catapult.tracing import trace_particles_boozer_gpu
 
         first, last = parallel_loop_bounds(self.comm, len(self.s_init))
@@ -488,24 +489,51 @@ class PassingPoincare:
         )
         speeds = np.asarray(self.vpars_init[first:last])
         if len(initial) and self.Nmaps:
+            total_time = self.Nmaps * self.tmax
+            if not np.isfinite(total_time):
+                raise ValueError("Nmaps * tmax must be finite")
+            options = {
+                "dt_save": self.dt_save,
+                "tol": self._gpu_tol,
+                "mass": self.mass,
+                "charge": self.charge,
+                "Ekin": self.Ekin,
+                "zetas": [0],
+                "vpars": [0],
+                "vpars_stop": True,
+                "stopping_criteria": [MaxToroidalFluxStoppingCriterion(0.99)],
+                "max_phase_hits": self.Nmaps,
+                "max_hits": self.Nmaps + 1,
+                "max_phase_interval": self.tmax if self.tmax else None,
+            }
             paths, hits = trace_particles_boozer_gpu(
                 self.catapult_field,
                 initial,
                 speeds,
-                tmax=self.tmax,
-                dt_save=self.dt_save,
-                tol=self._gpu_tol,
-                mass=self.mass,
-                charge=self.charge,
-                Ekin=self.Ekin,
-                forget_exact_path=not self.DA_poinc,
-                zetas=[0],
-                vpars=[0],
-                vpars_stop=True,
-                stopping_criteria=[MaxToroidalFluxStoppingCriterion(0.99)],
-                max_phase_hits=self.Nmaps,
-                max_hits=self.Nmaps + 1,
+                tmax=total_time,
+                forget_exact_path=True,
+                **options,
             )
+            if self.DA_poinc:
+                # Discover actual return times without allocating history for
+                # the conservative Nmaps*tmax bound. WBA needs only the prefix
+                # through the last completed return, including for lost paths.
+                horizons = np.array(
+                    [
+                        sections[-1, 0] if len(sections) else 0.0
+                        for particle in hits
+                        for sections in [particle[particle[:, 1] == 0]]
+                    ]
+                )
+                if np.any(horizons):
+                    paths, _ = trace_particles_boozer_gpu(
+                        self.catapult_field,
+                        initial,
+                        speeds,
+                        tmax=horizons,
+                        forget_exact_path=False,
+                        **options,
+                    )
         else:
             paths = [
                 np.array([[0, *point, speed]]) for point, speed in zip(initial, speeds)
@@ -555,8 +583,8 @@ class PassingPoincare:
 
         if incomplete:
             warn(
-                f"{incomplete} CATAPULT trajectories reached tmax before Nmaps "
-                "returns; increase tmax or reduce Nmaps.",
+                f"{incomplete} CATAPULT trajectories did not return within "
+                "tmax for one section; increase tmax.",
                 stacklevel=3,
             )
         result = (s_all, thetas_all, vpars_all, t_all, peta_all, DA_all, DA_times)

@@ -9,17 +9,19 @@
 struct DeviceEvents {
     double *planes = nullptr, *vpars = nullptr, *criteria = nullptr;
     double *hits = nullptr, *end_times = nullptr, *offsets = nullptr;
-    double *cursors = nullptr, *transit_start = nullptr;
+    double *cursors = nullptr, *transit_start = nullptr, *last_phase_time = nullptr;
     int *counts = nullptr, *phase_counts = nullptr, *iterations = nullptr;
     int* overflow = nullptr;
     int nplanes = 0, nvpars = 0, ncriteria = 0, capacity = 0, max_phase_hits = 0;
     bool phases_stop = false, vpars_stop = false;
+    double max_phase_interval = 0;
 };
 
 struct EventRequest {
     vector<double> planes, vpars, criteria, theta_offsets;
     int capacity = 0, max_phase_hits = 0;
     bool phases_stop = false, vpars_stop = false;
+    double max_phase_interval = 0;
     py::array_t<double> hits, end_times;
     bool enabled() const { return !planes.empty() || !vpars.empty() || !criteria.empty(); }
 
@@ -29,11 +31,13 @@ struct EventRequest {
         vpars = options["vpars"].cast<vector<double>>();
         capacity = options["max_hits"].cast<int>();
         max_phase_hits = options["max_phase_hits"].cast<int>();
+        if(options.contains("max_phase_interval")) max_phase_interval = options["max_phase_interval"].cast<double>();
         phases_stop = options["phases_stop"].cast<bool>();
         vpars_stop = options["vpars_stop"].cast<bool>();
         theta_offsets = options["theta_offsets"].cast<vector<double>>();
         if(planes.size() % 4 || capacity <= 0 || max_phase_hits < 0 ||
-           (planes.empty() && (phases_stop || max_phase_hits)) ||
+           !std::isfinite(max_phase_interval) || max_phase_interval < 0 ||
+           (planes.empty() && (phases_stop || max_phase_hits || max_phase_interval)) ||
            (vpars.empty() && vpars_stop)){
             throw std::invalid_argument("Invalid GPU event configuration");
         }
@@ -98,9 +102,11 @@ __device__ void record_step_events(DeviceEvents events, int particle, int p,
         step.nbranches = roots(step.state[1], 0, 1, step.branch_roots);
     }
     double limit = fmin(1.0, (tmax - time) / step.h);
+    const double step_limit = limit;
     int stop_index = 0;
     bool endpoint_stop = false;
     bool root_stop = false;
+    bool interval_stop = false;
     const int iteration = ++events.iterations[particle];
     const double zeta_end = double(x_temp[3*PARTICLES_PER_BLOCK+p]) + step.zeta_offset;
     if(iteration == 1) events.transit_start[particle] = zeta_end;
@@ -121,6 +127,14 @@ __device__ void record_step_events(DeviceEvents events, int particle, int p,
     if(events.nplanes+events.nvpars) cursors += size_t(particle)*(events.nplanes+events.nvpars);
     for(int j = 0; j < events.nplanes+events.nvpars; ++j) cursors[j] = 0;
     while(true){
+        // A section resets its deadline within the same accepted step. Search
+        // through the deadline before timing out, so an exact-deadline return
+        // is retained, as on the CPU.
+        limit = step_limit;
+        if(events.max_phase_interval > 0){
+            double deadline = events.last_phase_time[particle] + events.max_phase_interval;
+            limit = fmin(limit, fmax(0.0, (deadline - time) / step.h));
+        }
         double next = limit + 1;
         int index = -1;
         for(int j = 0; j < events.nplanes; ++j){
@@ -139,7 +153,12 @@ __device__ void record_step_events(DeviceEvents events, int particle, int p,
                 }
             }
         }
-        if(index < 0 || next > limit) break;
+        if(index < 0 || next > limit){
+            interval_stop = events.max_phase_interval > 0 &&
+                events.last_phase_time[particle] + events.max_phase_interval <= time + step_limit*step.h;
+            if(interval_stop) endpoint_stop = false;
+            break;
+        }
         double hit[4];
         for(int j = 0; j < 4; ++j) hit[j] = double(T(value(step.state[j], next)));
         if constexpr(map_rhs_to_coord<id>() == CoordSys::Boozer){
@@ -152,6 +171,7 @@ __device__ void record_step_events(DeviceEvents events, int particle, int p,
         bool stored = write_event(events, particle, time + next*step.h, index, hit);
         bool stop;
         if(index < events.nplanes){
+            if(events.max_phase_interval > 0) events.last_phase_time[particle] = time + next*step.h;
             int count = ++events.phase_counts[particle];
             stop = events.phases_stop || (events.max_phase_hits && count >= events.max_phase_hits);
         } else stop = events.vpars_stop;
@@ -168,10 +188,12 @@ __device__ void record_step_events(DeviceEvents events, int particle, int p,
         }
         write_event(events, particle, time + limit*step.h, stop_index, hit);
     }
-    if(endpoint_stop || root_stop || limit < fmin(1.0, (tmax-time)/step.h) ||
+    if(endpoint_stop || root_stop || interval_stop || limit < fmin(1.0, (tmax-time)/step.h) ||
        (events.phases_stop && events.phase_counts[particle]) ||
        (events.max_phase_hits && events.phase_counts[particle] >= events.max_phase_hits)){
-        events.end_times[particle] = time + limit*step.h;
+        events.end_times[particle] = interval_stop
+            ? events.last_phase_time[particle] + events.max_phase_interval
+            : time + limit*step.h;
     }
     // The next accepted step starts with wrapped coordinates. Preserve angle
     // winding internally, without depending on the trajectory saving cadence.

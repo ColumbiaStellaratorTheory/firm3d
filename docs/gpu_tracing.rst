@@ -101,7 +101,9 @@ zero, velocity indices follow them, and criterion indices are ``-1-i``.
 The enforced boundary follows requested criteria in the index sequence.
 Hit theta retains accumulated turns; zeta is wrapped. ``max_hits`` bounds
 storage per particle (default 1024). Overflow raises an error; increase the
-capacity or shorten the trace. ``max_phase_hits`` optionally stops after a
+capacity or shorten the trace. ``max_phase_interval`` optionally limits the
+time to the next phase hit, measured from launch or the preceding phase hit.
+``max_phase_hits`` optionally stops after a
 chosen number of phase hits.
 
 Boozer tracing accepts CPU ``MaxToroidalFluxStoppingCriterion``,

@@ -1462,6 +1462,7 @@ py::array_t<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range
         events.nvpars = request.vpars.size(); events.ncriteria = request.criteria.size()/2;
         events.capacity = request.capacity; events.max_phase_hits = request.max_phase_hits;
         events.phases_stop = request.phases_stop; events.vpars_stop = request.vpars_stop;
+        events.max_phase_interval = request.max_phase_interval;
         auto allocate = [](void** pointer, const void* source, size_t bytes){
             if(!bytes) return;
             gpuErrchk(cudaMalloc(pointer, bytes));
@@ -1477,6 +1478,7 @@ py::array_t<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range
         allocate((void**)&events.phase_counts, nullptr, size_t(nparticles)*sizeof(int));
         allocate((void**)&events.iterations, nullptr, size_t(nparticles)*sizeof(int));
         allocate((void**)&events.transit_start, nullptr, size_t(nparticles)*sizeof(double));
+        if(events.max_phase_interval > 0) allocate((void**)&events.last_phase_time, nullptr, size_t(nparticles)*sizeof(double));
         allocate((void**)&events.cursors, nullptr, size_t(nparticles)*(events.nplanes+events.nvpars)*sizeof(double));
         allocate((void**)&events.overflow, nullptr, sizeof(int));
         vector<double> offsets(2*size_t(nparticles), 0.0);
@@ -1550,7 +1552,8 @@ py::array_t<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range
             static_cast<void*>(events.end_times), static_cast<void*>(events.offsets),
             static_cast<void*>(events.counts), static_cast<void*>(events.phase_counts),
             static_cast<void*>(events.iterations), static_cast<void*>(events.overflow),
-            static_cast<void*>(events.transit_start), static_cast<void*>(events.cursors)}){
+            static_cast<void*>(events.transit_start), static_cast<void*>(events.cursors),
+            static_cast<void*>(events.last_phase_time)}){
             if(pointer){ gpuErrchk(cudaFree(pointer)); }
         }
     }
