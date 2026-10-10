@@ -206,8 +206,12 @@ class TestCatapultPoincareGPU(unittest.TestCase):
                     period = PERIOD * (25 + 0.4 * 0.2) / (SPEED * 5)
                     tolerance = 1e-6 if precision == "double" else 3e-4
                     np.testing.assert_allclose(gpu.s_all, cpu.s_all, atol=tolerance)
+                    # CPU event maps wrap each return; a continuous GPU trace
+                    # retains the angle's accumulated turns.
                     np.testing.assert_allclose(
-                        gpu.thetas_all, cpu.thetas_all, atol=tolerance
+                        gpu.thetas_all,
+                        np.unwrap(cpu.thetas_all, axis=-1),
+                        atol=tolerance,
                     )
                     np.testing.assert_allclose(
                         gpu.thetas_all[0],
