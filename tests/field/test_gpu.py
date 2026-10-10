@@ -921,6 +921,9 @@ class TestGPUTracingBoozerVacuum(unittest.TestCase):
         # with trajectories: the same initial row, rows at successive save
         # times, and the same final state
         dt_save = 2e-6
+        # The fifth grid time rounds just below tmax, so retain both times.
+        expected_times = np.r_[0, np.arange(1, 6) * dt_save, tmax]
+        self.assertLess(expected_times[-2], tmax)
         res_tys, res_hits = trace_particles_boozer_gpu(
             cfield, stz, vpar, tmax, dt_save=dt_save, **kwargs
         )
@@ -930,8 +933,7 @@ class TestGPUTracingBoozerVacuum(unittest.TestCase):
             self.assertTrue(np.all(np.diff(t) > 0))
             self.assertEqual(res_hits[i].shape, (1, 6) if lost[i] else (0,))
             if not lost[i]:
-                self.assertGreaterEqual(t[-1], tmax)
-                self.assertEqual(len(t), 1 + round(tmax / dt_save))
+                np.testing.assert_array_equal(t, expected_times)
 
 
 @unittest.skipUnless(HAS_CUDA, "CUDA support not available")
