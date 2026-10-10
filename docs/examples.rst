@@ -112,7 +112,7 @@ Traces 1 trapped particle in the Wistell-A configuration scaled to the size and 
 .. _gpu_dense_output_examples:
 
 GPU Trajectory Saving and Kinetic Poincaré Maps
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Run these examples from the repository root:
 

@@ -2,7 +2,6 @@ from warnings import warn
 
 import numpy as np
 
-from ..catapult.field import CatapultBoozerField
 from .._core.util import parallel_loop_bounds
 from ..field.boozermagneticfield import (
     ShearAlfvenHarmonic,
@@ -128,6 +127,8 @@ class PassingPoincare:
                       maps discard paths from the first saved s >= 0.99 or
                       parallel-velocity reversal, without event root finding.
         """
+        from ..catapult.field import CatapultBoozerField
+
         if solver_options is None:
             solver_options = {}
         if sign_vpar not in [-1, 1]:

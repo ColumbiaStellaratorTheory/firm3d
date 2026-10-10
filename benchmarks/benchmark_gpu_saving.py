@@ -1,7 +1,7 @@
 """Measure dense trajectory saving against endpoint-only GPU tracing.
 
 Run from the repository root on a GPU node, for example:
-    python examples/benchmark_gpu_saving.py --output gpu-saving.json
+    python benchmarks/benchmark_gpu_saving.py --output gpu-saving.json
 
 Field tabulation and warm-up are excluded. Timings include device allocation,
 tracing, output transfer, and assembly of the public CPU-format trajectories.
@@ -59,7 +59,10 @@ def main():
         tracing_module, "_save_times"
     ) != expected_dense:
         parser.error("--method must match the native and Python code in PYTHONPATH")
-    filename = Path(__file__).parent / "inputs/boozmn_aten_rescaled_low_res.nc"
+    filename = (
+        Path(__file__).resolve().parents[1]
+        / "examples/inputs/boozmn_aten_rescaled_low_res.nc"
+    )
     equilibrium = BoozerRadialInterpolant(str(filename), 3, enforce_vacuum=True)
     field = CatapultBoozerField(equilibrium, 15, 15, 15, precision=args.precision)
     speed = np.sqrt(2 * ENERGY / MASS)

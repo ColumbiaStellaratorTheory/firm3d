@@ -9,7 +9,7 @@ import firm3dpp
 
 from firm3d.catapult.field import CatapultBoozerField
 from firm3d.field.boozermagneticfield import BoozerAnalytic, InterpolatedBoozerField
-from firm3d.trajectory_helpers import PassingPoincare
+from firm3d.trajectory_helpers import PassingPoincare, compute_rotational_profile
 from firm3d.util.constants import (
     ALPHA_PARTICLE_CHARGE as CHARGE,
     ALPHA_PARTICLE_MASS as MASS,
@@ -164,6 +164,30 @@ class TestCatapultPoincareHost(unittest.TestCase):
 
 @unittest.skipUnless(HAS_CUDA, "requires CUDA bindings and a GPU")
 class TestCatapultPoincareGPU(unittest.TestCase):
+    def test_rotational_profile_uses_catapult_maps(self):
+        field = CatapultBoozerField(constant_field(), 2, 2, 2)
+        profile = compute_rotational_profile(
+            field,
+            0,
+            1,
+            MASS,
+            CHARGE,
+            ENERGY,
+            1,
+            0,
+            0,
+            1,
+            None,
+            ns_poinc=2,
+            Nmaps=4,
+            s_profile=True,
+            tmax=1.5e-5,
+            dt_save=1e-8,
+            solver_options={"tol": 1e-10},
+        )
+        np.testing.assert_allclose(profile[:, 0], [1 / 3, 2 / 3], atol=1e-8)
+        np.testing.assert_allclose(profile[:, 3], 0.4, atol=1e-6)
+
     def test_constant_nok_field_matches_analytic_returns_and_cpu(self):
         source = constant_field()
         for precision in ["double", "single"]:
