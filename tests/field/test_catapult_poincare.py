@@ -23,7 +23,7 @@ HAS_CUDA = hasattr(firm3dpp, "boozer_gpu_tracing")
 
 
 def constant_field():
-    return BoozerAnalytic(etabar=0, B0=5, G0=25, I0=0.2, iota0=0.4, psi0=1)
+    return BoozerAnalytic(etabar=0, B0=5, N=0, G0=25, I0=0.2, iota0=0.4, psi0=1)
 
 
 def map_options(**kwargs):
@@ -170,7 +170,12 @@ class TestCatapultPoincareGPU(unittest.TestCase):
             field = CatapultBoozerField(source, 2, 2, 2, precision=precision)
             for sign in [1, -1]:
                 with self.subTest(precision=precision, sign=sign):
-                    options = map_options(tmax=1.5e-5, solver_options={"tol": 1e-10})
+                    options = map_options(
+                        tmax=1.5e-5,
+                        solver_options={
+                            "tol": 1e-10 if precision == "double" else 1e-8
+                        },
+                    )
                     options.update(sign_vpar=sign, Nmaps=4)
                     cpu = PassingPoincare(source, **options)
                     gpu = PassingPoincare(field, **options, dt_save=1e-8)
