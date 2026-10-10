@@ -125,8 +125,8 @@ The first mirrors the CPU fusion-birth loss-classification example in ARIES-CS,
 saving and classifying lost GPU trajectories in bounded batches. The
 second uses ``PassingPoincare`` to plot a kinetic section; ``--backend cpu``
 runs the same example with CPU event roots. Both backends use the existing
-ATEN passing-map parameters. GPU sections interpolate saved samples, so
-check convergence by reducing ``--dt-save`` for mirror hits and sections.
+ATEN passing-map parameters. GPU section and mirror hits use dense-output
+roots. Converge ``--dt-save`` when computing WBA from saved history.
 See :doc:`poincare_maps` for the
 helper interface and tracing-duration conventions.
 

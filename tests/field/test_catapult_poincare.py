@@ -53,6 +53,20 @@ def sampled_path(rate=PERIOD / 7):
     )
 
 
+def native_hits(transit=7, count=2):
+    times = transit * np.arange(1, count + 1)
+    return np.column_stack(
+        (
+            times,
+            np.zeros(count),
+            0.3 + 0.005 * times,
+            0.2 + 0.03 * times,
+            np.zeros(count),
+            np.full(count, SPEED),
+        )
+    )
+
+
 class TestCatapultPoincareHost(unittest.TestCase):
     def setUp(self):
         self.source = constant_field()
@@ -71,7 +85,9 @@ class TestCatapultPoincareHost(unittest.TestCase):
             CatapultBoozerField(self.source, 2, 2, 2)
 
     def test_batched_trace_and_cpu_transit_time_format(self):
-        with patch(GPU_TRACE, return_value=([sampled_path()], [[]])) as trace:
+        with patch(
+            GPU_TRACE, return_value=([sampled_path()], [native_hits()])
+        ) as trace:
             poinc = PassingPoincare(
                 self.field,
                 **map_options(),
@@ -80,7 +96,11 @@ class TestCatapultPoincareHost(unittest.TestCase):
                 solver_options={"abstol": 1e-8, "reltol": 1e-8},
             )
         trace.assert_called_once()
-        self.assertFalse(trace.call_args.kwargs["forget_exact_path"])
+        self.assertTrue(trace.call_args.kwargs["forget_exact_path"])
+        self.assertEqual(trace.call_args.kwargs["zetas"], [0])
+        self.assertEqual(trace.call_args.kwargs["vpars"], [0])
+        self.assertTrue(trace.call_args.kwargs["vpars_stop"])
+        self.assertEqual(trace.call_args.kwargs["max_phase_hits"], 2)
         self.assertEqual(trace.call_args.kwargs["tol"], 1e-8)
         self.assertIs(poinc.field, self.source)
         self.assertEqual(poinc.backend, "catapult")
@@ -90,12 +110,22 @@ class TestCatapultPoincareHost(unittest.TestCase):
         self.assertEqual(poinc.peta_all, [])
         self.assertEqual(poinc.DA_all, [[]])
 
+    def test_section_points_come_from_native_hits(self):
+        hits = native_hits()
+        hits[:, 2] = [0.42, 0.43]
+        with patch(GPU_TRACE, return_value=([sampled_path()[[0, -1]]], [hits])):
+            poinc = PassingPoincare(self.field, **map_options(), tmax=25, dt_save=25)
+        np.testing.assert_allclose(poinc.s_all, [[0.3, 0.42, 0.43]])
+        np.testing.assert_allclose(poinc.t_all, [[0, 7, 7]])
+
     def test_loss_and_velocity_reversal_discard_later_returns(self):
         for column, value in [(1, 0.995), (4, -SPEED)]:
             with self.subTest(column=column):
                 path = sampled_path()
                 path[path[:, 0] >= 10, column] = value
-                with patch(GPU_TRACE, return_value=([path], [[]])):
+                stop = np.array([[10, -1 if column == 1 else 1, 0.99, 0.5, 2.7, 0]])
+                hits = np.vstack((native_hits(count=1), stop))
+                with patch(GPU_TRACE, return_value=([path[path[:, 0] <= 10]], [hits])):
                     poinc = PassingPoincare(self.field, **map_options(), tmax=25)
                 np.testing.assert_allclose(poinc.t_all, [[0, 7]])
 
@@ -103,7 +133,7 @@ class TestCatapultPoincareHost(unittest.TestCase):
         path = sampled_path()
         path = path[path[:, 0] < 10]
         with (
-            patch(GPU_TRACE, return_value=([path], [[]])),
+            patch(GPU_TRACE, return_value=([path], [native_hits(count=1)])),
             self.assertWarnsRegex(UserWarning, "reached tmax before Nmaps"),
         ):
             poinc = PassingPoincare(self.field, **map_options(), tmax=10)
@@ -113,7 +143,10 @@ class TestCatapultPoincareHost(unittest.TestCase):
         options = map_options()
         options["Nmaps"] = 4
         with (
-            patch(GPU_TRACE, return_value=([sampled_path(PERIOD / 4)], [[]])),
+            patch(
+                GPU_TRACE,
+                return_value=([sampled_path(PERIOD / 4)], [native_hits(4, 4)]),
+            ),
             patch(
                 "firm3d.trajectory_helpers.poincare.return_DA",
                 side_effect=lambda values: (values[-1, 0], 9),

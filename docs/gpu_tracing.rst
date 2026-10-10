@@ -83,8 +83,33 @@ both GPU buffers and host copies; use smaller batches for large histories.
 Set ``forget_exact_path=True`` when only endpoints are needed.
 
 See :ref:`gpu_dense_output_examples` for saving, reloading, and Poincaré
-plotting. Sections extracted from saved samples require a sufficiently fine
-saving interval and a separate convergence check.
+plotting.
+
+Sections and stopping
+---------------------
+
+Request ``zetas=[0.0]`` to save toroidal-section crossings directly in
+``res_hits``, even with ``forget_exact_path=True``. General CPU phase planes
+are supported with ``phases``, ``n_zetas``, ``m_thetas`` and ``omegas``.
+Request ``vpars=[0.0], vpars_stop=True`` to stop at a mirror point, or
+``phases_stop=True`` to stop at the first phase crossing. These roots use the
+accepted step's dense output and are independent of ``dt_save``. The launch
+is excluded; a crossing at a step's right endpoint is included once.
+
+Hits have rows ``(t, index, s, theta, zeta, vpar)``. Phase indices start at
+zero, velocity indices follow them, and criterion indices are ``-1-i``.
+The enforced boundary follows requested criteria in the index sequence.
+Hit theta retains accumulated turns; zeta is wrapped. ``max_hits`` bounds
+storage per particle (default 1024). Overflow raises an error; increase the
+capacity or shorten the trace. ``max_phase_hits`` optionally stops after a
+chosen number of phase hits.
+
+Boozer tracing accepts CPU ``MaxToroidalFluxStoppingCriterion``,
+``MinToroidalFluxStoppingCriterion``, ``ToroidalTransitStoppingCriterion``,
+``IterationStoppingCriterion`` and ``StepSizeStoppingCriterion`` objects.
+These checks use accepted endpoints, as on the CPU. Cartesian tracing
+supports iteration and step-size criteria and velocity hits. Field boundaries
+remain enforced; custom Python stopping callbacks cannot run on the GPU.
 
 Single precision
 ----------------

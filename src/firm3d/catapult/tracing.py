@@ -42,6 +42,131 @@ def _check_finite_scalar(name, value):
         raise ValueError(f"{name} must be finite and positive, got {value}")
 
 
+def _event_options(
+    inits,
+    *,
+    zetas=None,
+    phases=None,
+    n_zetas=None,
+    m_thetas=None,
+    omegas=None,
+    vpars=None,
+    stopping_criteria=None,
+    phases_stop=False,
+    vpars_stop=False,
+    max_hits=1024,
+    max_phase_hits=0,
+    boozer=True,
+):
+    """Validate CPU-style event requests before launching any GPU work."""
+    if (
+        all(
+            value is None
+            for value in (
+                zetas,
+                phases,
+                n_zetas,
+                m_thetas,
+                omegas,
+                vpars,
+                stopping_criteria,
+            )
+        )
+        and not phases_stop
+        and not vpars_stop
+        and not max_phase_hits
+    ):
+        return None
+    if zetas is not None:
+        if any(x is not None for x in (phases, n_zetas, m_thetas, omegas)):
+            raise ValueError("zetas cannot be combined with phase-plane arguments")
+        phases = zetas
+
+    def array(name, values):
+        result = np.asarray([] if values is None else values, dtype=np.float64)
+        if result.ndim != 1 or not np.all(np.isfinite(result)):
+            raise ValueError(f"{name} must be a finite one-dimensional array")
+        return result
+
+    phases = array("phases", phases)
+    vpars = array("vpars", vpars)
+    criteria = [] if stopping_criteria is None else list(stopping_criteria)
+    count = len(phases)
+    modes = [
+        np.full(count, default) if values is None else array(name, values)
+        for name, values, default in (
+            ("n_zetas", n_zetas, 1),
+            ("m_thetas", m_thetas, 0),
+            ("omegas", omegas, 0),
+        )
+    ]
+    if any(len(mode) != count for mode in modes):
+        raise ValueError(
+            "phases, n_zetas, m_thetas, and omegas must have equal lengths"
+        )
+    if phases_stop and not count:
+        raise ValueError("phases_stop requires phase planes")
+    if vpars_stop and not len(vpars):
+        raise ValueError("vpars_stop requires vpars")
+    for name, value, minimum in (
+        ("max_hits", max_hits, 1),
+        ("max_phase_hits", max_phase_hits, 0),
+    ):
+        if (
+            isinstance(value, (bool, np.bool_))
+            or not isinstance(value, (int, np.integer))
+            or value < minimum
+            or value > np.iinfo(np.int32).max
+        ):
+            raise ValueError(f"{name} must be an integer >= {minimum}")
+    if max_phase_hits and not count:
+        raise ValueError("max_phase_hits requires phase planes")
+    if not boozer and count:
+        raise ValueError("phase planes require Boozer coordinates")
+    if not (count or len(vpars) or criteria):
+        return None
+    inits = np.asarray(inits, dtype=np.float64)
+    return {
+        "planes": np.column_stack((phases, *modes)).ravel(),
+        "vpars": vpars,
+        "stopping_criteria": criteria,
+        "phases_stop": phases_stop,
+        "vpars_stop": vpars_stop,
+        "max_hits": max_hits if count or len(vpars) else 1,
+        "max_phase_hits": max_phase_hits,
+        "theta_offsets": (
+            inits[:, 1] - np.arctan2(np.sin(inits[:, 1]), np.cos(inits[:, 1]))
+            if boozer
+            else np.zeros(len(inits))
+        ),
+    }
+
+
+def _unpack_events(output, nparticles, dtype, save_times, options):
+    """Keep event times in double precision, including the terminal path row."""
+    samples, hits, end_times = output
+    bodies = _unpack_output(samples, nparticles, dtype, save_times)
+    if isinstance(bodies, np.ndarray):
+        bodies = bodies.astype(np.float64)
+        bodies[:, 0] = end_times
+    else:
+        bodies = [body.astype(np.float64) for body in bodies]
+        for body, end in zip(bodies, end_times):
+            body[:-1, 0] = save_times[: len(body) - 1]
+            body[-1, 0] = end
+    rows = np.asarray(hits, dtype=np.float64).reshape(
+        nparticles, options["max_hits"], 6
+    )
+    events = [particle[np.isfinite(particle[:, 0])] for particle in rows]
+    nplanes = len(options["planes"]) // 4
+    for body, particle, end in zip(bodies, events, end_times):
+        if len(particle) and particle[-1, 0] == end and particle[-1, 1] >= nplanes:
+            # A stopping velocity level is represented exactly in public rows.
+            terminal = body if body.ndim == 1 else body[-1]
+            terminal[4] = particle[-1, 5]
+    return bodies, events
+
+
 def _launch_boozer(
     cfield,
     x_inits,
@@ -54,6 +179,7 @@ def _launch_boozer(
     vtotal,
     tol,
     save_times=None,
+    event_options=None,
 ):
     """
     One uninterrupted CATAPULT trace in a CatapultBoozerField or a
@@ -85,7 +211,8 @@ def _launch_boozer(
     if np.any(tmax < 0):
         raise ValueError("tmax must be nonnegative")
     if nparticles == 0:
-        return [] if save_times is not None else np.empty((0, 7), dtype=dtype)
+        empty = [] if save_times is not None else np.empty((0, 7), dtype=dtype)
+        return (empty, []) if event_options is not None else empty
     kwargs = {
         "quad_pts": cfield.quad_info,
         "srange": cfield.srange,
@@ -124,6 +251,11 @@ def _launch_boozer(
         trace = firm3dpp.boozer_gpu_tracing
     if save_times is not None:
         kwargs["save_times"] = save_times
+    if event_options is not None:
+        kwargs["event_options"] = event_options
+        return _unpack_events(
+            trace(**kwargs), nparticles, dtype, save_times, event_options
+        )
     return _unpack_output(trace(**kwargs), nparticles, dtype, save_times)
 
 
@@ -139,6 +271,7 @@ def _launch_cartesian(
     vtotal,
     tol,
     save_times=None,
+    event_options=None,
 ):
     """
     One uninterrupted CATAPULT trace in a CatapultCartesianField. Returns the
@@ -165,7 +298,8 @@ def _launch_cartesian(
     if np.any(tmax < 0):
         raise ValueError("tmax must be nonnegative")
     if nparticles == 0:
-        return [] if save_times is not None else np.empty((0, 7), dtype=dtype)
+        empty = [] if save_times is not None else np.empty((0, 7), dtype=dtype)
+        return (empty, []) if event_options is not None else empty
     out = firm3dpp.cartesian_gpu_tracing(
         quad_pts=cfield.quad_info,
         rrange=cfield.rrange,
@@ -182,7 +316,10 @@ def _launch_cartesian(
         mu_in=mu,
         nparticles=nparticles,
         **({"save_times": save_times} if save_times is not None else {}),
+        **({"event_options": event_options} if event_options is not None else {}),
     )
+    if event_options is not None:
+        return _unpack_events(out, nparticles, dtype, save_times, event_options)
     return _unpack_output(out, nparticles, dtype, save_times)
 
 
@@ -353,7 +490,7 @@ def _vtotal(Ekin, mass):
     return float(np.sqrt(2 * Ekin / mass))
 
 
-def _cpu_format(inits, parallel_speeds, bodies, tmax):
+def _cpu_format(inits, parallel_speeds, bodies, tmax, infer_losses=True):
     """
     Assemble the CPU tracers' (res_tys, res_hits) from GPU results.
 
@@ -380,7 +517,11 @@ def _cpu_format(inits, parallel_speeds, bodies, tmax):
         paths[:, 0] = first
         paths[:, 1] = bodies[:, 0, :5]
         res_tys = [path if path[1, 0] > 0 else path[:1] for path in paths]
-        lost = bodies[:, 0, 0] < tmax * (1 - 1e-6)
+        lost = (
+            bodies[:, 0, 0] < tmax * (1 - 1e-6)
+            if infer_losses
+            else np.zeros(nparticles, dtype=bool)
+        )
         lost_indices = np.flatnonzero(lost)
         hit_rows = np.column_stack(
             (paths[lost, 1, 0], -np.ones(len(lost_indices)), paths[lost, 1, 1:])
@@ -396,7 +537,7 @@ def _cpu_format(inits, parallel_speeds, bodies, tmax):
         res_tys.append(np.vstack((first[i], body[body[:, 0] > 0])))
         # the kernel stops at t >= tmax in the field's precision, so allow
         # for tmax's own rounding to float32 before calling a particle lost
-        if body[-1, 0] < tmax[i] * (1 - 1e-6):
+        if infer_losses and body[-1, 0] < tmax[i] * (1 - 1e-6):
             res_hits.append(np.array([[body[-1, 0], -1.0, *body[-1, 1:5]]]))
         else:
             res_hits.append(np.asarray([]))
@@ -414,6 +555,19 @@ def trace_particles_boozer_gpu(
     tol=1e-9,
     dt_save=1e-6,
     forget_exact_path=False,
+    *,
+    zetas=None,
+    phases=None,
+    n_zetas=None,
+    m_thetas=None,
+    omegas=None,
+    vpars=None,
+    stopping_criteria=None,
+    phases_stop=False,
+    vpars_stop=False,
+    max_hits=1024,
+    max_phase_hits=0,
+    dt=None,
 ):
     """
     Trace particles in an equilibrium field in Boozer coordinates using
@@ -437,21 +591,28 @@ def trace_particles_boozer_gpu(
         particle, in one uninterrupted trace; if False, save the trajectory
         every dt_save using dense output within accepted steps
 
-    Returns: 2 element tuple containing
-        - res_tys: a list with one (ntimesteps, 5) array per particle of rows
-          (t, s, theta, zeta, vpar); the first row is the initial state at
-          t = 0 and the last the state where tracing stopped. Unlike the CPU
-          tracer, the last row of a lost particle is the state at or just
-          past the s = 1 crossing rather than the last state inside it, a
-          survivor's final state is interpolated at tmax, theta is
-          in (-pi, pi], and zeta is wrapped to [0, 2 pi).
-        - res_hits: a list with one array per particle: a single row
-          (t, -1, s, theta, zeta, vpar) at the final state of a lost
-          particle, or an empty array. The kernel stops particles at s = 1
-          and nowhere else, which is the CPU tracer's
-          MaxToroidalFluxStoppingCriterion(1.0), so the row's index is -1 as
-          for a hit on the CPU's first stopping criterion; there is no
-          stopping_criteria argument.
+    zetas: section angles modulo 2*pi; shorthand for phases with n_zetas=1,
+        m_thetas=0 and omegas=0. Alternatively, phases, n_zetas, m_thetas and
+        omegas specify n*zeta + m*theta - omega*t = phase modulo 2*pi.
+    vpars: parallel-velocity levels to record, including zero for mirror hits.
+    phases_stop, vpars_stop: stop at the earliest requested crossing.
+    stopping_criteria: CPU Max/MinToroidalFlux, Iteration, ToroidalTransit or
+        StepSize criteria, checked at accepted endpoints. The field boundary
+        remains enforced. Custom CPU callbacks cannot run on the GPU.
+    max_hits: per-particle event capacity (default 1024); overflow raises.
+    max_phase_hits: stop after this many phase hits; zero disables the limit.
+    dt: optional initial step, scalar or per particle.
+
+    Returns (res_tys, res_hits). Paths have rows (t, s, theta, zeta, vpar),
+    including the launch and terminal state. Sampled path angles are wrapped.
+    Hits have CPU-format rows (t, index, s, theta, zeta, vpar): phase indices
+    precede velocity indices; stopping criteria use -1-i. Event theta retains
+    winding and zeta is wrapped to [0, 2*pi). Dense event roots are independent
+    of dt_save and work with forget_exact_path=True. A launch on a plane is
+    excluded; a crossing at the right endpoint is included once. Without
+    explicit criteria, the enforced field-boundary hit has index -1; otherwise
+    it follows the requested criteria with index -1-len(stopping_criteria).
+    All public rows use float64; field precision controls state accuracy.
     """
     if not isinstance(field, CatapultBoozerField):
         raise TypeError(
@@ -467,6 +628,44 @@ def trace_particles_boozer_gpu(
         "vtotal": _vtotal(Ekin, mass),
         "tol": tol,
     }
+    events = _event_options(
+        stz_inits,
+        zetas=zetas,
+        phases=phases,
+        n_zetas=n_zetas,
+        m_thetas=m_thetas,
+        omegas=omegas,
+        vpars=vpars,
+        stopping_criteria=stopping_criteria,
+        phases_stop=phases_stop,
+        vpars_stop=vpars_stop,
+        max_hits=max_hits,
+        max_phase_hits=max_phase_hits,
+    )
+    if events is not None:
+        output, hits = _launch_boozer(
+            field,
+            _to_pseudo_cartesian(stz_inits, dtype),
+            parallel_speeds,
+            tmax,
+            _per_particle(dt, nparticles, dtype, -1.0),
+            _per_particle(None, nparticles, dtype, -1.0),
+            mass,
+            charge,
+            kwargs["vtotal"],
+            tol,
+            save_times=None if forget_exact_path else _save_times(tmax, dt_save),
+            event_options=events,
+        )
+        bodies = (
+            _to_boozer(output)[:, None, :]
+            if forget_exact_path
+            else [_to_boozer(traj) for traj in output]
+        )
+        paths, _ = _cpu_format(
+            stz_inits, parallel_speeds, bodies, tmax, infer_losses=False
+        )
+        return paths, hits
     if forget_exact_path:
         # one uninterrupted trace, in the pseudo-Cartesian coordinates the kernel
         # integrates in, and back. The step and the magnetic moment are the
@@ -477,7 +676,7 @@ def trace_particles_boozer_gpu(
             _to_pseudo_cartesian(stz_inits, dtype),
             parallel_speeds,
             tmax,
-            _per_particle(None, nparticles, dtype, -1.0),
+            _per_particle(dt, nparticles, dtype, -1.0),
             _per_particle(None, nparticles, dtype, -1.0),
             mass,
             charge,
@@ -487,7 +686,7 @@ def trace_particles_boozer_gpu(
         bodies = _to_boozer(final)[:, None, :]
     else:
         bodies = save_trajectories_boozer_gpu(
-            field, stz_inits, parallel_speeds, tmax, dt_save, **kwargs
+            field, stz_inits, parallel_speeds, tmax, dt_save, dt=dt, **kwargs
         )
     return _cpu_format(stz_inits, parallel_speeds, bodies, tmax)
 
@@ -504,6 +703,19 @@ def trace_particles_boozer_perturbed_gpu(
     tol=1e-9,
     forget_exact_path=True,
     dt_save=1e-6,
+    *,
+    zetas=None,
+    phases=None,
+    n_zetas=None,
+    m_thetas=None,
+    omegas=None,
+    vpars=None,
+    stopping_criteria=None,
+    phases_stop=False,
+    vpars_stop=False,
+    max_hits=1024,
+    max_phase_hits=0,
+    dt=None,
 ):
     """
     Trace particles in a field with shear Alfven waves in Boozer coordinates
@@ -567,24 +779,44 @@ def trace_particles_boozer_perturbed_gpu(
     else:
         vtotal = float(np.sqrt(2 * Ekin / mass))
 
+    events = _event_options(
+        stz_inits,
+        zetas=zetas,
+        phases=phases,
+        n_zetas=n_zetas,
+        m_thetas=m_thetas,
+        omegas=omegas,
+        vpars=vpars,
+        stopping_criteria=stopping_criteria,
+        phases_stop=phases_stop,
+        vpars_stop=vpars_stop,
+        max_hits=max_hits,
+        max_phase_hits=max_phase_hits,
+    )
     output = _launch_boozer(
         perturbed_field,
         _to_pseudo_cartesian(stz_inits, dtype),
         parallel_speeds,
         tmax,
-        _per_particle(None, nparticles, dtype, -1.0),
+        _per_particle(dt, nparticles, dtype, -1.0),
         mus,
         mass,
         charge,
         vtotal,
         tol,
         save_times=None if forget_exact_path else _save_times(tmax, dt_save),
+        event_options=events,
     )
+    if events is not None:
+        output, hits = output
     if forget_exact_path:
         bodies = _to_boozer(output)[:, None, :]
     else:
         bodies = [_to_boozer(traj) for traj in output]
-    return _cpu_format(stz_inits, parallel_speeds, bodies, tmax)
+    paths, losses = _cpu_format(
+        stz_inits, parallel_speeds, bodies, tmax, infer_losses=events is None
+    )
+    return paths, hits if events is not None else losses
 
 
 def trace_particles_cartesian_gpu(
@@ -598,6 +830,12 @@ def trace_particles_cartesian_gpu(
     tol=1e-9,
     dt_save=1e-6,
     forget_exact_path=False,
+    *,
+    vpars=None,
+    stopping_criteria=None,
+    vpars_stop=False,
+    max_hits=1024,
+    dt=None,
 ):
     """
     Trace particles in Cartesian coordinates using CATAPULT. The arguments
@@ -618,13 +856,13 @@ def trace_particles_cartesian_gpu(
         relative tolerance
     dt_save, forget_exact_path: as for trace_particles_boozer_gpu
 
-    Returns: 2 element tuple containing
-        - res_tys: a list with one (ntimesteps, 5) array per particle of rows
-          (t, x, y, z, vpar), from the initial state at t = 0 to the state
-          where tracing stopped
-        - res_hits: a list with one array per particle: a single row
-          (t, -1, x, y, z, vpar) at the final state of a particle that
-          crossed the surface, or an empty array
+    vpars, vpars_stop, max_hits and dt have the same meaning as in
+    trace_particles_boozer_gpu. Cartesian tracing supports Iteration and
+    StepSize stopping criteria; Boozer flux/transit criteria require a Boozer
+    field. The surface classifier remains enforced.
+
+    Returns (res_tys, res_hits) in CPU format, with velocity hit indices
+    starting at zero and criterion indices -1-i.
     """
     if not isinstance(field, CatapultCartesianField):
         raise TypeError(
@@ -639,13 +877,41 @@ def trace_particles_cartesian_gpu(
         "vtotal": _vtotal(Ekin, mass),
         "tol": tol,
     }
+    events = _event_options(
+        xyz_inits,
+        vpars=vpars,
+        stopping_criteria=stopping_criteria,
+        vpars_stop=vpars_stop,
+        max_hits=max_hits,
+        boozer=False,
+    )
+    if events is not None:
+        output, hits = _launch_cartesian(
+            field,
+            xyz_inits,
+            parallel_speeds,
+            tmax,
+            _per_particle(dt, nparticles, dtype, -1.0),
+            _per_particle(None, nparticles, dtype, -1.0),
+            mass,
+            charge,
+            kwargs["vtotal"],
+            tol,
+            save_times=None if forget_exact_path else _save_times(tmax, dt_save),
+            event_options=events,
+        )
+        bodies = output[:, None, :] if forget_exact_path else output
+        paths, _ = _cpu_format(
+            xyz_inits, parallel_speeds, bodies, tmax, infer_losses=False
+        )
+        return paths, hits
     if forget_exact_path:
         bodies = _launch_cartesian(
             field,
             xyz_inits,
             parallel_speeds,
             tmax,
-            _per_particle(None, nparticles, dtype, -1.0),
+            _per_particle(dt, nparticles, dtype, -1.0),
             _per_particle(None, nparticles, dtype, -1.0),
             mass,
             charge,
@@ -654,6 +920,6 @@ def trace_particles_cartesian_gpu(
         )[:, None, :]
     else:
         bodies = save_trajectories_cartesian_gpu(
-            field, xyz_inits, parallel_speeds, tmax, dt_save, **kwargs
+            field, xyz_inits, parallel_speeds, tmax, dt_save, dt=dt, **kwargs
         )
     return _cpu_format(xyz_inits, parallel_speeds, bodies, tmax)

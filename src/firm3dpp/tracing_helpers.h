@@ -30,6 +30,7 @@ class ToroidalTransitStoppingCriterion : public StoppingCriterion {
     public:
         ToroidalTransitStoppingCriterion(int max_transits) : max_transits(max_transits) {
         };
+        int gpu_limit() const { return max_transits; }
         bool operator()(int iter, double dt, double t, double s, double theta, double zeta, double vpar=0) override {
             if (iter == 1) {
               zeta_last = M_PI;
@@ -49,6 +50,7 @@ class MaxToroidalFluxStoppingCriterion : public StoppingCriterion {
         double max_s;
     public:
         MaxToroidalFluxStoppingCriterion(double max_s) : max_s(max_s) {};
+        double gpu_limit() const { return max_s; }
         bool operator()(int iter, double dt, double t, double s, double theta, double zeta, double vpar=0) override {
             return s>=max_s;
         };
@@ -59,6 +61,7 @@ class MinToroidalFluxStoppingCriterion : public StoppingCriterion {
         double min_s;
     public:
         MinToroidalFluxStoppingCriterion(double min_s) : min_s(min_s) {};
+        double gpu_limit() const { return min_s; }
         bool operator()(int iter, double dt, double t, double s, double theta, double zeta, double vpar=0) override {
             return s<=min_s;
         };
@@ -69,6 +72,7 @@ class IterationStoppingCriterion : public StoppingCriterion {
         int max_iter;
     public:
         IterationStoppingCriterion(int max_iter) : max_iter(max_iter) {};
+        int gpu_limit() const { return max_iter; }
         bool operator()(int iter, double dt, double t, double s, double theta, double zeta, double vpar=0) override {
             return iter>max_iter;
         };
@@ -79,6 +83,7 @@ class StepSizeStoppingCriterion : public StoppingCriterion {
         double min_dt;
     public:
         StepSizeStoppingCriterion(double min_dt) : min_dt(min_dt) {};
+        double gpu_limit() const { return min_dt; }
         bool operator()(int iter, double dt, double t, double s, double theta, double zeta, double vpar=0) override {
             return dt<min_dt;
         };
@@ -267,11 +272,11 @@ bool check_stopping_criteria(
             }
         }
     }
-    
+
     assert(n_zetas.size() == m_thetas.size());
     assert(n_zetas.size() == omegas.size());
     assert(n_zetas.size() == phases.size());
-    
+
     /// Now check whether we have hit any of the phase planes:
     //  n*zeta + m*theta - omega*t = consts
     for (int i = 0; i < n_zetas.size(); ++i) {
@@ -281,12 +286,12 @@ bool check_stopping_criteria(
         double omega = omegas[i];
         double phase_last = nz * zeta_last + mt * theta_last - omega*t_last;
         double phase_current = nz * zeta_current + mt * theta_current - omega*t_current;
-        
+
         if((std::floor((phase_last-phase)/(2*M_PI)) != std::floor((phase_current-phase)/(2*M_PI))) && (phase_current != phase) && (phase_last != phase)) { // check whether phase+k*2pi for some k was crossed
             int fak = std::round(((phase_last+phase_current)/2-phase)/(2*M_PI));
             double phase_shift = fak*2*M_PI + phase;
             assert((phase_last <= phase_shift && phase_shift <= phase_current) || (phase_current <= phase_shift && phase_shift <= phase_last));
-            
+
             std::function<double(double)> rootfun = [&phase_shift, &nz, &mt, &omega, &dense, &y, &stzvt, &axis, &vnorm, &tnorm](double tau){
                 dense.calc_state(tau, y);
                 double t = tau * tnorm;
@@ -309,7 +314,7 @@ bool check_stopping_criteria(
             }
         }
     }
-    
+
     // check whether we have satisfied any of the extra stopping criteria (e.g. left a surface)
     for (int i = 0; i < stopping_criteria.size(); ++i) {
         if(stopping_criteria[i] && (*stopping_criteria[i])(iter, dt, t_current, s_current, theta_current, zeta_current, vpar_current)){

@@ -24,7 +24,6 @@ from ._utils import (
     return_DA,
     _solve_vpar_perturbed,
 )
-from ._sections import section_crossings
 
 
 def _catapult_tolerance(options):
@@ -121,11 +120,10 @@ class PassingPoincare:
                                   detection metric. If None and
                                   chaos_detection=True, a single evaluation
                                   at the end of the trajectory is used.
-            dt_save : Saving interval for CATAPULT (default: 1e-7 s). GPU
-                      sections interpolate saved samples, so converge this
-                      interval separately from the solver tolerance. GPU
-                      maps discard paths from the first saved s >= 0.99 or
-                      parallel-velocity reversal, without event root finding.
+            dt_save : History interval for CATAPULT WBA (default: 1e-7 s).
+                      Section and velocity crossings use dense event roots,
+                      independently of this interval. Flux stopping is checked
+                      at accepted endpoints, as on the CPU.
         """
         from ..catapult.field import CatapultBoozerField
 
@@ -490,7 +488,7 @@ class PassingPoincare:
         )
         speeds = np.asarray(self.vpars_init[first:last])
         if len(initial) and self.Nmaps:
-            paths, _hits = trace_particles_boozer_gpu(
+            paths, hits = trace_particles_boozer_gpu(
                 self.catapult_field,
                 initial,
                 speeds,
@@ -500,26 +498,31 @@ class PassingPoincare:
                 mass=self.mass,
                 charge=self.charge,
                 Ekin=self.Ekin,
-                forget_exact_path=False,
+                forget_exact_path=not self.DA_poinc,
+                zetas=[0],
+                vpars=[0],
+                vpars_stop=True,
+                stopping_criteria=[MaxToroidalFluxStoppingCriterion(0.99)],
+                max_phase_hits=self.Nmaps,
+                max_hits=self.Nmaps + 1,
             )
         else:
             paths = [
                 np.array([[0, *point, speed]]) for point, speed in zip(initial, speeds)
             ]
+            hits = [np.empty((0, 6)) for _ in paths]
 
         s_all, thetas_all, vpars_all, t_all, peta_all, DA_all, DA_times = (
             [] for _ in range(7)
         )
         incomplete = 0
-        for path in paths:
+        for path, particle_hits in zip(paths, hits):
             launch = path[:1]
-            stopped = np.flatnonzero(
-                (path[:, 1] >= 0.99) | (self.sign_vpar * path[:, 4] <= 0)
-            )
-            if len(stopped):
-                path = path[: stopped[0]]
-            returns = section_crossings(path, direction="both")[: self.Nmaps]
-            if not len(stopped) and len(returns) < self.Nmaps:
+            particle_hits = np.asarray(particle_hits).reshape(-1, 6)
+            returns = particle_hits[particle_hits[:, 1] == 0][: self.Nmaps]
+            returns = returns[:, [0, 2, 3, 4, 5]]
+            stopped = np.any(particle_hits[:, 1] != 0)
+            if not stopped and len(returns) < self.Nmaps:
                 incomplete += 1
             samples = np.vstack((launch, returns))
             s_all.append(samples[:, 1].tolist())

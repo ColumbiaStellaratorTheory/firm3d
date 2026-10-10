@@ -13,8 +13,7 @@ The three main classes are:
 3. **PassingPerturbedPoincare**: For passing particles in fields with shear Alfvén wave perturbations
 
 ``PassingPoincare`` also accepts a ``CatapultBoozerField`` for GPU tracing.
-It interpolates sections between saved dense-output samples, while the CPU
-backend uses event roots. See the
+Both backends locate sections with dense-output event roots. See the
 :ref:`trajectory and kinetic examples <gpu_dense_output_examples>`.
 
 Trapped Poincaré Maps
@@ -137,12 +136,13 @@ To use CATAPULT, pass a ``CatapultBoozerField`` to the same helper:
     poinc.plot_poincare(filename="passing_poincare_gpu.png")
 
 CATAPULT integrates continuously for the total ``tmax`` and keeps up to
-``Nmaps`` returns. CPU tracing limits each return by ``tmax``. GPU sections
-interpolate dense-output samples and discard paths from the first saved
-``s >= 0.99`` or parallel-velocity reversal; they use no event root finder.
-Converge ``dt_save`` separately from the integration tolerance. Equal
-absolute and relative tolerances are required for CATAPULT. The same data,
-frequency, momentum, WBA, and plotting methods remain available.
+``Nmaps`` returns. CPU tracing limits each return by ``tmax``. GPU tracing
+records dense-output section roots, stops at a parallel-velocity reversal,
+and checks ``s >= 0.99`` at accepted endpoints. Section roots are independent
+of ``dt_save``. WBA still uses saved history: converge its saving interval
+separately from the integration tolerance. Equal absolute and relative
+tolerances are required for CATAPULT. The same data, frequency, momentum,
+WBA, and plotting methods remain available.
 GPU section angles retain accumulated turns; plotting wraps them periodically.
 ``section_crossings(path)`` also extracts approximate sections from saved
 five-column Boozer paths without tracing again.
