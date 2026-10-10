@@ -12,12 +12,10 @@ The three main classes are:
 2. **PassingPoincare**: For passing particles in unperturbed fields
 3. **PassingPerturbedPoincare**: For passing particles in fields with shear Alfvén wave perturbations
 
-GPU trajectories can also be used to plot approximate sections after tracing.
-The :ref:`GPU dense-output examples <gpu_dense_output_examples>` save paths
-and interpolate toroidal-plane crossings between saved samples, with an
-explicit choice of crossing direction. Section accuracy depends on the
-saving interval; these crossings are not the event roots computed by the
-classes below.
+``PassingPoincare`` also accepts a ``CatapultBoozerField`` for GPU tracing.
+It interpolates sections between saved dense-output samples, while the CPU
+backend uses event roots. See the
+:ref:`trajectory and kinetic examples <gpu_dense_output_examples>`.
 
 Trapped Poincaré Maps
 ---------------------
@@ -145,6 +143,7 @@ interpolate dense-output samples and discard paths from the first saved
 Converge ``dt_save`` separately from the integration tolerance. Equal
 absolute and relative tolerances are required for CATAPULT. The same data,
 frequency, momentum, WBA, and plotting methods remain available.
+GPU section angles retain accumulated turns; plotting wraps them periodically.
 ``section_crossings(path)`` also extracts approximate sections from saved
 five-column Boozer paths without tracing again.
 
