@@ -1,8 +1,12 @@
+"""Kinetic passing Poincare map with CPU or CATAPULT tracing."""
+
+import argparse
+from pathlib import Path
 import time
 
-from firm3d.field.boozermagneticfield import (
-    InterpolatedBoozerField,
-)
+import numpy as np
+
+from firm3d.field.boozermagneticfield import InterpolatedBoozerField
 from firm3d.trajectory_helpers import PassingPoincare
 from firm3d.util.constants import (
     ALPHA_PARTICLE_CHARGE,
@@ -12,59 +16,112 @@ from firm3d.util.constants import (
 from firm3d.util.functions import in_github_actions, proc0_print, setup_logging
 from firm3d.util.mpi import comm_size, comm_world, verbose
 
-boozmn_filename = "../inputs/boozmn_aten_rescaled.nc"
+HERE = Path(__file__).resolve().parent
 
-charge = ALPHA_PARTICLE_CHARGE
-mass = ALPHA_PARTICLE_MASS
-Ekin = FUSION_ALPHA_PARTICLE_ENERGY
 
-resolution = 10 if in_github_actions else 48  # Resolution for field interpolation
-sign_vpar = 1.0  # sign(vpar). should be +/- 1.
-lam = 0.0  # lambda = v_perp^2/(v^2 B) = const. along trajectory
-ntheta_poinc = 1  # Number of zeta initial conditions for poincare
-ns_poinc = 5 if in_github_actions else 120  # Number of s initial conditions
-Nmaps = 5 if in_github_actions else 1000  # Number of Poincare return maps to compute
-ns_interp = resolution  # number of radial grid points for interpolation
-ntheta_interp = resolution  # number of poloidal grid points for interpolation
-nzeta_interp = resolution  # number of toroidal grid points for interpolation
-order = 3  # order for interpolation
-tol = 1e-4 if in_github_actions else 1e-8  # Tolerance for ODE solver
-degree = 3  # Degree for Lagrange interpolation
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--backend", choices=["cpu", "catapult"], default="cpu")
+    parser.add_argument(
+        "--resolution", type=int, default=10 if in_github_actions else 48
+    )
+    parser.add_argument("--ns-poinc", type=int, default=5 if in_github_actions else 120)
+    parser.add_argument("--nmaps", type=int, default=5 if in_github_actions else 1000)
+    parser.add_argument(
+        "--tol", type=float, default=1e-4 if in_github_actions else 1e-8
+    )
+    parser.add_argument("--tmax", type=float, default=1e-2)
+    parser.add_argument("--dt-save", type=float, default=1e-7)
+    parser.add_argument(
+        "--input", type=Path, default=HERE.parent / "inputs/boozmn_aten_rescaled.nc"
+    )
+    parser.add_argument("--output-dir", type=Path, default=HERE / "output")
+    args = parser.parse_args()
+    if args.ns_poinc < 1 or args.nmaps < 1 or args.resolution < 4:
+        parser.error("ns-poinc/nmaps must be positive; resolution must be at least 4")
+    if any(not np.isfinite(v) or v <= 0 for v in (args.tol, args.tmax, args.dt_save)):
+        parser.error("tol, tmax, and dt-save must be finite and positive")
 
-# Setup logging to redirect output to file
-setup_logging(f"stdout_passing_map_{resolution}_{comm_size}.txt")
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    setup_logging(str(args.output_dir / f"stdout_{args.backend}_{comm_size}.txt"))
+    started = time.perf_counter()
+    field = InterpolatedBoozerField.from_booz_xform(
+        str(args.input.resolve()),
+        degree=3,
+        ns=args.resolution,
+        ntheta=args.resolution,
+        nzeta=args.resolution,
+        comm=comm_world,
+    )
+    if args.backend == "catapult":
+        from firm3d.catapult.field import CatapultBoozerField
 
-time1 = time.time()
+        field = CatapultBoozerField(
+            field, args.resolution, args.resolution, args.resolution
+        )
 
-field = InterpolatedBoozerField.from_booz_xform(
-    boozmn_filename,
-    degree=order,
-    ns=ns_interp,
-    ntheta=ntheta_interp,
-    nzeta=nzeta_interp,
-    comm=comm_world,
-)
+    # Same ATEN equilibrium, alpha energy, pitch, launch grid, equations,
+    # tolerance, and momentum/WBA diagnostics for either backend.
+    poinc = PassingPoincare(
+        field,
+        lam=0.0,
+        sign_vpar=1.0,
+        mass=ALPHA_PARTICLE_MASS,
+        charge=ALPHA_PARTICLE_CHARGE,
+        Ekin=FUSION_ALPHA_PARTICLE_ENERGY,
+        ns_poinc=args.ns_poinc,
+        ntheta_poinc=1,
+        Nmaps=args.nmaps,
+        comm=comm_world,
+        tmax=args.tmax,
+        dt_save=args.dt_save,
+        helicity_N=field.nfp,
+        helicity_M=1,
+        solver_options={"reltol": args.tol, "abstol": args.tol},
+        chaos_detection=True,
+    )
+    proc0_print("poincare time: ", time.perf_counter() - started)
+    if verbose:
+        arrays = {}
+        for i, (s, theta, vpar, transits, peta, accuracy, steps) in enumerate(
+            zip(
+                poinc.s_all,
+                poinc.thetas_all,
+                poinc.vpars_all,
+                poinc.t_all,
+                poinc.peta_all,
+                poinc.DA_all,
+                poinc.DA_times,
+            )
+        ):
+            arrays[f"particle_{i:06d}"] = np.column_stack(
+                (np.cumsum(transits), s, theta, np.zeros(len(s)), vpar)
+            )
+            arrays[f"momentum_{i:06d}"] = np.asarray(peta)
+            arrays[f"accuracy_{i:06d}"] = np.column_stack((steps, accuracy))
+        np.savez_compressed(
+            args.output_dir / f"poincare_{args.backend}.npz",
+            **arrays,
+            backend=args.backend,
+            columns=np.array(["t", "s", "theta", "zeta", "vpar"]),
+            input_file=str(args.input.resolve()),
+            ns_poinc=args.ns_poinc,
+            nmaps=args.nmaps,
+            resolution=args.resolution,
+            tol=args.tol,
+            tmax=args.tmax,
+            dt_save=args.dt_save,
+            energy=FUSION_ALPHA_PARTICLE_ENERGY,
+            mass=ALPHA_PARTICLE_MASS,
+            charge=ALPHA_PARTICLE_CHARGE,
+            pitch=0.0,
+            sign_vpar=1.0,
+        )
+        poinc.plot_poincare(
+            filename=str(args.output_dir / f"poincare_{args.backend}.png")
+        )
+        proc0_print("Return counts: ", [len(path) - 1 for path in poinc.s_all])
 
-poinc = PassingPoincare(
-    field,
-    lam,
-    sign_vpar,
-    mass,
-    charge,
-    Ekin,
-    ns_poinc=ns_poinc,
-    ntheta_poinc=ntheta_poinc,
-    Nmaps=Nmaps,
-    comm=comm_world,
-    helicity_N=1 * field.nfp,
-    helicity_M=1,
-    solver_options={"reltol": tol, "abstol": tol},
-    chaos_detection=True,
-)
 
-if verbose and not in_github_actions:
-    poinc.plot_poincare()
-
-time2 = time.time()
-
-proc0_print("poincare time: ", time2 - time1)
+if __name__ == "__main__":
+    main()
