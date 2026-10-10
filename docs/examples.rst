@@ -47,7 +47,7 @@ Passing Map Analysis
 
 **Location**: ``examples/passing_map_perturbed_QA/``, ``examples/passing_map_perturbed_QH/``, and ``examples/passing_map_unperturbed/``
 
-Computes the passing Poincaré map in various configurations. The perturbed examples use the Landreman & Buller 2.5% beta QA and QH configurations with shear Alfvén waves (m = 1, n = 1 for QA; m = 1, n = 2 for QH). The unperturbed example uses the Wistell-A configuration scaled to the size and field strength of ARIES-CS with co-passing alpha particles, with chaos_detection=True enabled to color the Poincaré map by the Weighted Birkhoff Average digit accuracy.
+Computes the passing Poincaré map in various configurations. The perturbed examples use the Landreman & Buller 2.5% beta QA and QH configurations with shear Alfvén waves (m = 1, n = 1 for QA; m = 1, n = 2 for QH). The unperturbed example uses the full ATEN equilibrium with co-passing alpha particles, with chaos_detection=True enabled to color the Poincaré map by the Weighted Birkhoff Average digit accuracy.
 
 .. code-block:: bash
 
@@ -111,34 +111,22 @@ Traces 1 trapped particle in the Wistell-A configuration scaled to the size and 
 
 .. _gpu_dense_output_examples:
 
-GPU Trajectory Saving and Poincaré Sections
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+GPU Trajectory Saving and Kinetic Poincaré Maps
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-**Location**: ``examples/gpu_dense_output/``
-
-Run the saving and plotting examples from the repository root on a GPU node:
+Run these examples from the repository root:
 
 .. code-block:: console
 
    python examples/gpu_dense_output/save_trajectories.py
-   python examples/gpu_dense_output/plot_poincare.py
+   python examples/passing_map_unperturbed/passing_map.py --backend catapult
 
-They write an NPZ trajectory archive, trajectory and Poincaré figures, and
-CSV section data. Plotting saved trajectories can run without a GPU.
-Sections use interpolation between saved samples; check convergence by
-reducing ``dt_save``.
-
-To compare with the parameters of the existing unperturbed CPU passing-map
-example, run:
-
-.. code-block:: console
-
-   python examples/gpu_dense_output/compare_poincare.py
-
-The example README describes the shared physical parameters, output formats,
-controls, and boundary differences. The larger
-``examples/gpu_boozer_trajectories/`` and
-``examples/gpu_cartesian_trajectories/`` examples demonstrate HDF5 storage.
+The first saves trajectories to an NPZ archive and plots saved orbits. The
+second uses ``PassingPoincare`` to plot a kinetic section; ``--backend cpu``
+runs the same example with CPU event roots. Both backends use the existing
+ATEN passing-map parameters. GPU sections interpolate saved samples, so
+check convergence by reducing ``--dt-save``. See :doc:`poincare_maps` for the
+helper interface and tracing-duration conventions.
 
 Resolution Studies
 ~~~~~~~~~~~~~~~~~~

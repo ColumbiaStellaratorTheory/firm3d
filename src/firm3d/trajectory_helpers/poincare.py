@@ -2,6 +2,7 @@ from warnings import warn
 
 import numpy as np
 
+from ..catapult.field import CatapultBoozerField
 from .._core.util import parallel_loop_bounds
 from ..field.boozermagneticfield import (
     ShearAlfvenHarmonic,
@@ -24,6 +25,28 @@ from ._utils import (
     return_DA,
     _solve_vpar_perturbed,
 )
+from ._sections import section_crossings
+
+
+def _catapult_tolerance(options):
+    """Translate supported CPU options without silently ignoring differences."""
+    unsupported = set(options) - {"tol", "abstol", "reltol", "axis", "ODE_solver"}
+    if unsupported:
+        raise ValueError(f"Unsupported CATAPULT solver options: {sorted(unsupported)}")
+    if options.get("axis") not in (None, 0):
+        raise ValueError("CATAPULT passing maps integrate in time (axis=0)")
+    if options.get("ODE_solver", "boost") != "boost":
+        raise ValueError("CATAPULT uses the Dormand-Prince solver")
+    tol = options.get("tol", 1e-9)
+    absolute = options.get("abstol")
+    relative = options.get("reltol")
+    absolute = tol if absolute is None else absolute
+    relative = tol if relative is None else relative
+    if absolute != relative:
+        raise ValueError("CATAPULT requires equal abstol and reltol")
+    if not np.isfinite(absolute) or absolute <= 0:
+        raise ValueError("CATAPULT tolerance must be finite and positive")
+    return absolute
 
 
 class PassingPoincare:
@@ -49,6 +72,7 @@ class PassingPoincare:
         helicity_Mp=None,
         chaos_detection=False,
         nconvergence_points=None,
+        dt_save=1e-7,
     ):
         r"""
         Initialize and compute the passing Poincare map, evaluated by
@@ -58,7 +82,8 @@ class PassingPoincare:
         not change sign.
 
         Args:
-            field : The :class:`BoozerMagneticField` instance.
+            field : A :class:`BoozerMagneticField` for CPU event roots, or
+                    :class:`CatapultBoozerField` for GPU dense trajectories.
             lam : Pitch-angle variable :math:`\lambda = v_\perp^2/(v^2 B)`.
             sign_vpar : Sign of the parallel velocity (+1 or -1).
             mass : Particle mass.
@@ -75,8 +100,8 @@ class PassingPoincare:
             Nmaps : Number of Poincare return maps to compute for each initial
                     condition (default: 500).
             comm : MPI communicator for parallel execution (default: None).
-            tmax : Maximum integration time for each segment of the Poincare
-                   map (default: 1e-2 s).
+            tmax : Maximum integration time for each CPU return, or the total
+                   continuous tracing duration with CATAPULT (default: 1e-2 s).
             solver_options : Dictionary of options to pass to the ODE solver
                              (default: {}).
             helicity_M : Poloidal helicity of the field-strength contours.
@@ -97,11 +122,29 @@ class PassingPoincare:
                                   detection metric. If None and
                                   chaos_detection=True, a single evaluation
                                   at the end of the trajectory is used.
+            dt_save : Saving interval for CATAPULT (default: 1e-7 s). GPU
+                      sections interpolate saved samples, so converge this
+                      interval separately from the solver tolerance. GPU
+                      maps discard paths from the first saved s >= 0.99 or
+                      parallel-velocity reversal, without event root finding.
         """
         if solver_options is None:
             solver_options = {}
         if sign_vpar not in [-1, 1]:
             raise ValueError("sign_vpar should be either -1 or +1")
+
+        self.catapult_field = field if isinstance(field, CatapultBoozerField) else None
+        self.backend = "catapult" if self.catapult_field is not None else "cpu"
+        self.dt_save = dt_save
+        if self.catapult_field is not None:
+            field = self.catapult_field.field
+            self._gpu_tol = _catapult_tolerance(solver_options)
+            if not np.isfinite(dt_save) or dt_save <= 0:
+                raise ValueError("dt_save must be finite and positive")
+            if not np.isfinite(tmax) or tmax < 0:
+                raise ValueError("tmax must be finite and nonnegative")
+            if not isinstance(Nmaps, (int, np.integer)) or Nmaps < 0:
+                raise ValueError("Nmaps must be a nonnegative integer")
 
         self.helicity_N = helicity_N
         self.helicity_M = helicity_M
@@ -251,6 +294,9 @@ class PassingPoincare:
                 helicity_M and helicity_N; otherwise an empty list.
         """
 
+        if self.catapult_field is not None:
+            raise ValueError("CATAPULT computes the ensemble in compute_passing_map")
+
         points = np.zeros((1, 3))
         points[:, 0] = point[0]
         points[:, 1] = point[1]
@@ -323,12 +369,16 @@ class PassingPoincare:
             s_all : List of s coordinate lists, one per trajectory.
             thetas_all : List of theta coordinate lists, one per trajectory.
             vpars_all : List of parallel velocity lists, one per trajectory.
-            t_all : List of cumulative transit time lists, one per trajectory.
+            t_all : Lists starting with zero followed by individual transit
+                    times, one per trajectory.
             peta_all : List of canonical momentum lists (empty if peta_profile
                 is False).
             DA_all : List of WBA digit-accuracy lists, one per trajectory.
             DA_times : List of transit indices at which DA was evaluated.
         """
+        if self.catapult_field is not None:
+            return self._compute_passing_map_catapult()
+
         Ntrj = len(self.s_init)
 
         s_all = []
@@ -411,6 +461,107 @@ class PassingPoincare:
             DA_times = [i for o in self.comm.allgather(DA_times) for i in o]
 
         return s_all, thetas_all, vpars_all, t_all, peta_all, DA_all, DA_times
+
+    def _sampled_momentum(self, samples):
+        return compute_peta(
+            self.field,
+            samples[:, 1:4],
+            samples[:, 4],
+            self.mass,
+            self.charge,
+            self.helicity_M,
+            self.helicity_N,
+            helicity_Mp=self.helicity_Mp,
+            helicity_Np=self.helicity_Np,
+        )
+
+    def _compute_passing_map_catapult(self):
+        """Trace each MPI rank's ensemble once, then use the common map format."""
+        from ..catapult.tracing import trace_particles_boozer_gpu
+
+        first, last = parallel_loop_bounds(self.comm, len(self.s_init))
+        initial = np.column_stack(
+            (
+                self.s_init[first:last],
+                self.thetas_init[first:last],
+                np.zeros(last - first),
+            )
+        )
+        speeds = np.asarray(self.vpars_init[first:last])
+        if len(initial) and self.Nmaps:
+            paths, _hits = trace_particles_boozer_gpu(
+                self.catapult_field,
+                initial,
+                speeds,
+                tmax=self.tmax,
+                dt_save=self.dt_save,
+                tol=self._gpu_tol,
+                mass=self.mass,
+                charge=self.charge,
+                Ekin=self.Ekin,
+                forget_exact_path=False,
+            )
+        else:
+            paths = [
+                np.array([[0, *point, speed]]) for point, speed in zip(initial, speeds)
+            ]
+
+        s_all, thetas_all, vpars_all, t_all, peta_all, DA_all, DA_times = (
+            [] for _ in range(7)
+        )
+        incomplete = 0
+        for path in paths:
+            launch = path[:1]
+            stopped = np.flatnonzero(
+                (path[:, 1] >= 0.99) | (self.sign_vpar * path[:, 4] <= 0)
+            )
+            if len(stopped):
+                path = path[: stopped[0]]
+            returns = section_crossings(path, direction="both")[: self.Nmaps]
+            if not len(stopped) and len(returns) < self.Nmaps:
+                incomplete += 1
+            samples = np.vstack((launch, returns))
+            s_all.append(samples[:, 1].tolist())
+            thetas_all.append(samples[:, 2].tolist())
+            vpars_all.append(samples[:, 4].tolist())
+            # Match the CPU helper: zero followed by individual transit times.
+            t_all.append(np.r_[0, np.diff(samples[:, 0])].tolist())
+            particle_DAs, particle_DA_times = [], []
+            if self.peta_profile:
+                momentum = self._sampled_momentum(samples)
+                peta_all.append(momentum.tolist())
+                if self.DA_poinc and len(returns):
+                    history = path[path[:, 0] < returns[-1, 0]]
+                    time_momentum = np.column_stack(
+                        (history[:, 0], self._sampled_momentum(history))
+                    )
+                    for step in self.WBA_transit_steps:
+                        if step >= len(returns):
+                            continue
+                        time = returns[step, 0]
+                        count = np.searchsorted(history[:, 0], time)
+                        values = np.vstack(
+                            (time_momentum[:count], [time, momentum[step + 1]])
+                        )
+                        _, accuracy = return_DA(values)
+                        particle_DAs.append(accuracy)
+                        particle_DA_times.append(step)
+            DA_all.append(particle_DAs)
+            DA_times.append(particle_DA_times)
+
+        if incomplete:
+            warn(
+                f"{incomplete} CATAPULT trajectories reached tmax before Nmaps "
+                "returns; increase tmax or reduce Nmaps.",
+                stacklevel=3,
+            )
+        result = (s_all, thetas_all, vpars_all, t_all, peta_all, DA_all, DA_times)
+        if self.comm is not None:
+            result = tuple(
+                [item for group in self.comm.allgather(values) for item in group]
+                for values in result
+            )
+        return result
 
     def compute_frequencies(self, s_profile=True):
         """
@@ -2289,13 +2440,14 @@ def compute_rotational_profile(
     s_profile=False,
     tmax=1e-2,
     solver_options=None,
+    dt_save=1e-7,
 ):
     r"""
     Compute the rotational-transform and orbit-helicity profile from a
     passing-particle Poincare map at a fixed pitch angle.
 
     Args:
-        field : The (unperturbed) BoozerMagneticField instance to trace in.
+        field : An unperturbed BoozerMagneticField or CatapultBoozerField.
         pitch : Pitch angle variable, lambda = vperp^2 / (v^2 B).
         sgn : Desired sign of the parallel velocity (+1 or -1).
         mass : Particle mass.
@@ -2314,6 +2466,7 @@ def compute_rotational_profile(
         tmax : Maximum integration time (default: 1e-2).
         solver_options : Dict of solver options passed to PassingPoincare. If
                           None, defaults to {"axis": 0}.
+        dt_save : CATAPULT trajectory saving interval (default: 1e-7 s).
 
     Returns:
         profiles : Array of shape (npoints, 4) containing, for each initial
@@ -2335,6 +2488,7 @@ def compute_rotational_profile(
         comm=comm,
         tmax=tmax,
         solver_options=solver_options,
+        dt_save=dt_save,
         helicity_M=helicity_M,
         helicity_N=helicity_N,
         helicity_Mp=helicity_Mp,

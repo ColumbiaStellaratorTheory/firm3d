@@ -62,7 +62,7 @@ jobs:
       - name: Run tests
         run: |
           python -m pip list
-          python -m coverage run -m unittest tests.field.test_gpu tests.field.test_gpu_dense_output
+          python -m coverage run -m unittest tests.field.test_gpu tests.field.test_gpu_dense_output tests.field.test_catapult_poincare
           python -m coverage xml
 
       - name: Upload coverage to Codecov
@@ -75,9 +75,9 @@ jobs:
       - name: Run GPU examples
         run: |
           (cd examples/gpu_boozer_tracing && python gpu_boozer_tracing.py)
-          (cd examples/gpu_boozer_trajectories && python gpu_boozer_trajectories.py)
 
           (cd examples/gpu_saw_tracing && python gpu_saw_tracing.py)
 
           (cd examples/gpu_cartesian_tracing && python gpu_cartesian_tracing.py)
-          (cd examples/gpu_cartesian_trajectories && python gpu_cartesian_trajectories.py)
+          python examples/gpu_dense_output/save_trajectories.py --nparticles 5 --resolution 5 --tmax 1e-5 --dt-save 1e-7 --tol 1e-4
+          python examples/passing_map_unperturbed/passing_map.py --backend catapult

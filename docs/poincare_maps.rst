@@ -123,6 +123,31 @@ The ``PassingPoincare`` class computes Poincaré maps for passing particles in u
 - **sign_vpar**: Sign of parallel velocity (+1 or -1)
 - **ns_poinc, ntheta_poinc**: Grid resolution for initial conditions
 
+To use CATAPULT, pass a ``CatapultBoozerField`` to the same helper:
+
+.. code-block:: python
+
+    from firm3d.catapult.field import CatapultBoozerField
+
+    field_gpu = CatapultBoozerField(field, 48, 48, 48)
+    poinc = PassingPoincare(
+        field_gpu, lam=0.0, sign_vpar=1, mass=ALPHA_PARTICLE_MASS,
+        charge=ALPHA_PARTICLE_CHARGE, Ekin=FUSION_ALPHA_PARTICLE_ENERGY,
+        ns_poinc=120, ntheta_poinc=1, Nmaps=1000, tmax=1e-2,
+        dt_save=1e-7, solver_options={"abstol": 1e-8, "reltol": 1e-8},
+    )
+    poinc.plot_poincare(filename="passing_poincare_gpu.png")
+
+CATAPULT integrates continuously for the total ``tmax`` and keeps up to
+``Nmaps`` returns. CPU tracing limits each return by ``tmax``. GPU sections
+interpolate dense-output samples and discard paths from the first saved
+``s >= 0.99`` or parallel-velocity reversal; they use no event root finder.
+Converge ``dt_save`` separately from the integration tolerance. Equal
+absolute and relative tolerances are required for CATAPULT. The same data,
+frequency, momentum, WBA, and plotting methods remain available.
+``section_crossings(path)`` also extracts approximate sections from saved
+five-column Boozer paths without tracing again.
+
 Perturbed Passing Poincaré Maps
 -------------------------------
 

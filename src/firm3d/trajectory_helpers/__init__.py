@@ -28,6 +28,7 @@ from .poincare import (
     accumulate_resonance_crossings,
     compute_rotational_profile,
 )
+from ._sections import section_crossings
 from .wba import WBAParticles, WBAPerturbedParticles
 
 __all__ = [
@@ -53,6 +54,7 @@ __all__ = [
     "trajectory_to_vtk",
     "accumulate_resonance_crossings",
     "compute_rotational_profile",
+    "section_crossings",
     "MapEquilibrium",
     "MapPhaseSpace",
     "PassingPoincare",
