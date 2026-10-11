@@ -1,5 +1,6 @@
 #include <cuda_runtime.h>
 #include <iostream>
+#include <stdexcept>
 #include "tracing.h"
 #include <math.h>
 #include "xtensor-python/pyarray.hpp"     // Numpy bindings
@@ -26,13 +27,13 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=t
 
 // enum used for templating
 // https://stackoverflow.com/questions/9116267/how-can-i-use-an-enumeration-as-a-template-parameter
-enum class RHS {GC_CartesianVacuum, GC_BoozerVacuum, GC_Boozer, GC_BoozerVacuumSAW, GC_BoozerNoKSAW};
+enum class RHS {GC_CartesianVacuum, GC_BoozerVacuum, GC_BoozerVacuumRegular, GC_Boozer, GC_BoozerVacuumSAW, GC_BoozerNoKSAW};
 
 enum class CoordSys {Cartesian, Boozer};
 
 template<RHS id>
 __host__ __device__ constexpr CoordSys map_rhs_to_coord(){
-    if constexpr(id == RHS::GC_BoozerVacuum || id == RHS::GC_Boozer || id == RHS::GC_BoozerVacuumSAW || id == RHS::GC_BoozerNoKSAW){
+    if constexpr(id == RHS::GC_BoozerVacuum || id == RHS::GC_BoozerVacuumRegular || id == RHS::GC_Boozer || id == RHS::GC_BoozerVacuumSAW || id == RHS::GC_BoozerNoKSAW){
         return CoordSys::Boozer;
     } else if constexpr (id == RHS::GC_CartesianVacuum) {
         return CoordSys::Cartesian;
@@ -43,7 +44,7 @@ template<RHS id>
 __host__ __device__ constexpr int map_rhs_to_n_interpolants(){
     if constexpr(id == RHS::GC_CartesianVacuum){
         return 7;
-    } else if constexpr(id == RHS::GC_BoozerVacuum){
+    } else if constexpr(id == RHS::GC_BoozerVacuum || id == RHS::GC_BoozerVacuumRegular){
         return 6;
     } else if constexpr(id == RHS::GC_Boozer){
         return 12;
@@ -56,7 +57,7 @@ __host__ __device__ constexpr int map_rhs_to_n_interpolants(){
 // GC rhs need 4 derivative components, Cartesian tracing needs to track the signed distance fn to boundary
 template<RHS id>
 __host__ __device__ constexpr int map_rhs_to_n_deriv_outputs(){
-    if constexpr(id == RHS::GC_BoozerVacuum || id == RHS::GC_Boozer || id == RHS::GC_BoozerVacuumSAW || id == RHS::GC_BoozerNoKSAW){
+    if constexpr(id == RHS::GC_BoozerVacuum || id == RHS::GC_BoozerVacuumRegular || id == RHS::GC_Boozer || id == RHS::GC_BoozerVacuumSAW || id == RHS::GC_BoozerNoKSAW){
         return 4;
     } else if constexpr(id == RHS::GC_CartesianVacuum){
         return 5;
@@ -265,6 +266,28 @@ __device__ void rhs_GC_BoozerVacuum(T* derivs, const T* __restrict__ x_temp, con
     derivs[(4*deriv_id + 2)*PARTICLES_PER_BLOCK] = (v_par*modB_inv_G);
     derivs[(4*deriv_id + 3)*PARTICLES_PER_BLOCK] = -(iota*dmodBdtheta + dmodBdzeta)*mu_val*modB_inv_G;
 
+}
+
+template <typename T, int deriv_id>
+__device__ void rhs_GC_BoozerVacuumRegular(T* derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu){
+    T x = x_temp[1*PARTICLES_PER_BLOCK];
+    T y = x_temp[2*PARTICLES_PER_BLOCK];
+    T v_par = x_temp[4*PARTICLES_PER_BLOCK];
+    T B = block_interpolants[0*PARTICLES_PER_BLOCK];
+    T Bx = block_interpolants[1*PARTICLES_PER_BLOCK];
+    T By = block_interpolants[2*PARTICLES_PER_BLOCK];
+    T Bz = block_interpolants[3*PARTICLES_PER_BLOCK];
+    T G = block_interpolants[4*PARTICLES_PER_BLOCK];
+    T iota = block_interpolants[5*PARTICLES_PER_BLOCK];
+    T sign = symmetry_exploited[0] ? T(-1.0) : T(1.0);
+    By *= sign;
+    Bz *= sign;
+    T A = (T(mass_d)*v_par*v_par/B + T(mass_d)*mu[0]) * T(inv_psi0_charge_d);
+    T omega = iota*v_par*B/G;
+    derivs[(4*deriv_id + 0)*PARTICLES_PER_BLOCK] = -A*By/T(2.0) - y*omega;
+    derivs[(4*deriv_id + 1)*PARTICLES_PER_BLOCK] = A*Bx/T(2.0) + x*omega;
+    derivs[(4*deriv_id + 2)*PARTICLES_PER_BLOCK] = v_par*B/G;
+    derivs[(4*deriv_id + 3)*PARTICLES_PER_BLOCK] = -(iota*(-y*Bx+x*By)+Bz)*mu[0]*B/G;
 }
 
 
@@ -563,6 +586,8 @@ __device__ void calc_derivs(T* derivs, const T* __restrict__ quadpts_arr, const 
             rhs_GC_CartesianVacuum<T, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
         } else if constexpr(id == RHS::GC_BoozerVacuum){
             rhs_GC_BoozerVacuum<T, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
+        } else if constexpr(id == RHS::GC_BoozerVacuumRegular){
+            rhs_GC_BoozerVacuumRegular<T, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
         } else if constexpr(id == RHS::GC_Boozer){
             rhs_GC_Boozer<T, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
         } else if constexpr(id == RHS::GC_BoozerVacuumSAW){
@@ -660,7 +685,7 @@ __device__ void map_to_grid(T* interp_pt, T* xyz, bool* symmetry_exploited){
     if constexpr (coord == CoordSys::Cartesian){
         map_to_grid_cartesian(interp_pt, xyz, symmetry_exploited);
     } else if constexpr (coord == CoordSys::Boozer){
-        map_to_grid_boozer(interp_pt, xyz, symmetry_exploited);
+        map_to_grid_boozer<T>(interp_pt, xyz, symmetry_exploited);
     }
 };
 
@@ -696,8 +721,7 @@ __device__ void build_state(T* x_temp, bool* symmetry_exploited, int* cell_index
     __shared__ T interp_pt[3*PARTICLES_PER_BLOCK];
 
     if(threadIdx.x < PARTICLES_PER_BLOCK && is_valid[threadIdx.x]){
-        constexpr CoordSys coord = map_rhs_to_coord<id>();
-        map_to_grid<T, coord>(interp_pt, x_temp, symmetry_exploited);
+        map_to_grid<T, map_rhs_to_coord<id>()>(interp_pt, x_temp, symmetry_exploited);
     }
     __syncthreads();
 
@@ -1280,7 +1304,10 @@ template vector<float> cartesian_gpu_tracing<float>(py::array_t<float> quad_pts,
 template<typename T>
 vector<T> boozer_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> srange,
         py::array_t<double> trange, py::array_t<double> zrange, py::array_t<T> stz_init, double m, double q, double vtotal, py::array_t<T> vtang,
-        py::array_t<double> tmax, double tol, py::array_t<T> dt_in, py::array_t<T> mu_in, double psi0, int nparticles, bool vacuum){
+        py::array_t<double> tmax, double tol, py::array_t<T> dt_in, py::array_t<T> mu_in, double psi0, int nparticles, bool vacuum, bool regular_axis){
+    if (regular_axis && !vacuum) {
+        throw std::invalid_argument("regular_axis requires vacuum=true");
+    }
 
     // read data in from python
     // T* stz_init_arr = create_array(stz_init);
@@ -1297,7 +1324,9 @@ vector<T> boozer_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> srange
     gpuErrchk(cudaMemcpyToSymbol(inv_psi0_charge_d, &inv_psi0_charge, sizeof(double)));
 
     std::vector<T> results;
-    if (vacuum) {
+    if (regular_axis) {
+        results = gpu_tracing<T, RHS::GC_BoozerVacuumRegular>(quad_pts, srange, trange, zrange, stz_init, m, q, vtotal, vtang, tmax, tol, dt_in, mu_in, nparticles);
+    } else if (vacuum) {
         results = gpu_tracing<T, RHS::GC_BoozerVacuum>(quad_pts, srange, trange, zrange, stz_init, m, q, vtotal, vtang, tmax, tol, dt_in, mu_in, nparticles);
     } else {
         results = gpu_tracing<T, RHS::GC_Boozer>(quad_pts, srange, trange, zrange, stz_init, m, q, vtotal, vtang, tmax, tol, dt_in, mu_in, nparticles);
@@ -1316,11 +1345,11 @@ vector<T> boozer_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> srange
 
 template vector<double> boozer_gpu_tracing<double>(py::array_t<double> quad_pts, py::array_t<double> srange,
         py::array_t<double> trange, py::array_t<double> zrange, py::array_t<double> stz_init, double m, double q, double vtotal, py::array_t<double> vtang,
-        py::array_t<double> tmax, double tol, py::array_t<double> dt_in, py::array_t<double> mu_in, double psi0, int nparticles, bool vacuum);
+        py::array_t<double> tmax, double tol, py::array_t<double> dt_in, py::array_t<double> mu_in, double psi0, int nparticles, bool vacuum, bool regular_axis);
 
 template vector<float> boozer_gpu_tracing<float>(py::array_t<float> quad_pts, py::array_t<double> srange,
         py::array_t<double> trange, py::array_t<double> zrange, py::array_t<float> stz_init, double m, double q, double vtotal, py::array_t<float> vtang,
-        py::array_t<double> tmax, double tol, py::array_t<float> dt_in, py::array_t<float> mu_in, double psi0, int nparticles, bool vacuum);
+        py::array_t<double> tmax, double tol, py::array_t<float> dt_in, py::array_t<float> mu_in, double psi0, int nparticles, bool vacuum, bool regular_axis);
 
 template<typename T>
 vector<T> boozer_saw_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange,
@@ -1495,6 +1524,9 @@ __device__ void account_for_symmetry_rhs(T* interpolants, bool* symmetry_exploit
         interpolants[0] *= T(-1.0);
         interpolants[4] *= T(-1.0);
         interpolants[5] *= T(-1.0);
+    } else if constexpr (id == RHS::GC_BoozerVacuumRegular){
+        interpolants[2] *= T(-1.0); // B_y
+        interpolants[3] *= T(-1.0); // B_zeta
     } else if constexpr (id == RHS::GC_BoozerVacuum || id == RHS::GC_BoozerVacuumSAW){
         // Only theta/zeta derivatives flip sign
         interpolants[2] *= T(-1.0);
@@ -1588,7 +1620,7 @@ py::array_t<T> test_gpu_interpolation(py::array_t<T> quad_pts, py::array_t<doubl
     }
 
     // Boozer Coordinates
-    if((rhs == "boozer_vacuum") || (rhs == "boozer_saw_vacuum") || (rhs == "boozer") || (rhs == "boozer_saw_nok")){
+    if((rhs == "boozer_vacuum") || (rhs == "boozer_vacuum_regular") || (rhs == "boozer_saw_vacuum") || (rhs == "boozer") || (rhs == "boozer_saw_nok")){
         for(int i=0; i<n_points; ++i){
             T x1 = loc_arr[3*i] * cos(loc_arr[3*i + 1]);
             T x2 = loc_arr[3*i] * sin(loc_arr[3*i + 1]);
@@ -1601,7 +1633,7 @@ py::array_t<T> test_gpu_interpolation(py::array_t<T> quad_pts, py::array_t<doubl
     int n;
     if(rhs == "cartesian_vacuum"){
         n = 7;
-    } else if(rhs == "boozer_vacuum"){
+    } else if(rhs == "boozer_vacuum" || rhs == "boozer_vacuum_regular"){
         n = 6;
     } else if(rhs == "boozer_saw_vacuum" || rhs == "boozer_saw_nok"){
         n = 10;
@@ -1668,6 +1700,8 @@ py::array_t<T> test_gpu_interpolation(py::array_t<T> quad_pts, py::array_t<doubl
         test_gpu_interpolation_kernel<T, RHS::GC_CartesianVacuum, 7><<<nblks, nthreads>>>(quadpts_d, loc_d, out_d, derivs_d, dt_d, t_d, n_points);
     } else if(rhs == "boozer_vacuum") {
         test_gpu_interpolation_kernel<T, RHS::GC_BoozerVacuum, 6><<<nblks, nthreads>>>(quadpts_d, loc_d, out_d, derivs_d, dt_d, t_d, n_points);
+    } else if(rhs == "boozer_vacuum_regular") {
+        test_gpu_interpolation_kernel<T, RHS::GC_BoozerVacuumRegular, 6><<<nblks, nthreads>>>(quadpts_d, loc_d, out_d, derivs_d, dt_d, t_d, n_points);
     } else if(rhs == "boozer_saw_vacuum" || rhs == "boozer_saw_nok") {
         test_gpu_interpolation_kernel<T, RHS::GC_BoozerVacuumSAW, 10><<<nblks, nthreads>>>(quadpts_d, loc_d, out_d, derivs_d, dt_d, t_d, n_points);
     } else if(rhs == "boozer") {

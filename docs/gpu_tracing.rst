@@ -21,6 +21,17 @@ plays on the CPU:
     from firm3d.catapult.field import CatapultBoozerField
     field_gpu = CatapultBoozerField(field, ns=48, ntheta=48, nzeta=48)
 
+For vacuum fields, ``regular_axis=True`` uses :math:`r=\sqrt{s}` and finite
+Cartesian field gradients through the magnetic axis::
+
+    from firm3d.field import BoozerRadialInterpolant
+    field = BoozerRadialInterpolant("boozmn_file.nc", order=3,
+                                     enforce_vacuum=True, regular_axis=True)
+    field_gpu = CatapultBoozerField(field, ns=25, ntheta=25, nzeta=25)
+
+This option requires stellarator symmetry on the GPU. CPU tracing uses the
+adaptive solver. Finite-beta and perturbed fields do not support this option.
+
 ``CatapultPerturbedBoozerField`` does the same for a
 ``ShearAlfvenWavesSuperposition``, and ``CatapultCartesianField`` for a simsopt
 ``InterpolatedField`` together with the ``SurfaceClassifier`` that defines the

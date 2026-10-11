@@ -28,14 +28,16 @@ using Array2 = BoozerMagneticField::Array2;
 
 class GuidingCenterVacuumBoozerRHS : public BaseRHS {
     /*
-     * The state consists of :math:`[s, theta, zeta, v_par]` with
+     * The physical state is :math:`[s, theta, zeta, v_par]` with
      *
      *    \dot s = -|B|_{,\theta} m(v_{||}^2/|B| + \mu)/(q \psi_0)
      *    \dot \theta = |B|_{,s} m(v_{||}^2/|B| + \mu)/(q \psi_0) + \iota v_{||} |B|/G
      *    \dot \zeta = v_{||}|B|/G
      *    \dot v_{||} = -(\iota |B|_{,\theta} + |B|_{,\zeta})\mu |B|/G,
      *
-     *  where :math:`q` is the charge, :math:`m` is the mass, and :math:`v_\perp = 2\mu|B|`.
+     *  where :math:`q` is the charge, :math:`m` is the mass, and :math:`v_\perp^2 = 2\mu|B|`.
+     *  For axis=1 the integrator uses [sqrt(s)cos(theta), sqrt(s)sin(theta),
+     *  zeta, v_par] and the Cartesian-gradient branch below.
      *
      */
     private:
@@ -69,6 +71,41 @@ class GuidingCenterVacuumBoozerRHS : public BaseRHS {
             double modB = field->modB_ref()(0);
             double G = field->G_ref()(0);
             double iota = field->iota_ref()(0);
+            if (axis == 1) {
+                double Bz = field->dmodBdzeta_ref()(0);
+                double x = ys[0], y = ys[1];
+                double Bx, By;
+                if (stzv[0] > 0) {
+                    auto derivs = field->modB_derivs_ref();
+                    double inv_s = 1.0/stzv[0];
+                    Bx = 2*x*derivs(0) - y*inv_s*derivs(1);
+                    By = 2*y*derivs(0) + x*inv_s*derivs(1);
+                } else {
+                    constexpr double h = 1e-4;
+                    stz(0, 0) = h*h;
+                    stz(0, 1) = 0;
+                    field->set_points(stz);
+                    double Bxp = field->modB_ref()(0);
+                    stz(0, 1) = M_PI;
+                    field->set_points(stz);
+                    double Bxm = field->modB_ref()(0);
+                    stz(0, 1) = M_PI/2;
+                    field->set_points(stz);
+                    double Byp = field->modB_ref()(0);
+                    stz(0, 1) = -M_PI/2;
+                    field->set_points(stz);
+                    double Bym = field->modB_ref()(0);
+                    Bx = (Bxp - Bxm)/(2*h);
+                    By = (Byp - Bym)/(2*h);
+                }
+                double A = (m*v_par*v_par/modB + m*mu)/(q*psi0);
+                double omega = iota*v_par*modB/G;
+                dydt[0] = (-A*By/2 - y*omega)*tnorm;
+                dydt[1] = ( A*Bx/2 + x*omega)*tnorm;
+                dydt[2] = v_par*modB/G*tnorm;
+                dydt[3] = -(iota*(-y*Bx+x*By)+Bz)*mu*modB/G*tnorm/vnorm;
+                return;
+            }
             auto modB_derivs = field->modB_derivs_ref();
             double dmodBds = modB_derivs(0);
             double dmodBdtheta = modB_derivs(1);
