@@ -52,7 +52,9 @@ void init_tracing(py::module_ &m){
         py::arg("predictor_step")=true,
         py::arg("roottol")=1e-9,
         py::arg("dt")=1e-7,
-        py::arg("DP_hmin")=0.0
+        py::arg("DP_hmin")=0.0,
+        py::arg("max_phase_hits")=0,
+        py::arg("max_phase_interval")=0.0
         );
 
     m.def("particle_guiding_center_boozer_perturbed_tracing", &particle_guiding_center_boozer_perturbed_tracing,

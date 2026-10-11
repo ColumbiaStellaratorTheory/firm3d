@@ -135,17 +135,21 @@ To use CATAPULT, pass a ``CatapultBoozerField`` to the same helper:
     )
     poinc.plot_poincare(filename="passing_poincare_gpu.png")
 
-Both backends limit each return by ``tmax``. CATAPULT integrates continuously
-with a total upper bound of ``Nmaps * tmax`` and stops if a section takes longer
-than ``tmax``. GPU tracing
-records dense-output section roots, stops at a parallel-velocity reversal,
-and checks ``s >= 0.99`` at accepted endpoints. Section roots are independent
-of ``dt_save``. WBA still uses saved history: converge its saving interval
+Both backends limit each return by ``tmax`` and integrate continuously
+with a total upper bound of ``Nmaps * tmax`` and stop if a section takes longer
+than ``tmax``. Both record dense-output section roots, stop at a
+parallel-velocity reversal, and check ``s >= 0.99`` at accepted endpoints.
+Section roots are independent of ``dt_save``. WBA still uses saved history: converge its saving interval
 separately from the integration tolerance. Equal absolute and relative
 tolerances are required for CATAPULT. The same data, frequency, momentum,
 WBA, and plotting methods remain available.
-For WBA, CATAPULT first finds returns without saving history, then saves only
-through the completed returns to bound the history buffer.
+
+For WBA, CPU saves history during its continuous trace. CATAPULT first finds
+returns without saving history, then saves through the completed returns to
+bound its preallocated GPU buffer. CPU passing maps use an adaptive solver (``boost`` or ``dormand_prince``). ``dt_save`` controls WBA
+history on both backends; momentum at returns is evaluated at the dense roots.
+Continuous integration can change long trajectories compared with restarting
+the solver at every return, so check tolerance convergence for the observable.
 GPU section angles retain accumulated turns; plotting wraps them periodically.
 
 Perturbed Passing Poincaré Maps

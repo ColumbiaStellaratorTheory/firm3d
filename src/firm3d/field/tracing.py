@@ -309,6 +309,8 @@ def trace_particles_boozer(
     roottol=None,
     predictor_step=None,
     DP_hmin=0.0,
+    max_phase_hits=0,
+    max_phase_interval=None,
 ):
     r"""
     Follow particles in a :class:`BoozerMagneticField`.
@@ -361,7 +363,7 @@ def trace_particles_boozer(
             the particles in Boozer coordinates :math:`(s,\theta,\zeta)`.
         parallel_speeds: A ``(nparticles, )`` array containing the speed in
                          direction of the B field for each particle.
-        tmax: integration time
+        tmax: Integration time, either a scalar or one value per particle.
         mass: particle mass in kg, defaults to the mass of an alpha particle
         charge: charge in Coulomb, defaults to the charge of an alpha particle
         Ekin: kinetic energy in Joule, defaults to 3.52MeV. Either a scalar
@@ -401,6 +403,11 @@ def trace_particles_boozer(
                            res_hits is of interest or one wants to reduce memory usage.
         phases_stop: whether to stop if hit provided phase planes.
         vpars_stop: whether to stop if hit provided vpar planes
+        max_phase_hits: Stop at this many phase crossings (0 disables the
+            limit). Requires an adaptive solver and at least one phase plane.
+        max_phase_interval: Maximum time from launch or the last phase crossing
+            to the next crossing (None disables the limit). A crossing exactly
+            at the deadline is included. Requires an adaptive solver.
         axis: Defines handling of coordinate singularity. If 0, tracing is
             performed in Boozer coordinates (s,theta,zeta). Not used with "symplectic"
             ODE_solver. If 1, tracing is performed in coordinates
@@ -497,7 +504,41 @@ def trace_particles_boozer(
     if dt_save <= 0:
         raise ValueError("dt_save must be positive.")
 
+    if (
+        isinstance(max_phase_hits, (bool, np.bool_))
+        or not isinstance(max_phase_hits, (int, np.integer))
+        or not 0 <= max_phase_hits <= np.iinfo(np.int32).max
+    ):
+        raise ValueError("max_phase_hits must be a nonnegative 32-bit integer")
+    if max_phase_interval is not None and (
+        np.ndim(max_phase_interval) != 0
+        or not np.isfinite(max_phase_interval)
+        or max_phase_interval <= 0
+    ):
+        raise ValueError("max_phase_interval must be finite and positive")
+    phase_limits = {}
+    if max_phase_hits or max_phase_interval is not None:
+        if not len(phases):
+            raise ValueError("Phase limits require at least one phase plane")
+        if ODE_solver == "symplectic":
+            raise ValueError("Continuous phase limits require an adaptive solver")
+        phase_limits = {
+            "max_phase_hits": int(max_phase_hits),
+            "max_phase_interval": max_phase_interval or 0.0,
+        }
+
     nparticles = stz_inits.shape[0]
+    end_times = np.asarray(tmax, dtype=float)
+    if end_times.ndim == 0:
+        end_times = np.full(nparticles, end_times)
+    if (
+        end_times.shape != (nparticles,)
+        or np.any(~np.isfinite(end_times))
+        or np.any(end_times < 0)
+    ):
+        raise ValueError(
+            "tmax must be finite and nonnegative, scalar or one value per particle"
+        )
     assert stz_inits.shape[0] == len(parallel_speeds)
     speed_par = parallel_speeds
     m = mass
@@ -534,7 +575,7 @@ def trace_particles_boozer(
             charge,
             vtotal,
             vpar,
-            tmax,
+            float(end_times[i]),
             vacuum=(mode == "gc_vac"),
             noK=(mode == "gc_nok"),
             phases=phases,
@@ -555,6 +596,7 @@ def trace_particles_boozer(
             roottol=roottol,
             dt=dt,
             DP_hmin=DP_hmin,
+            **phase_limits,
         )
         if not forget_exact_path:
             res_tys.append(np.asarray(res_ty))

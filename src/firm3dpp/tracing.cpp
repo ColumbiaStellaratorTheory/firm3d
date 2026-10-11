@@ -7,6 +7,7 @@
     #include "symplectic.h"
 #endif
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 #include <functional>
@@ -450,12 +451,12 @@ solve(
     double dtau,
     double dtau_max,
     double abstol,
-    double reltol, 
+    double reltol,
     vector<double> phases,
     vector<double> n_zetas,
     vector<double> m_thetas,
     vector<double> omegas,
-    vector<shared_ptr<StoppingCriterion>> stopping_criteria, 
+    vector<shared_ptr<StoppingCriterion>> stopping_criteria,
     double dtau_save,
     vector<double> vpars,
     bool phases_stop,
@@ -465,17 +466,19 @@ solve(
     double vnorm,
     double tnorm,
     string ode_solver,
-    double DP_hmin) {
+    double DP_hmin,
+    int max_phase_hits,
+    double max_phase_interval) {
     if (phases.size() != n_zetas.size() || phases.size() != m_thetas.size() || phases.size() != omegas.size()) {
         throw std::invalid_argument("phases, n_zetas, m_thetas, and omegas need to have matching length.");
     }
 
     int state_size = rhs.get_state_size();
-    
+
     vector<vector<double>> res = {};
     vector<vector<double>> res_hits = {};
     vector<double> y(state_size), temp(state_size);
-    
+
     std::unique_ptr<ODESolver> solver;
     if (ode_solver == "dormand_prince") {
         solver = create_dormand_prince_solver(
@@ -495,7 +498,7 @@ solve(
             "ode_solver is \"boost\", \"dormand_prince\" of \"symplectic\""
         );
     }
-    
+
     double tau = 0;
     int iter = 0;
     bool stop = false;
@@ -507,6 +510,12 @@ solve(
     vector<double> initial_state = {0};
     initial_state.insert(initial_state.end(), stzvt.begin(), stzvt.end());
     res.push_back(initial_state);
+
+    if (tau_max == 0) return std::make_tuple(res, res_hits);
+    const bool continuous_limits = max_phase_hits > 0 || max_phase_interval > 0;
+    int phase_hits = 0;
+    double last_phase_time = 0;
+    double terminal_tau = tau_max;
 
     stzvt_to_y(stzvt, y, axis, vnorm, tnorm);
     solver->initialize(y, tau, dtau, rhs);
@@ -520,34 +529,47 @@ solve(
         tau_current = std::get<1>(step);
         dtau = tau_current - tau_last;
 
-        // Check if we have hit a stopping criterion between tau_last and tau_current
+        vector<vector<double>> step_hits;
+        double step_end = continuous_limits ? std::min(tau_current, tau_max) : tau_current;
         stop = check_stopping_criteria(
-            state_size,
-            iter,
-            res_hits,
-            *solver,
-            tau_last,
-            tau_current,
-            dtau,
-            abstol,
-            phases,
-            n_zetas,
-            m_thetas,
-            omegas,
-            stopping_criteria,
-            vpars,
-            phases_stop,
-            vpars_stop,
-            axis,
-            vnorm,
-            tnorm
-        );
+            state_size, iter, continuous_limits ? step_hits : res_hits, *solver,
+            tau_last, step_end, dtau, abstol, phases, n_zetas, m_thetas,
+            omegas, stopping_criteria, vpars, phases_stop && !continuous_limits,
+            vpars_stop && !continuous_limits, axis, vnorm, tnorm, continuous_limits);
+        if (continuous_limits) {
+            // Apply roots and endpoint criteria chronologically. A phase root
+            // at the deadline completes that return and resets the timeout.
+            stop = false;
+            std::stable_sort(step_hits.begin(), step_hits.end(),
+                [](const vector<double>& a, const vector<double>& b) { return a[0] < b[0]; });
+            for (const auto& hit : step_hits) {
+                if (max_phase_interval > 0 && hit[0] > last_phase_time + max_phase_interval) break;
+                res_hits.push_back(hit);
+                bool phase_hit = hit[1] >= 0 && hit[1] < phases.size();
+                if (phase_hit) {
+                    last_phase_time = hit[0];
+                    ++phase_hits;
+                }
+                if (hit[1] < 0 ||
+                    (phase_hit && (phases_stop || (max_phase_hits > 0 && phase_hits >= max_phase_hits))) ||
+                    (!phase_hit && vpars_stop)) {
+                    terminal_tau = hit[0] / tnorm;
+                    stop = true;
+                    break;
+                }
+            }
+            if (!stop && max_phase_interval > 0 &&
+                step_end * tnorm >= last_phase_time + max_phase_interval) {
+                terminal_tau = (last_phase_time + max_phase_interval) / tnorm;
+                stop = true;
+            }
+        }
 
         // Save path if forget_exact_path = False
-        if (forget_exact_path == 0 && !stop) {
+        if (forget_exact_path == 0 && (!stop || continuous_limits)) {
             // This will give the first save point after tau_last
             double tau_save_last = (std::floor(tau_last/dtau_save) + 1) * dtau_save;
-            for (double tau_save = tau_save_last; tau_save <= std::min(tau_current, tau_max); tau_save += dtau_save) {
+            for (double tau_save = tau_save_last; tau_save <= std::min(tau_current, terminal_tau); tau_save += dtau_save) {
                 if (tau_save != 0) {  // tau = 0 is already saved.
                     solver->calc_state(tau_save, temp);
                     double t_save = tau_save * tnorm;
@@ -560,12 +582,12 @@ solve(
         }
     } while(tau < tau_max && !stop);
 
-    // Save t = tmax or time when StoppingCriterion is hit if we not already saved it 
+    // Save t = tmax or time when StoppingCriterion is hit if we not already saved it
     if (stop) {
-        tau_max = tau_last;
+        tau_max = continuous_limits ? terminal_tau : tau_last;
     }
     double t_max = tau_max * tnorm;
-    if (t_max - res.back()[0] > 1e-15) {
+    if (continuous_limits ? t_max > res.back()[0] : t_max - res.back()[0] > 1e-15) {
         solver->calc_state(tau_max, y);
         y_to_stzvt(y, stzvt, axis, vnorm, tnorm);
         vector<double> final_state = {t_max};
@@ -732,11 +754,22 @@ particle_guiding_center_boozer_tracing(
         bool predictor_step,
         double roottol,
         double dt,
-        double DP_hmin
+        double DP_hmin,
+        int max_phase_hits,
+        double max_phase_interval
         )
 {
     if (ode_solver != "boost" && ode_solver != "dormand_prince" && ode_solver != "symplectic") {
         throw std::invalid_argument("ode_solver must be either \"boost\", \"dormand_prince\", or \"symplectic\" for unperturbed tracing");
+    }
+    if (max_phase_hits < 0 || !std::isfinite(max_phase_interval) || max_phase_interval < 0) {
+        throw std::invalid_argument("Phase limits must be finite and nonnegative.");
+    }
+    if ((max_phase_hits > 0 || max_phase_interval > 0) && phases.empty()) {
+        throw std::invalid_argument("Phase limits require at least one phase plane.");
+    }
+    if (ode_solver == "symplectic" && (max_phase_hits > 0 || max_phase_interval > 0)) {
+        throw std::invalid_argument("Continuous phase limits require an adaptive solver.");
     }
     Array2 stz({{stz_init[0], stz_init[1], stz_init[2]}});
     field->set_points(stz);
@@ -817,7 +850,9 @@ particle_guiding_center_boozer_tracing(
               vnorm,
               tnorm,
               ode_solver,
-              DP_hmin
+              DP_hmin,
+              max_phase_hits,
+              max_phase_interval
           );
         } else if (noK) {
           auto rhs_class = GuidingCenterNoKBoozerRHS(field, m, q, mu, axis, vnorm, tnorm);
@@ -843,7 +878,9 @@ particle_guiding_center_boozer_tracing(
               vnorm,
               tnorm,
               ode_solver,
-              DP_hmin
+              DP_hmin,
+              max_phase_hits,
+              max_phase_interval
           );
         } else {
           auto rhs_class = GuidingCenterBoozerRHS(field, m, q, mu, axis, vnorm, tnorm);
@@ -869,7 +906,9 @@ particle_guiding_center_boozer_tracing(
               vnorm,
               tnorm,
               ode_solver,
-              DP_hmin
+              DP_hmin,
+              max_phase_hits,
+              max_phase_interval
           );
         }
     }
@@ -888,13 +927,13 @@ solve_sympl_wrapper(
     vector<double> m_thetas,
     vector<double> omegas,
     vector<shared_ptr<StoppingCriterion>> stopping_criteria,
-    vector<double> vpars, 
+    vector<double> vpars,
     bool phases_stop=false,
     bool vpars_stop=false,
-    bool forget_exact_path=false, 
+    bool forget_exact_path=false,
     bool predictor_step=true,
     double dtau_save=1e-6
-) {  
+) {
     // Call the vector-based symplectic solver directly
     return solve_sympl_vector(
         f,
@@ -909,7 +948,7 @@ solve_sympl_wrapper(
         stopping_criteria,
         vpars,
         phases_stop,
-        vpars_stop, 
+        vpars_stop,
         forget_exact_path,
         predictor_step,
         dtau_save
@@ -970,7 +1009,7 @@ void particle_guiding_center_saw_derivs(
     double t = stz_init[1];
 
     vector<double> y = {s*cos(t), s*sin(t), stz_init[2], vtang, time};
-    
+
     if(rhs == "vacuum_saw"){
         auto rhs_class = GuidingCenterVacuumBoozerPerturbedRHS(perturbed_field, m, q, mu, 2);
         rhs_class(y, out, time);

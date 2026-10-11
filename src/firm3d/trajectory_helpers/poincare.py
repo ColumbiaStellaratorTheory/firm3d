@@ -110,10 +110,10 @@ class PassingPoincare:
                     condition (default: 500).
             comm : MPI communicator for parallel execution (default: None).
             tmax : Maximum integration time for each return, with either
-                   backend (default: 1e-2 s). CATAPULT traces continuously with
-                   a total upper bound of Nmaps * tmax.
-            solver_options : Dictionary of options to pass to the ODE solver
-                             (default: {}).
+                   backend (default: 1e-2 s). Both trace continuously with a
+                   total upper bound of Nmaps * tmax, stopping at Nmaps returns.
+            solver_options : Dictionary of options to pass to the adaptive ODE
+                             solver (default: {}).
             helicity_M : Poloidal helicity of the field-strength contours.
                          Required when computing the canonical momentum
                          :math:`p_{\eta}` or performing chaos detection.
@@ -132,7 +132,7 @@ class PassingPoincare:
                                   detection metric. If None and
                                   chaos_detection=True, a single evaluation
                                   at the end of the trajectory is used.
-            dt_save : History interval for CATAPULT WBA (default: 1e-7 s).
+            dt_save : History interval for WBA on either backend (default: 1e-7 s).
                       Section and velocity crossings use dense event roots,
                       independently of this interval. Flux stopping is checked
                       at accepted endpoints, as on the CPU.
@@ -150,12 +150,16 @@ class PassingPoincare:
         if self.catapult_field is not None:
             field = self.catapult_field.field
             self._gpu_tol = _catapult_tolerance(solver_options)
-            if not np.isfinite(dt_save) or dt_save <= 0:
-                raise ValueError("dt_save must be finite and positive")
-            if not np.isfinite(tmax) or tmax < 0:
-                raise ValueError("tmax must be finite and nonnegative")
-            if not isinstance(Nmaps, (int, np.integer)) or Nmaps < 0:
-                raise ValueError("Nmaps must be a nonnegative integer")
+        if not np.isfinite(dt_save) or dt_save <= 0:
+            raise ValueError("dt_save must be finite and positive")
+        if not np.isfinite(tmax) or tmax < 0:
+            raise ValueError("tmax must be finite and nonnegative")
+        if (
+            isinstance(Nmaps, (bool, np.bool_))
+            or not isinstance(Nmaps, (int, np.integer))
+            or not 0 <= Nmaps <= np.iinfo(np.int32).max
+        ):
+            raise ValueError("Nmaps must be a nonnegative 32-bit integer")
 
         self.helicity_N = helicity_N
         self.helicity_M = helicity_M
@@ -300,47 +304,22 @@ class PassingPoincare:
                 helicity_M and helicity_N; otherwise an empty list.
         """
 
-        if self.catapult_field is not None:
-            raise ValueError("CATAPULT computes the ensemble in compute_passing_map")
-
-        points = np.array([[point[0], point[1], 0]])
-        # Set solver options needed for passing map
-        res_tys, res_hits = trace_particles_boozer(
-            self.field,
-            points,
-            [point[2]],
-            tmax=self.tmax,
-            mass=self.mass,
-            charge=self.charge,
-            Ekin=self.Ekin,
-            vpars=[0.0],
-            phases=[0.0],
-            n_zetas=[1.0],
-            m_thetas=[0.0],
-            omegas=[0.0],
-            stopping_criteria=[
-                MaxToroidalFluxStoppingCriterion(0.99),
-            ],
-            forget_exact_path=False,
-            vpars_stop=True,
-            phases_stop=True,
-            **self.solver_options,
+        paths, hits = self._trace_returns(
+            np.array([[point[0], point[1], 0]]),
+            np.array([point[2]]),
+            self.tmax,
+            False,
+            1,
         )
-        if len(res_hits[0]) == 0:
-            raise RuntimeError("No stopping criterion reached in passing_map.")
-
-        res_hit = res_hits[0][0, :]  # Only check the first hit or stopping criterion
+        particle_hits = np.asarray(hits[0]).reshape(-1, 6)
+        if not len(particle_hits) or particle_hits[0, 1] != 0:
+            raise RuntimeError("No return reached before stopping in passing_map.")
+        hit = particle_hits[0]
+        point[:] = hit[[2, 3, 5]]
         peta = []
         if self.peta_profile:
-            peta = np.column_stack(
-                (res_tys[0][:, 0], self._sampled_momentum(res_tys[0]))
-            )
-
-        if res_hit[1] == 0:  # Check that the zetas=[0] plane was hit
-            point[:] = res_hit[[2, 3, 5]]
-            return point, res_hit[0], peta
-        else:
-            raise RuntimeError("Alternative stopping criterion reached in passing_map.")
+            peta = np.column_stack((paths[0][:, 0], self._sampled_momentum(paths[0])))
+        return point, hit[0], peta
 
     def compute_passing_map(self):
         r"""
@@ -359,11 +338,7 @@ class PassingPoincare:
             DA_times : List of transit indices at which DA was evaluated.
         """
         first, last = parallel_loop_bounds(self.comm, len(self.s_init))
-        trajectories = (
-            self._passing_maps_catapult(first, last)
-            if self.catapult_field is not None
-            else self._passing_maps_cpu(first, last)
-        )
+        trajectories = self._passing_maps(first, last)
         result = tuple([] for _ in range(7))
         s_all, thetas_all, vpars_all, t_all, peta_all, DA_all, DA_times = result
         for points, times, momentum, accuracies, steps in trajectories:
@@ -376,40 +351,6 @@ class PassingPoincare:
             DA_all.append(accuracies)
             DA_times.append(steps)
         return _gather_lists(self.comm, *result)
-
-    def _passing_maps_cpu(self, first, last):
-        """Restart at each CPU return, retaining its history and WBA convention."""
-        for itrj in range(first, last):
-            tr = [self.s_init[itrj], self.thetas_init[itrj], self.vpars_init[itrj]]
-            points = [tr.copy()]
-            peta_traj = []
-            if self.peta_profile:
-                launch = np.array([[0, tr[0], tr[1], 0, tr[2]]])
-                peta = self._sampled_momentum(launch)
-                peta_traj = [peta[0]]
-                Peta = np.array([[0, peta[0]]])
-
-            particle_DAs = []
-            particle_DA_times = []
-            t_traj = [0]
-            for _jj in range(self.Nmaps):
-                try:
-                    tr, time, Peta_iter = self.passing_map(tr)
-
-                    if self.peta_profile:
-                        peta_traj.append(Peta_iter[-1, 1])
-                        # shift time column by orbit time
-                        Peta_iter[:, 0] += Peta[-1, 0]
-                        Peta = np.vstack((Peta, Peta_iter[1:, :]))
-                    t_traj.append(time)
-                    points.append(tr.copy())
-                    if self.DA_poinc and _jj in self.WBA_transit_steps:
-                        time_at_evaluation, DA_at_evaluation = return_DA(Peta)
-                        particle_DAs.append(DA_at_evaluation)
-                        particle_DA_times.append(_jj)
-                except RuntimeError:
-                    break
-            yield np.asarray(points), t_traj, peta_traj, particle_DAs, particle_DA_times
 
     def _sampled_momentum(self, samples):
         return compute_peta(
@@ -424,10 +365,42 @@ class PassingPoincare:
             helicity_Np=self.helicity_Np,
         )
 
-    def _passing_maps_catapult(self, first, last):
-        """Trace continuously with the CPU per-return deadline and map format."""
+    def _trace_returns(self, initial, speeds, tmax, forget_exact_path, count):
+        """Select the backend; both stop at dense roots on one continuous clock."""
+        options = {
+            "mass": self.mass,
+            "charge": self.charge,
+            "Ekin": self.Ekin,
+            "dt_save": self.dt_save,
+            "phases": [0],
+            "n_zetas": [1],
+            "m_thetas": [0],
+            "omegas": [0],
+            "vpars": [0],
+            "vpars_stop": True,
+            "stopping_criteria": [MaxToroidalFluxStoppingCriterion(0.99)],
+            "max_phase_hits": count,
+            "max_phase_interval": self.tmax if self.tmax else None,
+            "tmax": tmax,
+            "forget_exact_path": forget_exact_path,
+        }
+        if self.catapult_field is None:
+            return trace_particles_boozer(
+                self.field, initial, speeds, **options, **self.solver_options
+            )
         from ..catapult.tracing import trace_particles_boozer_gpu
 
+        return trace_particles_boozer_gpu(
+            self.catapult_field,
+            initial,
+            speeds,
+            tol=self._gpu_tol,
+            max_hits=count + 1,
+            **options,
+        )
+
+    def _passing_maps(self, first, last):
+        """Trace each orbit continuously and process native section roots."""
         initial = np.column_stack(
             (
                 self.s_init[first:last],
@@ -440,29 +413,16 @@ class PassingPoincare:
             total_time = self.Nmaps * self.tmax
             if not np.isfinite(total_time):
                 raise ValueError("Nmaps * tmax must be finite")
-            options = {
-                "dt_save": self.dt_save,
-                "tol": self._gpu_tol,
-                "mass": self.mass,
-                "charge": self.charge,
-                "Ekin": self.Ekin,
-                "zetas": [0],
-                "vpars": [0],
-                "vpars_stop": True,
-                "stopping_criteria": [MaxToroidalFluxStoppingCriterion(0.99)],
-                "max_phase_hits": self.Nmaps,
-                "max_hits": self.Nmaps + 1,
-                "max_phase_interval": self.tmax if self.tmax else None,
-            }
-            paths, hits = trace_particles_boozer_gpu(
-                self.catapult_field,
+            gpu_history = self.DA_poinc and self.catapult_field is not None
+            paths, hits = self._trace_returns(
                 initial,
                 speeds,
-                tmax=total_time,
-                forget_exact_path=True,
-                **options,
+                total_time,
+                not self.DA_poinc or gpu_history,
+                self.Nmaps,
             )
-            if self.DA_poinc:
+            hits = [np.asarray(particle).reshape(-1, 6) for particle in hits]
+            if gpu_history:
                 # Discover actual return times without allocating history for
                 # the conservative Nmaps*tmax bound. WBA needs only the prefix
                 # through the last completed return, including for lost paths.
@@ -474,13 +434,8 @@ class PassingPoincare:
                     ]
                 )
                 if np.any(horizons):
-                    paths, _ = trace_particles_boozer_gpu(
-                        self.catapult_field,
-                        initial,
-                        speeds,
-                        tmax=horizons,
-                        forget_exact_path=False,
-                        **options,
+                    paths, _ = self._trace_returns(
+                        initial, speeds, horizons, False, self.Nmaps
                     )
         else:
             paths = [
@@ -498,7 +453,7 @@ class PassingPoincare:
             if not stopped and len(returns) < self.Nmaps:
                 incomplete += 1
             samples = np.vstack((launch, returns))
-            # Match the CPU helper: zero followed by individual transit times.
+            # Zero followed by individual transit times on both backends.
             times = np.r_[0, np.diff(samples[:, 0])].tolist()
             particle_DAs, particle_DA_times = [], []
             momentum = []
@@ -531,8 +486,8 @@ class PassingPoincare:
 
         if incomplete:
             warn(
-                f"{incomplete} CATAPULT trajectories did not return within "
-                "tmax for one section; increase tmax.",
+                f"{incomplete} {self.backend.upper()} trajectories did not return "
+                "within tmax for one section; increase tmax.",
                 stacklevel=3,
             )
 
@@ -2439,7 +2394,7 @@ def compute_rotational_profile(
         tmax : Maximum integration time (default: 1e-2).
         solver_options : Dict of solver options passed to PassingPoincare. If
                           None, defaults to {"axis": 0}.
-        dt_save : CATAPULT trajectory saving interval (default: 1e-7 s).
+        dt_save : Trajectory saving interval for either backend (default: 1e-7 s).
 
     Returns:
         profiles : Array of shape (npoints, 4) containing, for each initial

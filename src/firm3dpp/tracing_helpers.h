@@ -215,7 +215,8 @@ bool check_stopping_criteria(
     bool vpars_stop,
     int axis,
     double vnorm,
-    double tnorm
+    double tnorm,
+    bool include_right_endpoint = false
 )
 {
     boost::math::tools::eps_tolerance<double> roottol(-int(std::log2(abstol)));
@@ -245,7 +246,7 @@ bool check_stopping_criteria(
     // Now check whether we have hit any of the vpar planes
     for (int i = 0; i < vpars.size(); ++i) {
         double vpar = vpars[i];
-        if((vpar_last-vpar != 0) && (vpar_current-vpar != 0) && (((vpar_last-vpar > 0) ? 1 : ((vpar_last-vpar < 0) ? -1 : 0)) != ((vpar_current-vpar > 0) ? 1 : ((vpar_current-vpar < 0) ? -1 : 0)))){ // check whether vpar = vpars[i] was crossed
+        if((vpar_last-vpar != 0) && (include_right_endpoint || vpar_current-vpar != 0) && (((vpar_last-vpar > 0) ? 1 : ((vpar_last-vpar < 0) ? -1 : 0)) != ((vpar_current-vpar > 0) ? 1 : ((vpar_current-vpar < 0) ? -1 : 0)))){ // check whether vpar = vpars[i] was crossed
             std::function<double(double)> rootfun = [&dense, &y, &vpar_last, &vpar, &stzvt, &axis, &vnorm, &tnorm](double tau){
                 dense.calc_state(tau, y);
                 y_to_stzvt(y, stzvt, axis, vnorm, tnorm);
@@ -287,8 +288,16 @@ bool check_stopping_criteria(
         double phase_last = nz * zeta_last + mt * theta_last - omega*t_last;
         double phase_current = nz * zeta_current + mt * theta_current - omega*t_current;
 
-        if((std::floor((phase_last-phase)/(2*M_PI)) != std::floor((phase_current-phase)/(2*M_PI))) && (phase_current != phase) && (phase_last != phase)) { // check whether phase+k*2pi for some k was crossed
-            int fak = std::round(((phase_last+phase_current)/2-phase)/(2*M_PI));
+        double winding = phase_current > phase_last
+            ? std::floor((phase_last-phase)/(2*M_PI)) + 1
+            : std::ceil((phase_last-phase)/(2*M_PI)) - 1;
+        double next_phase = winding*2*M_PI + phase;
+        bool crossed = include_right_endpoint
+            ? ((phase_last < next_phase && next_phase <= phase_current) ||
+               (phase_current <= next_phase && next_phase < phase_last))
+            : ((std::floor((phase_last-phase)/(2*M_PI)) != std::floor((phase_current-phase)/(2*M_PI))) && (phase_current != phase) && (phase_last != phase));
+        if (crossed) {
+            int fak = include_right_endpoint ? int(winding) : std::round(((phase_last+phase_current)/2-phase)/(2*M_PI));
             double phase_shift = fak*2*M_PI + phase;
             assert((phase_last <= phase_shift && phase_shift <= phase_current) || (phase_current <= phase_shift && phase_shift <= phase_last));
 

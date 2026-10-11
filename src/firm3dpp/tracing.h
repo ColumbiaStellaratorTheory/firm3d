@@ -47,7 +47,9 @@ solve(
     double vnorm=1,
     double tnorm=1,
     string ode_solver="boost",
-    double DP_hmin=0.0
+    double DP_hmin=0.0,
+    int max_phase_hits=0,
+    double max_phase_interval=0.0
 );
 
 tuple<vector<vector<double>>, vector<vector<double>>>
@@ -108,7 +110,9 @@ particle_guiding_center_boozer_tracing(
         bool predictor_step=true,
         double roottol=1e-9,
         double dt=1e-7,
-        double DP_hmin=0.0
+        double DP_hmin=0.0,
+        int max_phase_hits=0,
+        double max_phase_interval=0.0
 );
 
 vector<double> simsopt_derivs_boozer(shared_ptr<BoozerMagneticField> field, vector<double> loc, double m, double q, double vtotal, double vtang, bool vacuum);

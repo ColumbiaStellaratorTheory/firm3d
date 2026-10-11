@@ -50,6 +50,6 @@ python examples/passing_map_unperturbed/passing_map.py --backend catapult
 
 Both use the same physical parameters and `PassingPoincare` plotting helpers.
 Both locate sections with dense event roots, independently of `--dt-save`.
-The `--tmax` limit applies to each return on both backends; CATAPULT traces
+The `--tmax` limit applies to each return on both backends; both trace
 continuously with `Nmaps * tmax` as its total upper bound. Converge `--dt-save`
 separately from solver tolerance when computing WBA from saved history.
