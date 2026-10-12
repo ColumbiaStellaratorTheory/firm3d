@@ -99,7 +99,7 @@ is excluded; a crossing at a step's right endpoint is included once.
 Hits have rows ``(t, index, s, theta, zeta, vpar)``. Phase indices start at
 zero, velocity indices follow them, and criterion indices are ``-1-i``.
 The enforced boundary follows requested criteria in the index sequence.
-Hit theta retains accumulated turns; zeta is wrapped. ``max_hits`` bounds
+Trajectory zeta and both hit angles retain accumulated turns. ``max_hits`` bounds
 storage per particle (default 1024). Overflow raises an error; increase the
 capacity or shorten the trace. ``max_phase_interval`` optionally limits the
 time to the next phase hit, measured from launch or the preceding phase hit.

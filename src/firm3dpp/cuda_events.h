@@ -8,7 +8,7 @@
 // endpoint and history kernels compile out event evaluation entirely.
 struct DeviceEvents {
     double *planes = nullptr, *vpars = nullptr, *criteria = nullptr;
-    double *hits = nullptr, *end_times = nullptr, *offsets = nullptr;
+    double *hits = nullptr, *end_times = nullptr, *theta_offsets = nullptr;
     double *cursors = nullptr, *transit_start = nullptr, *last_phase_time = nullptr;
     int *counts = nullptr, *phase_counts = nullptr, *iterations = nullptr;
     int* overflow = nullptr;
@@ -85,12 +85,12 @@ __device__ inline bool write_event(DeviceEvents events, int particle, double tim
 template<typename T, RHS id>
 __device__ void record_step_events(DeviceEvents events, int particle, int p,
                                    T* state, const T* derivs, const T* x_temp,
-                                   double time, T h, double tmax) {
+                                   double time, T h, double tmax, double zeta_offset) {
     using namespace firm3d_events;
     Step step;
     step.t = time; step.h = double(h);
-    step.theta_offset = events.offsets[2 * size_t(particle)];
-    step.zeta_offset = events.offsets[2 * size_t(particle) + 1];
+    step.theta_offset = events.theta_offsets[particle];
+    step.zeta_offset = zeta_offset;
     constexpr int nd = map_rhs_to_n_deriv_outputs<id>();
     constexpr int stages[] = {0, 2, 3, 4, 5, 6};
     for(int component = 0; component < 4; ++component){
@@ -164,8 +164,7 @@ __device__ void record_step_events(DeviceEvents events, int particle, int p,
         if constexpr(map_rhs_to_coord<id>() == CoordSys::Boozer){
             hit[0] = hypot(hit[0], hit[1]);
             hit[1] = step.theta(next);
-            hit[2] = fmod(value(step.state[2], next)+step.zeta_offset, period);
-            if(hit[2] < 0) hit[2] += period;
+            hit[2] = value(step.state[2], next)+step.zeta_offset;
         }
         if(index >= events.nplanes) hit[3] = events.vpars[index - events.nplanes];
         bool stored = write_event(events, particle, time + next*step.h, index, hit);
@@ -183,8 +182,7 @@ __device__ void record_step_events(DeviceEvents events, int particle, int p,
         for(int j = 0; j < 4; ++j) hit[j] = double(x_temp[(j+1)*PARTICLES_PER_BLOCK+p]);
         if constexpr(map_rhs_to_coord<id>() == CoordSys::Boozer){
             hit[0] = hypot(hit[0], hit[1]); hit[1] = step.theta(limit);
-            hit[2] = fmod(hit[2]+step.zeta_offset, period);
-            if(hit[2] < 0) hit[2] += period;
+            hit[2] += step.zeta_offset;
         }
         write_event(events, particle, time + limit*step.h, stop_index, hit);
     }
@@ -195,15 +193,12 @@ __device__ void record_step_events(DeviceEvents events, int particle, int p,
             ? events.last_phase_time[particle] + events.max_phase_interval
             : time + limit*step.h;
     }
-    // The next accepted step starts with wrapped coordinates. Preserve angle
-    // winding internally, without depending on the trajectory saving cadence.
+    // Preserve poloidal winding across atan2's branch cut. Toroidal winding
+    // is maintained by the tracer for both event and ordinary output paths.
     if constexpr(map_rhs_to_coord<id>() == CoordSys::Boozer){
         double wrapped_theta = atan2(double(x_temp[2*PARTICLES_PER_BLOCK+p]),
                                      double(x_temp[PARTICLES_PER_BLOCK+p]));
-        events.offsets[2*size_t(particle)] = period * round((step.theta(1)-wrapped_theta)/period);
-        T z = x_temp[3*PARTICLES_PER_BLOCK+p];
-        T wrapped = fmod(z, T(period)); if(wrapped < 0) wrapped += T(period);
-        events.offsets[2*size_t(particle)+1] += double(z)-double(wrapped);
+        events.theta_offsets[particle] = period * round((step.theta(1)-wrapped_theta)/period);
     }
 }
 

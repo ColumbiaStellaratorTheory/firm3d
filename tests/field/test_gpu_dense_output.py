@@ -20,6 +20,7 @@ from firm3d.catapult.field import (
 from firm3d.catapult.tracing import (
     _cpu_format,
     _save_times,
+    _to_boozer,
     save_trajectories_boozer_gpu,
     save_trajectories_cartesian_gpu,
     trace_particles_boozer_gpu,
@@ -40,6 +41,17 @@ SPEED = np.sqrt(2 * ENERGY / MASS)
 
 
 class TestDenseOutputHost(unittest.TestCase):
+    def test_coordinate_conversion_preserves_toroidal_turns(self):
+        for dtype in [np.float32, np.float64]:
+            rows = np.array(
+                [[0, 0.3, 0, 8 * np.pi + 0.2], [1, 0, -0.4, -6 * np.pi - 0.1]],
+                dtype=dtype,
+            )
+            zeta = rows[:, 3].copy()
+            converted = _to_boozer(rows)
+            np.testing.assert_array_equal(converted[:, 3], zeta)
+            np.testing.assert_allclose(converted[:, 1], [0.3, 0.4])
+
     def test_endpoint_result_format(self):
         # Both routes must preserve particle order, initial states, losses,
         # float64 public output, and a single row for zero-duration paths.
@@ -256,8 +268,7 @@ class TestDenseOutputGPU(unittest.TestCase):
                         (
                             np.full(len(traj), self.stz[i, 0]),
                             self.stz[i, 1] + 0.4 * self.vpar[i] * expected_times,
-                            (self.stz[i, 2] + self.vpar[i] * expected_times)
-                            % (2 * np.pi),
+                            self.stz[i, 2] + self.vpar[i] * expected_times,
                             np.full(len(traj), self.vpar[i]),
                         )
                     )
@@ -291,16 +302,126 @@ class TestDenseOutputGPU(unittest.TestCase):
             np.testing.assert_allclose(
                 actual[:, 0], expected[:, 0], rtol=1e-14, atol=1e-20
             )
-            # Compare angles through sine/cosine to allow their branch cuts.
+            # Zeta preserves turns; theta has atan2's branch cut on both backends.
             np.testing.assert_allclose(
-                actual[:, [1, 4]], expected[:, [1, 4]], rtol=1e-9, atol=1e-9
+                actual[:, [1, 3, 4]], expected[:, [1, 3, 4]], rtol=1e-9, atol=1e-9
             )
-            for column in [2, 3]:
+            for column in [2]:
                 np.testing.assert_allclose(
                     np.sin(actual[:, column]), np.sin(expected[:, column]), atol=1e-9
                 )
                 np.testing.assert_allclose(
                     np.cos(actual[:, column]), np.cos(expected[:, column]), atol=1e-9
+                )
+
+    def test_toroidal_turns_with_sparse_history_and_endpoints(self):
+        period = 2 * np.pi
+        points = np.array(
+            [
+                [0.3, 0.1, 4 * period + 0.2],
+                [0.4, -0.2, -3 * period - 0.2],
+                [0.5, 0.3, 5 * period + 0.4],
+            ]
+        )
+        speeds = np.array([0.7, -0.5, 0.6]) * SPEED
+        ends = np.array([7.4 * period / speeds[0], 8.6 * period / abs(speeds[1]), 0])
+        cadence = max(ends) / 2
+        options = {
+            "tmax": ends,
+            "dt_save": cadence,
+            "mass": MASS,
+            "charge": CHARGE,
+            "Ekin": ENERGY,
+        }
+        cpu, _ = trace_particles_boozer(
+            self.field, points, speeds, axis=2, tol=1e-11, **options
+        )
+        for precision, tol in [("double", 1e-10), ("single", 1e-6)]:
+            field = CatapultBoozerField(self.field, 3, 3, 3, precision=precision)
+            for events in [{}, {"zetas": [0], "max_hits": 32}]:
+                outputs = []
+                for forget in [False, True]:
+                    with self.subTest(
+                        precision=precision, events=bool(events), forget=forget
+                    ):
+                        paths, hits = trace_particles_boozer_gpu(
+                            field,
+                            points,
+                            speeds,
+                            tol=tol,
+                            forget_exact_path=forget,
+                            **options,
+                            **events,
+                        )
+                        outputs.append(paths)
+                        for i, path in enumerate(paths):
+                            np.testing.assert_allclose(
+                                path[:, 3],
+                                points[i, 2] + speeds[i] * path[:, 0],
+                                rtol=3e-6 if precision == "single" else 1e-11,
+                                atol=1e-5 if precision == "single" else 1e-11,
+                            )
+                            np.testing.assert_allclose(
+                                path[-1, 3], cpu[i][-1, 3], rtol=3e-6, atol=1e-5
+                            )
+                            if events and len(hits[i]):
+                                np.testing.assert_allclose(
+                                    hits[i][:, 4],
+                                    points[i, 2] + speeds[i] * hits[i][:, 0],
+                                    rtol=3e-6,
+                                    atol=1e-5,
+                                )
+                        self.assertEqual(len(paths[2]), 1)
+                for history, endpoint in zip(*outputs):
+                    np.testing.assert_allclose(
+                        history[-1], endpoint[-1], rtol=3e-6, atol=1e-5
+                    )
+
+    def test_toroidal_winding_resets_when_slots_are_reused(self):
+        count = 50000
+        ids = np.arange(count)
+        points = np.tile([0.3, 0.1, 0.0], (count, 1))
+        points[:, 2] = (ids % 17 - 8) * 2 * np.pi + 2 * np.pi - 0.01
+        lost = ids % 3 == 1
+        points[lost, 0] = 1.01
+        speeds = SPEED * np.where(ids % 2, -0.7, 0.7)
+        ends = np.where(ids % 3 == 0, 0, 1e-7)
+        field = CatapultBoozerField(self.field, 3, 3, 3)
+        expected_times = np.where(ids % 3 == 0, 0, np.where(lost, 1e-9, 1e-7))
+        for forget, events in [
+            (False, {}),
+            (True, {}),
+            (True, {"zetas": [0], "max_hits": 2}),
+        ]:
+            paths, hits = trace_particles_boozer_gpu(
+                field,
+                points,
+                speeds,
+                tmax=ends,
+                dt_save=1e-7,
+                forget_exact_path=forget,
+                tol=1e-10,
+                dt=1e-9,
+                **events,
+            )
+            np.testing.assert_allclose(
+                [path[-1, 0] for path in paths], expected_times, rtol=1e-14
+            )
+            np.testing.assert_allclose(
+                [path[-1, 3] for path in paths],
+                points[:, 2] + speeds * expected_times,
+                rtol=1e-11,
+                atol=1e-11,
+            )
+            np.testing.assert_array_equal(
+                [any(row[1] < 0 for row in hit) for hit in hits], lost
+            )
+            if events:
+                np.testing.assert_allclose(
+                    [hit[-1, 4] for i, hit in enumerate(hits) if lost[i]],
+                    points[lost, 2] + speeds[lost] * 1e-9,
+                    rtol=1e-11,
+                    atol=1e-11,
                 )
 
     def test_per_particle_tmax_and_zero_time(self):

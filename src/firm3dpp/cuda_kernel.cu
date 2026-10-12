@@ -906,7 +906,7 @@ __device__ void check_has_left(bool* has_left, const T* __restrict__ state, cons
 
 template<typename T, RHS id>
 __device__ T dense_component(T y0, T h, double fraction, const T* derivs,
-                             int state_id, int p){
+                             int state_id, int p, double zeta_offset){
     constexpr int nd = map_rhs_to_n_deriv_outputs<id>();
     T value = dopri5_dense_state(y0, h, fraction,
         derivs[(nd*0 + state_id)*PARTICLES_PER_BLOCK + p],
@@ -917,8 +917,7 @@ __device__ T dense_component(T y0, T h, double fraction, const T* derivs,
         derivs[(nd*6 + state_id)*PARTICLES_PER_BLOCK + p]);
     if constexpr(map_rhs_to_coord<id>() == CoordSys::Boozer){
         if(state_id == 2){
-            value = fmod(value, T(2*M_PI));
-            value += T(2*M_PI) * (value < 0);
+            value = T(double(value) + zeta_offset);
         }
     }
     return value;
@@ -931,11 +930,13 @@ struct EndpointSnapshot {
     T* data;
     T* h;
     double* t;
+    double* zeta_offset;
 };
 
 template<typename T, RHS id, typename Time, bool SaveHistory = true, bool SaveEvents = false>
 __device__ void adjust_time(Time* t, T* dt, double* tmax, T* state, T* __restrict__ derivs, const T* __restrict__ x_temp,
                             bool* has_left, const T* __restrict__ dtmax, const bool* __restrict__ is_valid,
+                            double* zeta_offsets,
                             T* out = nullptr, const double* save_times = nullptr, size_t nsave = 0,
                             const int* particle_ids = nullptr, size_t* saved_counts = nullptr,
                             const T* mu = nullptr, bool* finished = nullptr,
@@ -978,7 +979,7 @@ __device__ void adjust_time(Time* t, T* dt, double* tmax, T* state, T* __restric
     if constexpr(SaveEvents){
         if(accept && state_id == 0){
             record_step_events<T, id>(events, particle_ids[p], p, state, derivs,
-                x_temp, double(t[p]), dt_p, tmax[p]);
+                x_temp, double(t[p]), dt_p, tmax[p], zeta_offsets[p]);
         }
         __syncthreads();
     }
@@ -993,7 +994,7 @@ __device__ void adjust_time(Time* t, T* dt, double* tmax, T* state, T* __restric
                 const size_t row = (size_t(particle_ids[p]) * (nsave + 1) + count) * 7;
                 out[row + state_id + 1] = dense_component<T, id>(
                     state[state_id*PARTICLES_PER_BLOCK + p], dt_p,
-                    (tsave - double(t[p])) / double(dt_p), derivs, state_id, p);
+                    (tsave - double(t[p])) / double(dt_p), derivs, state_id, p, zeta_offsets[p]);
                 if(state_id == 0){
                     out[row] = T(tsave);
                     out[row + 5] = dt_p;
@@ -1011,12 +1012,15 @@ __device__ void adjust_time(Time* t, T* dt, double* tmax, T* state, T* __restric
             if constexpr(SaveHistory){
                 out[row + state_id + 1] = dense_component<T, id>(
                     state[state_id*PARTICLES_PER_BLOCK + p], dt_p,
-                    (target - double(t[p])) / double(dt_p), derivs, state_id, p);
+                    (target - double(t[p])) / double(dt_p), derivs, state_id, p, zeta_offsets[p]);
             } else {
                 // Keep double-precision interpolation registers out of the
                 // integration loop, including when the field is float32.
                 const size_t particle = size_t(particle_ids[p]);
                 terminal.data[particle * 28 + state_id] = state[state_id*PARTICLES_PER_BLOCK + p];
+                if constexpr(map_rhs_to_coord<id>() == CoordSys::Boozer){
+                    if(state_id == 2) terminal.zeta_offset[particle] = zeta_offsets[p];
+                }
                 constexpr int stages[6] = {0, 2, 3, 4, 5, 6};
                 constexpr int nd = map_rhs_to_n_deriv_outputs<id>();
                 #pragma unroll
@@ -1052,12 +1056,15 @@ __device__ void adjust_time(Time* t, T* dt, double* tmax, T* state, T* __restric
     if(accept){
         state[state_id*PARTICLES_PER_BLOCK + p] = x_temp[(state_id+1)*PARTICLES_PER_BLOCK + p];
 
-        // if accepting a state in Boozer coordinates, wrap zeta to [0, 2pi] to avoid numerical issues with large values of zeta
+        // Keep the integration coordinate bounded while preserving its winding
+        // for trajectories and events independently of the output cadence.
         if constexpr (map_rhs_to_coord<id>() == CoordSys::Boozer){
             if (state_id == 2) { // zeta
-                T period = T(grid_ranges_d[9]);
-                state[state_id*PARTICLES_PER_BLOCK + p] = fmod(state[state_id*PARTICLES_PER_BLOCK + p], T(2*M_PI));
-                state[state_id*PARTICLES_PER_BLOCK + p] += T(2*M_PI)*(state[state_id*PARTICLES_PER_BLOCK + p] < 0);
+                T z = state[state_id*PARTICLES_PER_BLOCK + p];
+                T wrapped = fmod(z, T(2*M_PI));
+                wrapped += T(2*M_PI)*(wrapped < 0);
+                zeta_offsets[p] += double(z)-double(wrapped);
+                state[state_id*PARTICLES_PER_BLOCK + p] = wrapped;
             }
         }
 
@@ -1133,6 +1140,7 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
     __shared__ double block_t[PARTICLES_PER_BLOCK];
     __shared__ T block_dtmax[PARTICLES_PER_BLOCK];
     __shared__ T state[4 * PARTICLES_PER_BLOCK];
+    __shared__ double zeta_offsets[PARTICLES_PER_BLOCK];
     __shared__ bool has_left[PARTICLES_PER_BLOCK];
     __shared__ int particle_ids[PARTICLES_PER_BLOCK];
     __shared__ size_t saved_counts[PARTICLES_PER_BLOCK];
@@ -1148,6 +1156,7 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
     // if thread is responsible for a valid particle id, load that particle's data
     if(is_valid){
         particle_ids[threadIdx.x] = idx;
+        zeta_offsets[threadIdx.x] = 0;
         if constexpr(SaveHistory){ saved_counts[threadIdx.x] = 0; }
         // block_t[threadIdx.x] = 0.0;
         has_left[threadIdx.x] = false;
@@ -1200,7 +1209,7 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
         dp5_one_step<T, id, 6>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
                             symmetry_exploited, state, block_mu, active_arr, args...);
         adjust_time<T, id, double, SaveHistory, SaveEvents>(block_t, block_dt, block_tmax, state, block_derivs, x_temp,
-                          has_left, block_dtmax, is_valid_arr, out, save_times, nsave,
+                          has_left, block_dtmax, is_valid_arr, zeta_offsets, out, save_times, nsave,
                           particle_ids, SaveHistory ? saved_counts : nullptr, block_mu,
                           SaveHistory ? finished : nullptr, terminal, events);
         __syncthreads();
@@ -1228,6 +1237,9 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
                 for(int i=0; i<4; ++i){
                     out[row + i + 1] = state[i*PARTICLES_PER_BLOCK + threadIdx.x];
                 }
+                if constexpr(map_rhs_to_coord<id>() == CoordSys::Boozer){
+                    out[row + 3] = T(double(state[2*PARTICLES_PER_BLOCK + threadIdx.x]) + zeta_offsets[threadIdx.x]);
+                }
                 out[row + 5] = step_dt;
                 out[row + 6] = block_mu[threadIdx.x];
             }
@@ -1239,9 +1251,8 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
                     if constexpr(map_rhs_to_coord<id>() == CoordSys::Boozer){
                         double x = hit[0], y = hit[1];
                         hit[0] = hypot(x, y);
-                        hit[1] = atan2(y, x) + events.offsets[2*size_t(idx)];
-                        hit[2] = fmod(hit[2]+events.offsets[2*size_t(idx)+1], 2*M_PI);
-                        if(hit[2] < 0) hit[2] += 2*M_PI;
+                        hit[1] = atan2(y, x) + events.theta_offsets[idx];
+                        hit[2] += zeta_offsets[threadIdx.x];
                     }
                     write_event(events, idx, block_t[threadIdx.x], -1-events.ncriteria, hit);
                     events.end_times[idx] = block_t[threadIdx.x];
@@ -1252,6 +1263,7 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
             idx = atomicAdd(&next_particle_d, 1);
             if(idx < nparticles_d){
                 particle_ids[threadIdx.x] = idx;
+                zeta_offsets[threadIdx.x] = 0;
                 if constexpr(SaveHistory){ saved_counts[threadIdx.x] = 0; }
                 T* loc_arr = init_pos + 4*idx;
                 for(int i=0; i<4; ++i){
@@ -1292,8 +1304,7 @@ __global__ void interpolate_endpoints(T* out, EndpointSnapshot<T> terminal,
         snapshot[4], snapshot[8], snapshot[12], snapshot[16], snapshot[20], snapshot[24]);
     if constexpr(map_rhs_to_coord<id>() == CoordSys::Boozer){
         if(state_id == 2){
-            value = fmod(value, T(2*M_PI));
-            value += T(2*M_PI) * (value < 0);
+            value = T(double(value) + terminal.zeta_offset[particle]);
         }
     }
     out[particle * 7 + state_id + 1] = value;
@@ -1481,9 +1492,9 @@ py::array_t<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range
         if(events.max_phase_interval > 0) allocate((void**)&events.last_phase_time, nullptr, size_t(nparticles)*sizeof(double));
         allocate((void**)&events.cursors, nullptr, size_t(nparticles)*(events.nplanes+events.nvpars)*sizeof(double));
         allocate((void**)&events.overflow, nullptr, sizeof(int));
-        vector<double> offsets(2*size_t(nparticles), 0.0);
-        for(size_t j=0; j<request.theta_offsets.size(); ++j) offsets[2*j] = request.theta_offsets[j];
-        allocate((void**)&events.offsets, offsets.data(), offsets.size()*sizeof(double));
+        vector<double> offsets(size_t(nparticles), 0.0);
+        for(size_t j=0; j<request.theta_offsets.size(); ++j) offsets[j] = request.theta_offsets[j];
+        allocate((void**)&events.theta_offsets, offsets.data(), offsets.size()*sizeof(double));
     }
 
     EndpointSnapshot<T> terminal{};
@@ -1494,6 +1505,9 @@ py::array_t<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range
         // Each persistent slot visits a particle once. Its global initial
         // time can therefore retain the enclosing step's start after tracing.
         terminal.t = t_d;
+        if constexpr(map_rhs_to_coord<id>() == CoordSys::Boozer){
+            gpuErrchk(cudaMalloc((void**)&terminal.zeta_offset, size_t(nparticles) * sizeof(double)));
+        }
     }
 
     // launch params
@@ -1549,7 +1563,7 @@ py::array_t<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range
         gpuErrchk(cudaMemcpy(&overflow, events.overflow, sizeof(int), cudaMemcpyDeviceToHost));
         for(void* pointer : {static_cast<void*>(events.planes), static_cast<void*>(events.vpars),
             static_cast<void*>(events.criteria), static_cast<void*>(events.hits),
-            static_cast<void*>(events.end_times), static_cast<void*>(events.offsets),
+            static_cast<void*>(events.end_times), static_cast<void*>(events.theta_offsets),
             static_cast<void*>(events.counts), static_cast<void*>(events.phase_counts),
             static_cast<void*>(events.iterations), static_cast<void*>(events.overflow),
             static_cast<void*>(events.transit_start), static_cast<void*>(events.cursors),
@@ -1566,6 +1580,7 @@ py::array_t<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range
         gpuErrchk(cudaFree(terminal.data));
         gpuErrchk(cudaFree(terminal.h));
     }
+    if(terminal.zeta_offset) gpuErrchk(cudaFree(terminal.zeta_offset));
     gpuErrchk(cudaFree(derivs_d));
     gpuErrchk(cudaFree(dt_d));
     gpuErrchk(cudaFree(t_d));
@@ -2318,6 +2333,7 @@ __global__ void test_gpu_timestep_kernel(double* out, double* init_pos, double* 
     __shared__ double block_t[PARTICLES_PER_BLOCK];
     __shared__ double block_dtmax[PARTICLES_PER_BLOCK];
     __shared__ double state[4 * PARTICLES_PER_BLOCK];
+    __shared__ double zeta_offsets[PARTICLES_PER_BLOCK];
     __shared__ bool has_left[PARTICLES_PER_BLOCK];
 
     bool is_valid = idx < nparticles && threadIdx.x < PARTICLES_PER_BLOCK;
@@ -2328,6 +2344,7 @@ __global__ void test_gpu_timestep_kernel(double* out, double* init_pos, double* 
     // if thread is responsible for a valid particle id, load that particle's data
     if(is_valid){
         has_left[threadIdx.x] = false;
+        zeta_offsets[threadIdx.x] = 0;
         for(int i=0; i<4; ++i){
             state[i*PARTICLES_PER_BLOCK + threadIdx.x] = loc_arr[i];
         }
@@ -2358,7 +2375,7 @@ __global__ void test_gpu_timestep_kernel(double* out, double* init_pos, double* 
                             symmetry_exploited, state, block_mu, is_valid_arr, args...);
         dp5_one_step<double, id, 6>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
                             symmetry_exploited, state, block_mu, is_valid_arr, args...);
-        adjust_time<double, id>(block_t, block_dt, block_tmax, state, block_derivs, x_temp, has_left, block_dtmax, is_valid_arr);
+        adjust_time<double, id>(block_t, block_dt, block_tmax, state, block_derivs, x_temp, has_left, block_dtmax, is_valid_arr, zeta_offsets);
         // if the particle moved, write output and load the next particle that is needed
         if(threadIdx.x < PARTICLES_PER_BLOCK && is_valid_arr[threadIdx.x] && block_t[threadIdx.x] != 0.0){
             // write output for current particle
@@ -2371,6 +2388,7 @@ __global__ void test_gpu_timestep_kernel(double* out, double* init_pos, double* 
             idx = atomicAdd(&next_particle_d, 1);
             if(idx < nparticles){
                 loc_arr = init_pos + 4*idx;
+                zeta_offsets[threadIdx.x] = 0;
                 for(int i=0; i<4; ++i){
                     state[i*PARTICLES_PER_BLOCK + threadIdx.x] = loc_arr[i];
                 }

@@ -362,7 +362,6 @@ def _to_boozer(result):
     x2 = result[:, 2].copy()
     result[:, 1] = np.hypot(x1, x2)
     result[:, 2] = np.arctan2(x2, x1)
-    result[:, 3] %= 2 * np.pi
     return result
 
 
@@ -416,8 +415,8 @@ def save_trajectories_boozer_gpu(
     Every requested time is sampled, including multiple times inside one
     accepted step. dt is the enclosing accepted step's size; an interpolated
     row is not an adaptive integrator checkpoint. Lost particles end at the
-    kernel's first accepted endpoint beyond the boundary. zeta is wrapped
-    to [0, 2 pi). Sampling does not change the adaptive step sequence.
+    kernel's first accepted endpoint beyond the boundary. zeta retains its
+    accumulated turns. Sampling does not change the adaptive step sequence.
     """
     if not isinstance(field, (CatapultBoozerField, CatapultPerturbedBoozerField)):
         raise TypeError(
@@ -616,11 +615,12 @@ def trace_particles_boozer_gpu(
     dt: optional initial step, scalar or per particle.
 
     Returns (res_tys, res_hits). Paths have rows (t, s, theta, zeta, vpar),
-    including the launch and terminal state. Sampled path angles are wrapped.
+    including the launch and terminal state. Path theta is wrapped, while
+    zeta retains accumulated turns.
     Hits have CPU-format rows (t, index, s, theta, zeta, vpar): phase indices
     precede velocity indices; stopping criteria use -1-i. Event theta retains
-    winding and zeta is wrapped to [0, 2*pi). Dense event roots are independent
-    of dt_save and work with forget_exact_path=True. A launch on a plane is
+    winding, and event zeta retains accumulated turns. Dense event roots are
+    independent of dt_save and work with forget_exact_path=True. A launch on a plane is
     excluded; a crossing at the right endpoint is included once. Without
     explicit criteria, the enforced field-boundary hit has index -1; otherwise
     it follows the requested criteria with index -1-len(stopping_criteria).

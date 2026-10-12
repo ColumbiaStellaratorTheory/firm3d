@@ -205,6 +205,9 @@ class TestGPUEventsDevice(unittest.TestCase):
                         np.testing.assert_allclose(
                             row[3], points[i, 1] + 0.4 * speeds[i] * row[0], atol=2e-4
                         )
+                        np.testing.assert_allclose(
+                            row[4], points[i, 2] + speeds[i] * row[0], atol=2e-4
+                        )
                     self.assertEqual(paths[i][-1, 0], tmax[i])
                 self.assertEqual(len(hits[2]), 0)
                 self.assertEqual(len(paths[2]), 1)
@@ -294,6 +297,7 @@ class TestGPUEventsDevice(unittest.TestCase):
         field = CatapultBoozerField(constant_field(0), 2, 2, 2)
         n = 50000
         points = np.tile([0.3, 0, 0], (n, 1))
+        points[:, 2] = (np.arange(n) % 17 - 8) * PERIOD + PERIOD - 0.01
         zero = np.arange(n) % 3 == 0
         paths, hits = trace_particles_boozer_gpu(
             field,
@@ -307,6 +311,18 @@ class TestGPUEventsDevice(unittest.TestCase):
         np.testing.assert_array_equal([len(hit) for hit in hits], ~zero)
         np.testing.assert_allclose(
             [path[-1, 0] for path in paths], np.where(zero, 0, 1e-9), rtol=1e-14
+        )
+        np.testing.assert_allclose(
+            [path[-1, 3] for path in paths],
+            points[:, 2] + SPEED * np.where(zero, 0, 1e-9),
+            rtol=1e-12,
+            atol=1e-12,
+        )
+        np.testing.assert_allclose(
+            [hit[0, 4] for hit in hits if len(hit)],
+            points[~zero, 2] + SPEED * 1e-9,
+            rtol=1e-12,
+            atol=1e-12,
         )
 
     def test_phase_stop_count_and_time_dependent_plane(self):
