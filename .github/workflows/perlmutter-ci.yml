@@ -61,7 +61,6 @@ jobs:
               *) break ;;
             esac
           done
-          trap - EXIT INT TERM
 
           cat "$WORK_DIR/slurm-$JOB_ID.out"
 
@@ -131,7 +130,6 @@ jobs:
                 *) break ;;
               esac
             done
-            trap - EXIT INT TERM
 
             cat "$WORK_DIR/slurm-$JOB_ID.out"
 
