@@ -12,10 +12,18 @@
 #include <sstream>
 #include <iomanip>
 #include <boost/numeric/odeint.hpp>
-#include "base_rhs.h"
 #include "dopri5_dense_output.h"
 
 using std::vector;
+
+// Shared RHS interface, independent of the magnetic-field implementations.
+class BaseRHS {
+public:
+    virtual ~BaseRHS() = default;
+    virtual void operator()(const std::vector<double>& y,
+                            std::vector<double>& dydt, double t) = 0;
+    virtual int get_state_size() const = 0;
+};
 
 /**
  * ODESolver Base Class

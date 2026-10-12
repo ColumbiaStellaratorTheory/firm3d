@@ -1,7 +1,6 @@
 #pragma once
 #include <memory>
 #include <vector>
-#include "base_rhs.h"
 #include "boozermagneticfield.h"
 #include "shearalfvenwave.h"
 #include "regular_grid_interpolant_3d.h"
@@ -15,6 +14,7 @@ using std::function;
 
 namespace py = pybind11;
 
+class BaseRHS;
 
 // Overloaded solve() function that accepts a BaseRHS object
 tuple<vector<vector<double>>, vector<vector<double>>>
