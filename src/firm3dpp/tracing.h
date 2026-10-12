@@ -1,6 +1,7 @@
 #pragma once
 #include <memory>
 #include <vector>
+#include "base_rhs.h"
 #include "boozermagneticfield.h"
 #include "shearalfvenwave.h"
 #include "regular_grid_interpolant_3d.h"
@@ -14,14 +15,6 @@ using std::function;
 
 namespace py = pybind11;
 
-
-// Base class for RHS functions
-class BaseRHS {
-public:
-    virtual ~BaseRHS() = default;
-    virtual void operator()(const vector<double>& y, vector<double>& dydt, double t) = 0;
-    virtual int get_state_size() const = 0;
-};
 
 // Overloaded solve() function that accepts a BaseRHS object
 tuple<vector<vector<double>>, vector<vector<double>>>

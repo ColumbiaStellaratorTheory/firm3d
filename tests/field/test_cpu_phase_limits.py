@@ -7,6 +7,7 @@ import firm3dpp
 import numpy as np
 
 from firm3d.field.tracing import (
+    IterationStoppingCriterion,
     MaxToroidalFluxStoppingCriterion,
     trace_particles_boozer,
 )
@@ -172,6 +173,21 @@ class TestCPUPhaseLimits(unittest.TestCase):
         self.assertAlmostEqual(hits[0][-1, 5], 0, delta=1e-7)
         self.assertTrue(np.all(np.diff(hits[0][:, 0]) >= 0))
         self.assertEqual(paths[0][-1, 0], hits[0][-1, 0])
+
+    def test_public_custom_solver_minimum_step(self):
+        # DP_hmin is forwarded in the solver's normalized time coordinates.
+        # An iteration stop exposes the first accepted physical step time.
+        tnorm = PERIOD * 25 / (5 * SPEED)
+        paths, hits = self.trace(
+            ODE_solver="dormand_prince",
+            DP_hmin=0.08,
+            axis=2,
+            tol=1e-14,
+            stopping_criteria=[IterationStoppingCriterion(0)],
+        )
+        self.assertEqual(hits[0][0, 1], -1)
+        self.assertAlmostEqual(hits[0][0, 0], 0.08 * tnorm, delta=1e-21)
+        self.assertEqual(paths[0][-1, 0], hits[0][0, 0])
 
     def test_flux_stop_retains_criterion_index(self):
         paths, hits = self.trace(

@@ -73,7 +73,7 @@ class TestDenseOutputHost(unittest.TestCase):
             ([], []),
         )
 
-    def test_continuous_extension(self):
+    def _compile_dense_check(self, source, expected):
         compiler = shlex.split(os.environ.get("CXX", "c++"))
         if not shutil.which(compiler[0]):
             self.skipTest("C++ compiler not available")
@@ -87,14 +87,28 @@ class TestDenseOutputHost(unittest.TestCase):
             # MacPorts installs the CPU Boost headers outside the default path.
             if Path("/opt/local/include/boost").exists():
                 command.append("-I/opt/local/include")
-            subprocess.run(
-                command + [str(ROOT / "tests/dopri5_dense_output.cpp"), "-o", exe],
-                check=True,
+            build = subprocess.run(
+                command + [str(ROOT / "tests" / source), "-o", exe],
                 capture_output=True,
                 text=True,
             )
-            result = subprocess.run([exe], check=True, capture_output=True, text=True)
-            self.assertIn("Float and double polynomial checks passed", result.stdout)
+            self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+            result = subprocess.run([exe], capture_output=True, text=True)
+            if result.returncode == 77:
+                self.skipTest("Boost headers unavailable")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn(expected, result.stdout)
+
+    def test_continuous_extension(self):
+        self._compile_dense_check(
+            "dopri5_dense_output.cpp", "Float and double polynomial checks passed"
+        )
+
+    def test_cpu_solver_dense_extension_and_minimum_step(self):
+        self._compile_dense_check(
+            "ode_solvers_dense_output.cpp",
+            "CPU custom and Boost interpolation agree; minimum-step controls preserved",
+        )
 
     def test_save_grid(self):
         np.testing.assert_allclose(_save_times([2.5, 4.0], 1), [1, 2, 3])

@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <cfloat>
+#include "dopri5_dense_output.h"
 
 #ifdef __CUDACC__
 #define FIRM3D_EVENT_HD __host__ __device__
@@ -109,28 +110,12 @@ FIRM3D_EVENT_HD inline int crossing_direction(Polynomial p, double x) {
     return 0;
 }
 
-// Expand the same Boost continuous extension as dopri5_dense_state. Express
-// higher coefficients in stage differences to make constant RHS exactly linear.
+// Root isolation uses the shared Boost dense-output coefficients.
 template<typename T>
 FIRM3D_EVENT_HD Polynomial dense_polynomial(T y0, T h, const T* k) {
-    const double b[] = {500.0/1113, 125.0/192, -2187.0/6784, 11.0/84};
-    const double a[] = {100.0*882725551/32700410799.0,
-        25.0*443332067/1880347072.0, 32805.0*23143187/199316789632.0,
-        55.0*29972135/822651844.0, 10.0*7414447/29380423.0};
-    const double slope[] = {100.0*15701508/32700410799.0,
-        25.0*31403016/1880347072.0, 32805.0*3489224/199316789632.0,
-        55.0*7076736/822651844.0, 10.0*829305/29380423.0};
     Polynomial p;
-    p.degree = 5; p.c[0] = double(y0); p.c[1] = double(h) * double(k[0]);
-    for(int j = 0; j < 5; ++j){
-        double delta = double(h) * (double(k[j + 1]) - double(k[0]));
-        double signed_a = j % 2 ? -a[j] : a[j];
-        double signed_slope = j % 2 ? -slope[j] : slope[j];
-        p.c[2] += delta * (j < 4 ? 3*b[j] + signed_a : -1 + signed_a);
-        p.c[3] += delta * (j < 4 ? -2*b[j] - 2*signed_a - signed_slope : 1 - 2*signed_a - signed_slope);
-        p.c[4] += delta * (signed_a + 2*signed_slope);
-        p.c[5] -= delta * signed_slope;
-    }
+    p.degree = 5;
+    dopri5_dense_coefficients(y0, h, k, p.c);
     return p;
 }
 

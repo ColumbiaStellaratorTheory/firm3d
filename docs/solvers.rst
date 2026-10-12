@@ -47,7 +47,10 @@ Dormand-Prince Solver
 A third option, ``ODE_solver="dormand_prince"``, uses an alternative adaptive
 Dormand-Prince implementation. It accepts a ``DP_hmin`` parameter (default
 ``0.0``): if the adaptive step size drops below ``DP_hmin``, the stepper
-completes the step using ``DP_hmin`` instead.
+completes the step using ``DP_hmin`` instead. Dense output uses the same
+continuous extension as Boost and GPU tracing; the custom step controller
+and minimum-step option remain available. ``DP_hmin`` is expressed in the
+tracer's normalized time coordinates.
 
 Solver Options Reference
 ------------------------
