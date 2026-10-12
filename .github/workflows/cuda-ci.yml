@@ -80,4 +80,4 @@ jobs:
 
           (cd examples/gpu_cartesian_tracing && python gpu_cartesian_tracing.py)
           (cd examples/gpu_dense_output && python save_trajectories.py)
-          (cd examples/passing_map_unperturbed && python passing_map.py --backend catapult)
+          (cd examples/passing_map_unperturbed && sed 's/^use_catapult = False/use_catapult = True/' passing_map.py | python)

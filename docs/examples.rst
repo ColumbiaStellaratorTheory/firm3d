@@ -121,12 +121,13 @@ Run each script from its example directory:
    cd examples/gpu_dense_output/
    python save_trajectories.py
    cd ../passing_map_unperturbed/
-   python passing_map.py --backend catapult
+   python passing_map.py
 
 The first mirrors the CPU fusion-birth loss-classification example in ARIES-CS,
 saving and classifying lost GPU trajectories in bounded batches. The
-second uses ``PassingPoincare`` to plot a kinetic section; ``--backend cpu``
-runs the same example with CPU event roots. Both backends use the existing
+second uses ``PassingPoincare`` to plot a kinetic section. Set
+``use_catapult = True`` near the top of the script for GPU tracing; the
+default ``False`` uses CPU event roots. Both backends use the existing
 ATEN passing-map parameters. GPU section and mirror hits use dense-output
 roots.
 See :doc:`poincare_maps` for the

@@ -4,12 +4,11 @@ the original CPU example parameters: 120 co-passing birth-energy alpha
 particles (mu = 0), 1000 returns, 48 interpolation cells per coordinate,
 and tolerance 1e-8. Smaller settings are used in GitHub Actions.
 
-From this directory, run either backend:
+From this directory, run:
 
-python passing_map.py --backend cpu
-python passing_map.py --backend catapult
+python passing_map.py
 
-CATAPULT requires a GPU. Both use PassingPoincare with the same parameters.
-Outside GitHub Actions, rank zero saves poincare_cpu.png or
-poincare_catapult.png in the current directory. Adjust the parameters
-near the top of the script to change the launch grid or solver settings.
+Adjust the parameters near the top of the script. Set use_catapult = True
+to trace on a GPU; the default False uses CPU tracing. Both use
+PassingPoincare with the same parameters. Outside GitHub Actions, rank zero
+saves passing_poincare.pdf in the current directory.

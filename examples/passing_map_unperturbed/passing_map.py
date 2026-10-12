@@ -1,7 +1,3 @@
-"""Kinetic passing Poincare map with the original CPU example parameters."""
-
-import argparse
-from pathlib import Path
 import time
 
 from firm3d.field.boozermagneticfield import InterpolatedBoozerField
@@ -15,40 +11,42 @@ from firm3d.util.functions import in_github_actions, proc0_print, setup_logging
 from firm3d.util.mpi import comm_size, comm_world, verbose
 
 
-parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--backend", choices=["cpu", "catapult"], default="cpu")
-args = parser.parse_args()
+boozmn_filename = "../inputs/boozmn_aten_rescaled.nc"
 
-# Same equilibrium, launch grid, and solver settings for both backends.
-boozmn_filename = (
-    Path(__file__).resolve().parent.parent / "inputs/boozmn_aten_rescaled.nc"
-)
-resolution = 10 if in_github_actions else 48  # Resolution for field interpolation
-ns_poinc = 5 if in_github_actions else 120  # Number of radial launch points
-Nmaps = 5 if in_github_actions else 1000  # Number of Poincare returns
-tol = 1e-4 if in_github_actions else 1e-8  # Absolute and relative solver tolerance
-order = 3  # Order for field interpolation
-lam = 0.0  # Passing particles: lambda = v_perp**2 / (v**2 * B)
-sign_vpar = 1.0
-ntheta_poinc = 1  # Number of poloidal launch points
-Ekin = FUSION_ALPHA_PARTICLE_ENERGY
-mass = ALPHA_PARTICLE_MASS
 charge = ALPHA_PARTICLE_CHARGE
+mass = ALPHA_PARTICLE_MASS
+Ekin = FUSION_ALPHA_PARTICLE_ENERGY
 
-setup_logging(f"stdout_passing_map_{args.backend}_{resolution}_{comm_size}.txt")
-started = time.perf_counter()
+use_catapult = False  # Set True to trace on the GPU
+resolution = 10 if in_github_actions else 48  # Resolution for field interpolation
+sign_vpar = 1.0  # sign(vpar). should be +/- 1.
+lam = 0.0  # lambda = v_perp^2/(v^2 B) = const. along trajectory
+ntheta_poinc = 1  # Number of theta initial conditions
+ns_poinc = 5 if in_github_actions else 120  # Number of s initial conditions
+Nmaps = 5 if in_github_actions else 1000  # Number of Poincare return maps to compute
+ns_interp = resolution  # Number of radial grid points for interpolation
+ntheta_interp = resolution  # Number of poloidal grid points for interpolation
+nzeta_interp = resolution  # Number of toroidal grid points for interpolation
+order = 3  # Order for interpolation
+tol = 1e-4 if in_github_actions else 1e-8  # Tolerance for ODE solver
+
+# Setup logging to redirect output to file
+setup_logging(f"stdout_passing_map_{resolution}_{comm_size}.txt")
+
+time1 = time.time()
+
 field = InterpolatedBoozerField.from_booz_xform(
-    str(boozmn_filename),
+    boozmn_filename,
     degree=order,
-    ns=resolution,
-    ntheta=resolution,
-    nzeta=resolution,
+    ns=ns_interp,
+    ntheta=ntheta_interp,
+    nzeta=nzeta_interp,
     comm=comm_world,
 )
-if args.backend == "catapult":
+if use_catapult:
     from firm3d.catapult.field import CatapultBoozerField
 
-    field = CatapultBoozerField(field, resolution, resolution, resolution)
+    field = CatapultBoozerField(field, ns_interp, ntheta_interp, nzeta_interp)
 
 poinc = PassingPoincare(
     field,
@@ -64,5 +62,8 @@ poinc = PassingPoincare(
     solver_options={"reltol": tol, "abstol": tol},
 )
 if verbose and not in_github_actions:
-    poinc.plot_poincare(filename=f"poincare_{args.backend}.png")
-proc0_print("poincare time: ", time.perf_counter() - started)
+    poinc.plot_poincare()
+
+time2 = time.time()
+
+proc0_print("poincare time: ", time2 - time1)
