@@ -71,29 +71,44 @@ fi
 export FIRM3D_GPU_BENCHMARK=1
 
 set +e
-(cd examples/gpu_boozer_tracing && python gpu_boozer_tracing.py)
-BOOZER_EXIT=$?
-cp examples/gpu_boozer_tracing/gpu_boozer_tracing_results.json "$WORK_DIR/gpu_boozer_tracing_results.json"
+(cd examples/gpu_boozer_vacuum_tracing && python gpu_boozer_vacuum_tracing.py)
+BOOZER_VACUUM_EXIT=$?
+cp examples/gpu_boozer_vacuum_tracing/gpu_boozer_vacuum_tracing_results.json "$WORK_DIR/gpu_boozer_vacuum_tracing_results.json"
+
+(cd examples/gpu_boozer_finitebeta_tracing && python gpu_boozer_finitebeta_tracing.py)
+BOOZER_FINITEBETA_EXIT=$?
+cp examples/gpu_boozer_finitebeta_tracing/gpu_boozer_finitebeta_tracing_results.json "$WORK_DIR/gpu_boozer_finitebeta_tracing_results.json"
 
 (cd examples/gpu_saw_tracing && python gpu_saw_tracing.py)
-SAW_EXIT=$?
+SAW_VACUUM_EXIT=$?
 cp examples/gpu_saw_tracing/gpu_boozer_saw_tracing_results.json "$WORK_DIR/gpu_boozer_saw_tracing_results.json"
+
+(cd examples/gpu_saw_nok_tracing && python gpu_saw_nok_tracing.py)
+SAW_NOK_EXIT=$?
+cp examples/gpu_saw_nok_tracing/gpu_saw_nok_tracing_results.json "$WORK_DIR/gpu_saw_nok_tracing_results.json"
 
 (cd examples/gpu_cartesian_tracing && python gpu_cartesian_tracing.py)
 CARTESIAN_EXIT=$?
 cp examples/gpu_cartesian_tracing/gpu_cartesian_tracing_results.json "$WORK_DIR/gpu_cartesian_tracing_results.json"
+
+(cd examples/gpu_cartesian_collisional_tracing && python gpu_cartesian_collisional_tracing.py)
+CARTESIAN_COLLISIONS_EXIT=$?
+cp examples/gpu_cartesian_collisional_tracing/gpu_cartesian_collisional_tracing_results.json "$WORK_DIR/gpu_cartesian_collisional_tracing_results.json"
 
 (cd examples/gpu_boozer_collisional_tracing && python gpu_boozer_collisional_tracing.py)
 BOOZER_COLLISONS_EXIT=$?
 cp examples/gpu_boozer_collisional_tracing/gpu_boozer_collisional_tracing_results.json "$WORK_DIR/gpu_boozer_collisional_tracing_results.json"
 set -e
 
-echo "boozer_tracing exit    : $BOOZER_EXIT"
-echo "saw_tracing exit       : $SAW_EXIT"
+echo "boozer_vacuum_tracing exit    : $BOOZER_VACUUM_EXIT"
+echo "boozer_finitebeta_tracing exit: $BOOZER_FINITEBETA_EXIT"
+echo "saw_vacuum_tracing exit       : $SAW_VACUUM_EXIT"
+echo "saw_nok_tracing exit          : $SAW_NOK_EXIT"
 echo "cartesian_tracing exit : $CARTESIAN_EXIT"
+echo "cartesian_collisions_tracing exit : $CARTESIAN_COLLISIONS_EXIT"
 echo "boozer_collisions_tracing exit : $BOOZER_COLLISONS_EXIT"
 
-if [ "$BOOZER_EXIT" -ne 0 ] || [ "$SAW_EXIT" -ne 0 ] || [ "$CARTESIAN_EXIT" -ne 0 ] || [ "$BOOZER_COLLISONS_EXIT" -ne 0 ]; then
+if [ "$BOOZER_VACUUM_EXIT" -ne 0 ] || [ "$BOOZER_FINITEBETA_EXIT" -ne 0 ] || [ "$SAW_VACUUM_EXIT" -ne 0 ] || [ "$CARTESIAN_EXIT" -ne 0 ] || [ "$CARTESIAN_COLLISIONS_EXIT" -ne 0 ] || [ "$BOOZER_COLLISONS_EXIT" -ne 0 ] || [ "$SAW_NOK_EXIT" -ne 0 ] ; then
   EXAMPLES_EXIT=1
 else
   EXAMPLES_EXIT=0

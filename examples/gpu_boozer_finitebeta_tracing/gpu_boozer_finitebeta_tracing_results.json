@@ -1,0 +1,15 @@
+{
+  "nparticles": 30000,
+  "tolerance": 1e-06,
+  "resolution": 15,
+  "loss_fraction_dbl": 0.0044,
+  "loss_fraction_flt": 0.004433333333333333,
+  "tmax": 0.0001,
+  "times": {
+    "bri_setup": 0.129699916113168,
+    "field_interpolation": 0.06399831804446876,
+    "catapult_setup": 0.253280428936705,
+    "tracing_dbl": 0.47982774395495653,
+    "tracing_flt": 0.23670455114915967
+  }
+}
