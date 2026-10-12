@@ -114,12 +114,14 @@ Traces 1 trapped particle in the Wistell-A configuration scaled to the size and 
 GPU Trajectory Saving and Kinetic Poincaré Maps
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Run these examples from the repository root:
+Run each script from its example directory:
 
 .. code-block:: console
 
-   python examples/gpu_dense_output/save_trajectories.py
-   python examples/passing_map_unperturbed/passing_map.py --backend catapult
+   cd examples/gpu_dense_output/
+   python save_trajectories.py
+   cd ../passing_map_unperturbed/
+   python passing_map.py --backend catapult
 
 The first mirrors the CPU fusion-birth loss-classification example in ARIES-CS,
 saving and classifying lost GPU trajectories in bounded batches. The
