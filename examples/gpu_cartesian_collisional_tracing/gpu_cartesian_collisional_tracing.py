@@ -30,14 +30,20 @@ from firm3d.util.constants import (
     FUSION_ALPHA_PARTICLE_ENERGY,
     PROTON_MASS,
 )
+from firm3d.util.functions import in_github_actions, in_gpu_benchmark
+import json
+import time
 
 degree = 3  # degree of interpolant
-n = 16  # resolution of interpolant
 order = 12  # order of coil curves
 # 10000 rather than 1000 so the loss fraction is not Poisson-limited.
-nparticles = 10000
-tmax = 2e-1
-tol = 1e-8
+if in_gpu_benchmark:
+    resolution, nparticles, tol, tmax = 15, 100000, 1e-6, 1e-2
+elif in_github_actions:
+    resolution, nparticles, tol, tmax = 5, 100, 1e-4, 1e-1
+else:
+    resolution, nparticles, tol, tmax = 15, 30000, 1e-6, 1e-2
+
 
 filename = "../inputs/coils.curves_22_7_21"
 wout_filename = "../inputs/wout_aten_rescaled.nc"
@@ -61,17 +67,20 @@ sc_particle = SurfaceClassifier(surf, h=0.1, p=2)
 rs = np.linalg.norm(surf.gamma()[:, :, 0:2], axis=2)
 zs = surf.gamma()[:, :, 2]
 
-rrange = (np.min(rs), np.max(rs), n)
-phirange = (0, 2 * np.pi / surf.nfp, n * 2)
+rrange = (np.min(rs), np.max(rs), resolution)
+phirange = (0, 2 * np.pi / surf.nfp, resolution * 2)
 # exploit stellarator symmetry and only consider positive z values:
-zrange = (0, np.max(zs), n // 2)
+zrange = (0, np.max(zs), resolution // 2)
+
+start_if = time.perf_counter()
 bsh = InterpolatedField(
     bs, degree, rrange, phirange, zrange, True, nfp=surf.nfp, stellsym=True
 )
+if_time = time.perf_counter() - start_if
 
 # Build the normalized toroidal flux s(r, phi, z) for evaluation of profiles.
 bri = BoozerRadialInterpolant(wout_filename, 3, enforce_vacuum=True)
-bfield = InterpolatedBoozerField(bri, 3, ns_interp=n, ntheta_interp=n, nzeta_interp=n)
+bfield = InterpolatedBoozerField(bri, 3, ns_interp=resolution, ntheta_interp=resolution, nzeta_interp=resolution)
 
 n_s, n_ang = 48, 48
 s_grid = np.linspace(0.02, 1.0, n_s)
@@ -161,8 +170,11 @@ vpar_inits = initialize_velocity_uniform(v0, nparticles)
 # The field, the boundary distance and the flux label are tabulated for the
 # GPU once; the label is what the collision kick evaluates the thermal
 # profiles at, since the Cartesian state does not carry it.
+start_setup = time.perf_counter()
 field_gpu = CatapultCartesianField(bsh, sc_particle, flux_label=flux_label)
+setup_time_dbl = time.perf_counter() - start_setup
 
+start_dbl = time.perf_counter()
 last_time = trace_particles_cartesian_with_collisions_gpu(
     field_gpu,
     xyz,
@@ -175,6 +187,10 @@ last_time = trace_particles_cartesian_with_collisions_gpu(
     tol=tol,
     rng_seed=0,
 )
+dbl_time = time.perf_counter() - start_dbl
+
+loss_times = last_time[:, 0]
+loss_fraction_dbl = float(np.mean(loss_times < tmax))
 
 particle_data = pd.DataFrame(
     {
@@ -204,3 +220,19 @@ print(f"Number of particles= {nparticles}")
 print(f"Particle loss fraction: {particle_loss:.3f}")
 print(f"Energy loss fraction: {energy_loss:.3f}")
 print(f"Mean energy fraction of confined: {np.mean((v_end[~lost] / v0) ** 2):.4f}")
+
+### record for regression testing
+timing_result = {
+    "nparticles": nparticles,
+    "tolerance": tol,
+    "resolution": resolution,
+    "loss_fraction_dbl": loss_fraction_dbl,
+    "tmax": tmax,
+    "times": {
+        "field_interpolation": if_time,
+        "catapult_setup": setup_time_dbl,
+        "tracing_dbl": dbl_time,
+    },
+}
+with open("gpu_cartesian_collisional_tracing_results.json", "w") as f:
+    json.dump(timing_result, f, indent=2)

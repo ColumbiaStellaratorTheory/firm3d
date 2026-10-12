@@ -150,9 +150,12 @@ jobs:
           source "$CONDA_BASE/etc/profile.d/conda.sh"
           conda activate firm3d-ci
           python .github/scripts/compare_gpu_timing.py \
-            "${{ runner.temp }}/firm3d-master-${{ github.sha }}/gpu_boozer_tracing_results.json" \
-            "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_boozer_tracing_results.json" \
+            "${{ runner.temp }}/firm3d-master-${{ github.sha }}/gpu_boozer_vacuum_tracing_results.json" \
+            "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_boozer_vacuum_tracing_results.json" \
             "GC Boozer Vacuum" \
+            "${{ runner.temp }}/firm3d-master-${{ github.sha }}/gpu_boozer_finitebeta_tracing_results.json" \
+            "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_boozer_finitebeta_tracing_results.json" \
+            "GC Boozer Finite Beta" \
             "${{ runner.temp }}/firm3d-master-${{ github.sha }}/gpu_cartesian_tracing_results.json" \
             "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_cartesian_tracing_results.json" \
             "GC Cartesian Vacuum" \
@@ -162,6 +165,9 @@ jobs:
             "${{ runner.temp }}/firm3d-master-${{ github.sha }}/gpu_boozer_collisional_tracing_results.json" \
             "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_boozer_collisional_tracing_results.json" \
             "Boozer Vacuum Collisions" \
+            "${{ runner.temp }}/firm3d-master-${{ github.sha }}/gpu_cartesian_collisional_tracing_results.json" \
+            "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_cartesian_collisional_tracing_results.json" \
+            "GC Cartesian Collisions" \
             --pr-status "${{ steps.slurm.outcome }}" \
             --master-status "${{ steps.slurm_master.outcome }}" \
             -o "${{ runner.temp }}/firm3d-${{ github.sha }}/pr_comment.md"
