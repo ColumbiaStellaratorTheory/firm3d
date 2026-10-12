@@ -46,11 +46,11 @@ struct EventRequest {
         for(auto criterion : options["stopping_criteria"].cast<vector<shared_ptr<StoppingCriterion>>>()){
             double kind, limit;
             if(!criterion){ kind = 5; limit = 0; }
-            else if(auto c = std::dynamic_pointer_cast<MaxToroidalFluxStoppingCriterion>(criterion)){ kind = 0; limit = c->gpu_limit(); }
-            else if(auto c = std::dynamic_pointer_cast<MinToroidalFluxStoppingCriterion>(criterion)){ kind = 1; limit = c->gpu_limit(); }
-            else if(auto c = std::dynamic_pointer_cast<IterationStoppingCriterion>(criterion)){ kind = 2; limit = c->gpu_limit(); }
-            else if(auto c = std::dynamic_pointer_cast<ToroidalTransitStoppingCriterion>(criterion)){ kind = 3; limit = c->gpu_limit(); }
-            else if(auto c = std::dynamic_pointer_cast<StepSizeStoppingCriterion>(criterion)){ kind = 4; limit = c->gpu_limit(); }
+            else if(auto c = std::dynamic_pointer_cast<MaxToroidalFluxStoppingCriterion>(criterion)){ kind = 0; limit = c->get_max_s(); }
+            else if(auto c = std::dynamic_pointer_cast<MinToroidalFluxStoppingCriterion>(criterion)){ kind = 1; limit = c->get_min_s(); }
+            else if(auto c = std::dynamic_pointer_cast<IterationStoppingCriterion>(criterion)){ kind = 2; limit = c->get_max_iter(); }
+            else if(auto c = std::dynamic_pointer_cast<ToroidalTransitStoppingCriterion>(criterion)){ kind = 3; limit = c->get_max_transits(); }
+            else if(auto c = std::dynamic_pointer_cast<StepSizeStoppingCriterion>(criterion)){ kind = 4; limit = c->get_min_dt(); }
             else throw std::invalid_argument("This stopping criterion cannot run on the GPU");
             if(!std::isfinite(limit)) throw std::invalid_argument("Stopping limits must be finite");
             criteria.insert(criteria.end(), {kind, limit});

@@ -30,7 +30,7 @@ class ToroidalTransitStoppingCriterion : public StoppingCriterion {
     public:
         ToroidalTransitStoppingCriterion(int max_transits) : max_transits(max_transits) {
         };
-        int gpu_limit() const { return max_transits; }
+        int get_max_transits() const { return max_transits; }
         bool operator()(int iter, double dt, double t, double s, double theta, double zeta, double vpar=0) override {
             if (iter == 1) {
               zeta_last = M_PI;
@@ -50,7 +50,7 @@ class MaxToroidalFluxStoppingCriterion : public StoppingCriterion {
         double max_s;
     public:
         MaxToroidalFluxStoppingCriterion(double max_s) : max_s(max_s) {};
-        double gpu_limit() const { return max_s; }
+        double get_max_s() const { return max_s; }
         bool operator()(int iter, double dt, double t, double s, double theta, double zeta, double vpar=0) override {
             return s>=max_s;
         };
@@ -61,7 +61,7 @@ class MinToroidalFluxStoppingCriterion : public StoppingCriterion {
         double min_s;
     public:
         MinToroidalFluxStoppingCriterion(double min_s) : min_s(min_s) {};
-        double gpu_limit() const { return min_s; }
+        double get_min_s() const { return min_s; }
         bool operator()(int iter, double dt, double t, double s, double theta, double zeta, double vpar=0) override {
             return s<=min_s;
         };
@@ -72,7 +72,7 @@ class IterationStoppingCriterion : public StoppingCriterion {
         int max_iter;
     public:
         IterationStoppingCriterion(int max_iter) : max_iter(max_iter) {};
-        int gpu_limit() const { return max_iter; }
+        int get_max_iter() const { return max_iter; }
         bool operator()(int iter, double dt, double t, double s, double theta, double zeta, double vpar=0) override {
             return iter>max_iter;
         };
@@ -83,7 +83,7 @@ class StepSizeStoppingCriterion : public StoppingCriterion {
         double min_dt;
     public:
         StepSizeStoppingCriterion(double min_dt) : min_dt(min_dt) {};
-        double gpu_limit() const { return min_dt; }
+        double get_min_dt() const { return min_dt; }
         bool operator()(int iter, double dt, double t, double s, double theta, double zeta, double vpar=0) override {
             return dt<min_dt;
         };

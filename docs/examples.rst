@@ -47,7 +47,7 @@ Passing Map Analysis
 
 **Location**: ``examples/passing_map_perturbed_QA/``, ``examples/passing_map_perturbed_QH/``, and ``examples/passing_map_unperturbed/``
 
-Computes the passing Poincaré map in various configurations. The perturbed examples use the Landreman & Buller 2.5% beta QA and QH configurations with shear Alfvén waves (m = 1, n = 1 for QA; m = 1, n = 2 for QH). The unperturbed example uses the full ATEN equilibrium with co-passing alpha particles, with chaos_detection=True enabled to color the Poincaré map by the Weighted Birkhoff Average digit accuracy.
+Computes the passing Poincaré map in various configurations. The perturbed examples use the Landreman & Buller 2.5% beta QA and QH configurations with shear Alfvén waves (m = 1, n = 1 for QA; m = 1, n = 2 for QH). The unperturbed example uses the full ATEN equilibrium with co-passing alpha particles and supports CPU or CATAPULT tracing with the same parameters.
 
 .. code-block:: bash
 
@@ -126,7 +126,7 @@ saving and classifying lost GPU trajectories in bounded batches. The
 second uses ``PassingPoincare`` to plot a kinetic section; ``--backend cpu``
 runs the same example with CPU event roots. Both backends use the existing
 ATEN passing-map parameters. GPU section and mirror hits use dense-output
-roots. Converge ``--dt-save`` when computing WBA from saved history.
+roots.
 See :doc:`poincare_maps` for the
 helper interface and tracing-duration conventions.
 
