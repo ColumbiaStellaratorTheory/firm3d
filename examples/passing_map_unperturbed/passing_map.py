@@ -1,6 +1,8 @@
 import time
 
-from firm3d.field.boozermagneticfield import InterpolatedBoozerField
+from firm3d.field.boozermagneticfield import (
+    InterpolatedBoozerField,
+)
 from firm3d.trajectory_helpers import PassingPoincare
 from firm3d.util.constants import (
     ALPHA_PARTICLE_CHARGE,
@@ -9,7 +11,6 @@ from firm3d.util.constants import (
 )
 from firm3d.util.functions import in_github_actions, proc0_print, setup_logging
 from firm3d.util.mpi import comm_size, comm_world, verbose
-
 
 boozmn_filename = "../inputs/boozmn_aten_rescaled.nc"
 
@@ -21,14 +22,15 @@ use_catapult = False  # Set True to trace on the GPU
 resolution = 10 if in_github_actions else 48  # Resolution for field interpolation
 sign_vpar = 1.0  # sign(vpar). should be +/- 1.
 lam = 0.0  # lambda = v_perp^2/(v^2 B) = const. along trajectory
-ntheta_poinc = 1  # Number of theta initial conditions
+ntheta_poinc = 1  # Number of zeta initial conditions for poincare
 ns_poinc = 5 if in_github_actions else 120  # Number of s initial conditions
 Nmaps = 5 if in_github_actions else 1000  # Number of Poincare return maps to compute
-ns_interp = resolution  # Number of radial grid points for interpolation
-ntheta_interp = resolution  # Number of poloidal grid points for interpolation
-nzeta_interp = resolution  # Number of toroidal grid points for interpolation
-order = 3  # Order for interpolation
+ns_interp = resolution  # number of radial grid points for interpolation
+ntheta_interp = resolution  # number of poloidal grid points for interpolation
+nzeta_interp = resolution  # number of toroidal grid points for interpolation
+order = 3  # order for interpolation
 tol = 1e-4 if in_github_actions else 1e-8  # Tolerance for ODE solver
+degree = 3  # Degree for Lagrange interpolation
 
 # Setup logging to redirect output to file
 setup_logging(f"stdout_passing_map_{resolution}_{comm_size}.txt")
@@ -43,6 +45,7 @@ field = InterpolatedBoozerField.from_booz_xform(
     nzeta=nzeta_interp,
     comm=comm_world,
 )
+
 if use_catapult:
     from firm3d.catapult.field import CatapultBoozerField
 
@@ -50,17 +53,21 @@ if use_catapult:
 
 poinc = PassingPoincare(
     field,
-    lam=lam,
-    sign_vpar=sign_vpar,
-    mass=mass,
-    charge=charge,
-    Ekin=Ekin,
+    lam,
+    sign_vpar,
+    mass,
+    charge,
+    Ekin,
     ns_poinc=ns_poinc,
     ntheta_poinc=ntheta_poinc,
     Nmaps=Nmaps,
     comm=comm_world,
+    helicity_N=1 * field.nfp,
+    helicity_M=1,
     solver_options={"reltol": tol, "abstol": tol},
+    chaos_detection=True,
 )
+
 if verbose and not in_github_actions:
     poinc.plot_poincare()
 

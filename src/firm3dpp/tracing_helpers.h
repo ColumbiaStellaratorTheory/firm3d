@@ -273,11 +273,11 @@ bool check_stopping_criteria(
             }
         }
     }
-
+    
     assert(n_zetas.size() == m_thetas.size());
     assert(n_zetas.size() == omegas.size());
     assert(n_zetas.size() == phases.size());
-
+    
     /// Now check whether we have hit any of the phase planes:
     //  n*zeta + m*theta - omega*t = consts
     for (int i = 0; i < n_zetas.size(); ++i) {
@@ -287,7 +287,7 @@ bool check_stopping_criteria(
         double omega = omegas[i];
         double phase_last = nz * zeta_last + mt * theta_last - omega*t_last;
         double phase_current = nz * zeta_current + mt * theta_current - omega*t_current;
-
+        
         double winding = phase_current > phase_last
             ? std::floor((phase_last-phase)/(2*M_PI)) + 1
             : std::ceil((phase_last-phase)/(2*M_PI)) - 1;
@@ -300,7 +300,7 @@ bool check_stopping_criteria(
             int fak = include_right_endpoint ? int(winding) : std::round(((phase_last+phase_current)/2-phase)/(2*M_PI));
             double phase_shift = fak*2*M_PI + phase;
             assert((phase_last <= phase_shift && phase_shift <= phase_current) || (phase_current <= phase_shift && phase_shift <= phase_last));
-
+            
             std::function<double(double)> rootfun = [&phase_shift, &nz, &mt, &omega, &dense, &y, &stzvt, &axis, &vnorm, &tnorm](double tau){
                 dense.calc_state(tau, y);
                 double t = tau * tnorm;
@@ -323,7 +323,7 @@ bool check_stopping_criteria(
             }
         }
     }
-
+    
     // check whether we have satisfied any of the extra stopping criteria (e.g. left a surface)
     for (int i = 0; i < stopping_criteria.size(); ++i) {
         if(stopping_criteria[i] && (*stopping_criteria[i])(iter, dt, t_current, s_current, theta_current, zeta_current, vpar_current)){

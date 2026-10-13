@@ -1,4 +1,4 @@
-"""Continuous CPU tracing limits at dense roots and per-particle horizons."""
+"""Continuous CPU tracing limits at dense roots and per-return deadlines."""
 
 import unittest
 from unittest.mock import patch
@@ -32,7 +32,13 @@ class TestCPUPhaseLimitValidation(unittest.TestCase):
             {"max_phase_hits": 1, "ODE_solver": "symplectic"},
         ]
         for change in invalid:
-            options = {"phases": [0], "n_zetas": [1], "m_thetas": [0], "omegas": [0]}
+            options = {
+                "phases": [0],
+                "n_zetas": [1],
+                "m_thetas": [0],
+                "omegas": [0],
+                "max_phase_hits": 1,
+            }
             options.update(change)
             with (
                 self.subTest(change=change),
@@ -155,12 +161,9 @@ class TestCPUPhaseLimits(unittest.TestCase):
         self.assertEqual(hits[0][0, 1], 1)
         self.assertAlmostEqual(paths[0][-1, 0], first + interval, delta=1e-20)
 
-    def test_per_particle_horizons_including_zero(self):
-        ends = np.array([0, 1e-9, 1e-7])
-        paths, hits = self.trace(
-            initial=np.tile([0.3, 0.2, 0], (3, 1)), speeds=[SPEED] * 3, tmax=ends
-        )
-        np.testing.assert_allclose([path[-1, 0] for path in paths], ends, atol=1e-22)
+    def test_zero_horizon_keeps_only_launch(self):
+        paths, hits = self.trace(tmax=0)
+        self.assertEqual(paths[0][0, 0], 0)
         self.assertEqual(len(paths[0]), 1)
         self.assertTrue(all(np.asarray(particle).size == 0 for particle in hits))
 

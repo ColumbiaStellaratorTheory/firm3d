@@ -1,6 +1,5 @@
 """Save and classify lost fusion-alpha GPU orbits, matching the CPU example."""
 
-from pathlib import Path
 import time
 
 import numpy as np
@@ -23,7 +22,7 @@ from firm3d.util.constants import (
 from firm3d.util.functions import in_github_actions, proc0_print, setup_logging, sigmav
 from firm3d.util.mpi import comm_size, comm_world
 
-boozmn_filename = Path(__file__).resolve().parent.parent / "inputs/boozmn_ariescs.nc"
+boozmn_filename = "../inputs/boozmn_ariescs.nc"
 resolution = 10 if in_github_actions else 48  # Resolution for field interpolation
 nParticles = 50 if in_github_actions else 5000  # Number of particles to trace
 tol = 1e-4 if in_github_actions else 1e-8  # Absolute and relative solver tolerance
@@ -43,7 +42,7 @@ time1 = time.time()
 
 # Setup field interpolation
 field = InterpolatedBoozerField.from_booz_xform(
-    str(boozmn_filename),
+    boozmn_filename,
     degree=order,
     ns=resolution,
     ntheta=resolution,

@@ -333,9 +333,17 @@ class TestDenseOutputGPU(unittest.TestCase):
             "charge": CHARGE,
             "Ekin": ENERGY,
         }
-        cpu, _ = trace_particles_boozer(
-            self.field, points, speeds, axis=2, tol=1e-11, **options
-        )
+        cpu = []
+        for point, speed, end in zip(points, speeds, ends):
+            paths, _ = trace_particles_boozer(
+                self.field,
+                point[None, :],
+                [speed],
+                axis=2,
+                tol=1e-11,
+                **{**options, "tmax": end},
+            )
+            cpu.append(paths[0])
         for precision, tol in [("double", 1e-10), ("single", 1e-6)]:
             field = CatapultBoozerField(self.field, 3, 3, 3, precision=precision)
             for events in [{}, {"zetas": [0], "max_hits": 32}]:

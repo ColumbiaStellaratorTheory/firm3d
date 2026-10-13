@@ -57,17 +57,6 @@ def _catapult_tolerance(options):
     return absolute
 
 
-def _gather_lists(comm, *lists):
-    """Gather related trajectory lists in rank order with one collective."""
-    if comm is None:
-        return lists
-    gathered = comm.allgather(lists)
-    return tuple(
-        [item for rank in gathered for item in rank[column]]
-        for column in range(len(lists))
-    )
-
-
 class PassingPoincare:
     def __init__(
         self,
@@ -283,7 +272,12 @@ class PassingPoincare:
                 s_init.append(s_flat[i])
                 thetas_init.append(thetas_flat[i])
 
-        return _gather_lists(self.comm, vpars_init, s_init, thetas_init)
+        if self.comm is not None:
+            vpars_init = [i for o in self.comm.allgather(vpars_init) for i in o]
+            s_init = [i for o in self.comm.allgather(s_init) for i in o]
+            thetas_init = [i for o in self.comm.allgather(thetas_init) for i in o]
+
+        return vpars_init, s_init, thetas_init
 
     def passing_map(self, point):
         r"""
@@ -342,8 +336,13 @@ class PassingPoincare:
         """
         first, last = parallel_loop_bounds(self.comm, len(self.s_init))
         trajectories = self._passing_maps(first, last)
-        result = tuple([] for _ in range(7))
-        s_all, thetas_all, vpars_all, t_all, peta_all, DA_all, DA_times = result
+        s_all = []
+        peta_all = []
+        thetas_all = []
+        vpars_all = []
+        DA_all = []
+        DA_times = []
+        t_all = []
         for points, times, momentum, accuracies, steps in trajectories:
             s_all.append(points[:, 0].tolist())
             thetas_all.append(points[:, 1].tolist())
@@ -353,7 +352,16 @@ class PassingPoincare:
                 peta_all.append(momentum)
             DA_all.append(accuracies)
             DA_times.append(steps)
-        return _gather_lists(self.comm, *result)
+        if self.comm is not None:
+            peta_all = [i for o in self.comm.allgather(peta_all) for i in o]
+            s_all = [i for o in self.comm.allgather(s_all) for i in o]
+            thetas_all = [i for o in self.comm.allgather(thetas_all) for i in o]
+            vpars_all = [i for o in self.comm.allgather(vpars_all) for i in o]
+            t_all = [i for o in self.comm.allgather(t_all) for i in o]
+            DA_all = [i for o in self.comm.allgather(DA_all) for i in o]
+            DA_times = [i for o in self.comm.allgather(DA_times) for i in o]
+
+        return s_all, thetas_all, vpars_all, t_all, peta_all, DA_all, DA_times
 
     def _sampled_momentum(self, samples):
         return compute_peta(

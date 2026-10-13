@@ -24,7 +24,8 @@ plays on the CPU:
 ``CatapultPerturbedBoozerField`` does the same for a
 ``ShearAlfvenWavesSuperposition``, and ``CatapultCartesianField`` for a simsopt
 ``InterpolatedField`` together with the ``SurfaceClassifier`` that defines the
-boundary. Build the table once and reuse it for subsequent traces.
+boundary. Building the table is the expensive step (minutes at production
+resolution), so build it once and trace as often as needed.
 
 Tracing
 -------
@@ -116,12 +117,19 @@ remain enforced; custom Python stopping callbacks cannot run on the GPU.
 Single precision
 ----------------
 
-Each field object accepts ``precision="single"`` to store its table and run
-its kernels in ``float32``. Initial conditions are cast to match. This halves
-field-table and native output-buffer memory; the public five-column paths
-remain ``float64``.
+Each field object takes ``precision="single"``, which stores the table in
+``float32`` and runs the kernels in single precision; the initial conditions
+are cast to match. This is faster and halves the memory.
 
-Validate single precision against double precision for the intended
-observable. Individual long trajectories can be sensitive to rounding and
-integration tolerance; tightening the tolerance cannot remove rounding
-error. Check field resolution, solver tolerance, and saving cadence separately.
+What single precision does and does not reproduce should be understood before
+using it. The field and its derivatives agree with double precision to about
+:math:`10^{-5}` relative, and loss fractions agree within their statistical
+uncertainty. Individual orbits do not agree: after a fraction of a transit,
+single and double precision states of the same particle differ by about as
+much as two double precision runs at tolerances ``1e-8`` and ``1e-9`` differ
+from each other. That is the orbits' own sensitivity to any small
+perturbation, and it is the level at which single precision differs. Use
+single precision for statistics over an ensemble, such as loss fractions and
+confinement times, and not for following a particular particle, for orbit
+classification of individual markers, or for anything that compares one
+trajectory to another.

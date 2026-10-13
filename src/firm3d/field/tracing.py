@@ -363,7 +363,7 @@ def trace_particles_boozer(
             the particles in Boozer coordinates :math:`(s,\theta,\zeta)`.
         parallel_speeds: A ``(nparticles, )`` array containing the speed in
                          direction of the B field for each particle.
-        tmax: Integration time, either a scalar or one value per particle.
+        tmax: integration time
         mass: particle mass in kg, defaults to the mass of an alpha particle
         charge: charge in Coulomb, defaults to the charge of an alpha particle
         Ekin: kinetic energy in Joule, defaults to 3.52MeV. Either a scalar
@@ -526,19 +526,10 @@ def trace_particles_boozer(
             "max_phase_hits": int(max_phase_hits),
             "max_phase_interval": max_phase_interval or 0.0,
         }
+        if np.ndim(tmax) != 0 or not np.isfinite(tmax) or tmax < 0:
+            raise ValueError("tmax must be finite and nonnegative for phase limits")
 
     nparticles = stz_inits.shape[0]
-    end_times = np.asarray(tmax, dtype=float)
-    if end_times.ndim == 0:
-        end_times = np.full(nparticles, end_times)
-    if (
-        end_times.shape != (nparticles,)
-        or np.any(~np.isfinite(end_times))
-        or np.any(end_times < 0)
-    ):
-        raise ValueError(
-            "tmax must be finite and nonnegative, scalar or one value per particle"
-        )
     assert stz_inits.shape[0] == len(parallel_speeds)
     speed_par = parallel_speeds
     m = mass
@@ -575,7 +566,7 @@ def trace_particles_boozer(
             charge,
             vtotal,
             vpar,
-            float(end_times[i]),
+            tmax,
             vacuum=(mode == "gc_vac"),
             noK=(mode == "gc_nok"),
             phases=phases,
