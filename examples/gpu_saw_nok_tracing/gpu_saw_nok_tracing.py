@@ -34,7 +34,7 @@ else:
 boozmn_filename = "../inputs/boozmn_ariescs_low_res.nc"
 
 start_bri = time.perf_counter()
-bri = BoozerRadialInterpolant(boozmn_filename, 3, enforce_vacuum=True)
+bri = BoozerRadialInterpolant(boozmn_filename, 3, no_K=True)
 bri_time = time.perf_counter() - start_bri
 
 nfp = bri.nfp
