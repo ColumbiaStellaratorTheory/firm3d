@@ -315,7 +315,18 @@ class PassingPoincare:
         point[:] = hit[[2, 3, 5]]
         peta = []
         if self.peta_profile:
-            peta = np.column_stack((paths[0][:, 0], self._sampled_momentum(paths[0])))
+            peta = compute_peta(
+                self.field,
+                paths[0][:, 1:4],
+                paths[0][:, 4],
+                self.mass,
+                self.charge,
+                self.helicity_M,
+                self.helicity_N,
+                helicity_Mp=self.helicity_Mp,
+                helicity_Np=self.helicity_Np,
+            )
+            peta = np.column_stack((paths[0][:, 0], peta))
         return point, hit[0], peta
 
     def compute_passing_map(self):
@@ -362,19 +373,6 @@ class PassingPoincare:
             DA_times = [i for o in self.comm.allgather(DA_times) for i in o]
 
         return s_all, thetas_all, vpars_all, t_all, peta_all, DA_all, DA_times
-
-    def _sampled_momentum(self, samples):
-        return compute_peta(
-            self.field,
-            samples[:, 1:4],
-            samples[:, 4],
-            self.mass,
-            self.charge,
-            self.helicity_M,
-            self.helicity_N,
-            helicity_Mp=self.helicity_Mp,
-            helicity_Np=self.helicity_Np,
-        )
 
     def _trace_returns(self, initial, speeds, tmax, forget_exact_path, count):
         """Select the backend; both stop at dense roots on one continuous clock."""
@@ -469,12 +467,31 @@ class PassingPoincare:
             particle_DAs, particle_DA_times = [], []
             momentum = []
             if self.peta_profile:
-                momentum = self._sampled_momentum(samples)
+                momentum = compute_peta(
+                    self.field,
+                    samples[:, 1:4],
+                    samples[:, 4],
+                    self.mass,
+                    self.charge,
+                    self.helicity_M,
+                    self.helicity_N,
+                    helicity_Mp=self.helicity_Mp,
+                    helicity_Np=self.helicity_Np,
+                )
                 if self.DA_poinc and len(returns):
                     history = path[path[:, 0] < returns[-1, 0]]
-                    time_momentum = np.column_stack(
-                        (history[:, 0], self._sampled_momentum(history))
+                    time_momentum = compute_peta(
+                        self.field,
+                        history[:, 1:4],
+                        history[:, 4],
+                        self.mass,
+                        self.charge,
+                        self.helicity_M,
+                        self.helicity_N,
+                        helicity_Mp=self.helicity_Mp,
+                        helicity_Np=self.helicity_Np,
                     )
+                    time_momentum = np.column_stack((history[:, 0], time_momentum))
                     for step in self.WBA_transit_steps:
                         if step >= len(returns):
                             continue

@@ -1601,7 +1601,8 @@ py::object cartesian_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> rr
         py::array_t<double> tmax, double tol, py::array_t<T> dt_in, py::array_t<T> mu_in, int nparticles, vector<double> save_times, py::dict event_options){
     EventRequest request(event_options);
             auto result = gpu_tracing<T, RHS::GC_CartesianVacuum>(quad_pts, rrange, phirange, zrange, xyz_init, m, q, vtotal, vtang, tmax, tol, dt_in, mu_in, nparticles, save_times, request);
-            return event_result(result, request);
+            if(request.enabled()) return py::make_tuple(result, request.hits, request.end_times);
+            return result;
         }
 
 template py::object cartesian_gpu_tracing<double>(py::array_t<double> quad_pts, py::array_t<double> rrange,
@@ -1647,7 +1648,8 @@ py::object boozer_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> srang
     //     results[7*i+2] = atan2(x2, x1);
     // }
 
-    return event_result(results, request);
+    if(request.enabled()) return py::make_tuple(results, request.hits, request.end_times);
+    return results;
 }
 
 template py::object boozer_gpu_tracing<double>(py::array_t<double> quad_pts, py::array_t<double> srange,
@@ -1712,7 +1714,8 @@ py::object boozer_saw_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> s
     //     results[7*i+2] = atan2(x2, x1);
     // }
 
-    return event_result(results, request);
+    if(request.enabled()) return py::make_tuple(results, request.hits, request.end_times);
+    return results;
 }
 
 template py::object boozer_saw_gpu_tracing<double>(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange,
@@ -1776,7 +1779,8 @@ py::object boozer_saw_nok_gpu_tracing(py::array_t<T> quad_pts, py::array_t<doubl
     //     results[7*i+1] = sqrt(x1*x1 + x2*x2);
     //     results[7*i+2] = atan2(x2, x1);
     // }
-    return event_result(results, request);
+    if(request.enabled()) return py::make_tuple(results, request.hits, request.end_times);
+    return results;
 }
 
 template py::object boozer_saw_nok_gpu_tracing<double>(py::array_t<double> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange,

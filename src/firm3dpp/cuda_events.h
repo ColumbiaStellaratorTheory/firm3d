@@ -65,12 +65,6 @@ struct WaveBufferGuard {
     ~WaveBufferGuard() { cudaFree(m); cudaFree(n); cudaFree(phihats); }
 };
 
-template<typename T>
-py::object event_result(py::array_t<T> output, const EventRequest& request) {
-    if(request.enabled()) return py::make_tuple(output, request.hits, request.end_times);
-    return output;
-}
-
 __device__ inline bool write_event(DeviceEvents events, int particle, double time,
                                    int index, const double* state) {
     int count = events.counts[particle];

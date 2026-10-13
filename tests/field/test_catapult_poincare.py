@@ -72,10 +72,9 @@ class TestPassingPoincareCPU(unittest.TestCase):
     def test_continuous_returns_and_root_momentum(self):
         with (
             patch(CPU_TRACE, return_value=([sampled_path()], [native_hits()])) as trace,
-            patch.object(
-                PassingPoincare,
-                "_sampled_momentum",
-                side_effect=lambda samples: samples[:, 1],
+            patch(
+                "firm3d.trajectory_helpers.poincare.compute_peta",
+                side_effect=lambda field, points, *args, **kwargs: points[:, 0],
             ),
         ):
             poinc = PassingPoincare(
@@ -110,10 +109,9 @@ class TestPassingPoincareCPU(unittest.TestCase):
         )
         with (
             patch(CPU_TRACE, return_value=([path], [native_hits()])) as trace,
-            patch.object(
-                PassingPoincare,
-                "_sampled_momentum",
-                side_effect=lambda samples: samples[:, 1],
+            patch(
+                "firm3d.trajectory_helpers.poincare.compute_peta",
+                side_effect=lambda field, points, *args, **kwargs: points[:, 0],
             ),
             patch(
                 "firm3d.trajectory_helpers.poincare.return_DA", return_value=(14, 9)
