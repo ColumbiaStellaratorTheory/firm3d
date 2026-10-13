@@ -139,11 +139,10 @@ template <typename T, int n> __device__ void interpolate(T*  out, const T* __res
 
     // 8 threads per particles, iterate over particles in the block
     for(int p=threadIdx.x / 8; p<PARTICLES_PER_BLOCK; p+= THREADS_PER_BLOCK/8){
-        const bool p_valid = is_valid[p];
         // cell_ids from build_state
-        const int i = p_valid ? cell_index_start[3*p] : 0;
-        const int j = p_valid ? cell_index_start[3*p + 1] : 0;
-        const int k = p_valid ? cell_index_start[3*p + 2] : 0;
+        const int i = cell_index_start[3*p];
+        const int j = cell_index_start[3*p + 1];
+        const int k = cell_index_start[3*p + 2];
 
         // constant third dimension index for the thread
         const int kk = threadIdx.x % 4;
@@ -155,8 +154,11 @@ template <typename T, int n> __device__ void interpolate(T*  out, const T* __res
         const int base_offset = 64*n*(i*n_x2_d * n_x3_d + j*n_x3_d + k) + 4*jj + kk;
 
         // each thread handles two j,k pairs, compute shape contributions
-        const T shape_jk1 = p_valid ? shape_fun_vals[(8 + kk)*PARTICLES_PER_BLOCK + p] * shape_fun_vals[(4 + jj)*PARTICLES_PER_BLOCK + p] : T(0);
-        const T shape_jk2 = p_valid ? shape_fun_vals[(8 + kk)*PARTICLES_PER_BLOCK + p] * shape_fun_vals[(4 + jj + 2)*PARTICLES_PER_BLOCK + p] : T(0);
+        const T shape_jk1 = shape_fun_vals[(8 + kk)*PARTICLES_PER_BLOCK + p] * shape_fun_vals[(4 + jj)*PARTICLES_PER_BLOCK + p];
+        const T shape_jk2 = shape_fun_vals[(8 + kk)*PARTICLES_PER_BLOCK + p] * shape_fun_vals[(4 + jj + 2)*PARTICLES_PER_BLOCK + p];
+
+        // only issue loads if the particle is still alive
+        const bool p_valid = is_valid[p];
 
         // iterate over interpolant elements
         // in gc boozer vacuum, this is modB, dmodBds, dmodBdtheta, dmodBdzeta, G, iota
