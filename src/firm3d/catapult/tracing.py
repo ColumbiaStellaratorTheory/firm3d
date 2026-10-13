@@ -347,8 +347,6 @@ def _to_pseudo_cartesian(stz_inits, dtype):
     zeta), the coordinates CATAPULT integrates in, in the given dtype.
     """
     x_inits = np.array(stz_inits, dtype=dtype, order="C")
-    if x_inits.ndim != 2 or x_inits.shape[1] != 3:
-        raise ValueError("initial positions must have shape (nparticles, 3)")
     s = x_inits[:, 0].copy()
     theta = x_inits[:, 1].copy()
     x_inits[:, 0] = s * np.cos(theta)
@@ -517,27 +515,6 @@ def _cpu_format(inits, parallel_speeds, bodies, tmax, infer_losses=True):
     first = np.column_stack(
         (np.zeros(nparticles), np.asarray(inits, dtype=np.float64), parallel_speeds)
     )
-    if isinstance(bodies, np.ndarray):
-        # Endpoint-only tracing returns a dense (nparticles, 1, 7) array.
-        # Assemble all two-row paths together instead of allocating and
-        # filtering an array for each particle. The views have disjoint rows.
-        paths = np.empty((nparticles, 2, 5), dtype=np.float64)
-        paths[:, 0] = first
-        paths[:, 1] = bodies[:, 0, :5]
-        res_tys = [path if path[1, 0] > 0 else path[:1] for path in paths]
-        lost = (
-            bodies[:, 0, 0] < tmax * (1 - 1e-6)
-            if infer_losses
-            else np.zeros(nparticles, dtype=bool)
-        )
-        lost_indices = np.flatnonzero(lost)
-        hit_rows = np.column_stack(
-            (paths[lost, 1, 0], -np.ones(len(lost_indices)), paths[lost, 1, 1:])
-        )
-        res_hits = [np.empty(0) for _ in range(nparticles)]
-        for i, row in zip(lost_indices, hit_rows):
-            res_hits[i] = row[None, :]
-        return res_tys, res_hits
     res_tys = []
     res_hits = []
     for i in range(nparticles):

@@ -1,14 +1,13 @@
-This example computes the kinetic passing Poincare map in the bundled ATEN
-configuration, scaled to the size and field strength of ARIES-CS. It uses
-the original CPU example parameters: 120 co-passing birth-energy alpha
-particles (mu = 0), 1000 returns, 48 interpolation cells per coordinate,
-and tolerance 1e-8. Smaller settings are used in GitHub Actions.
+This example computes the passing particle Poincare map in the ATEN configuration scaled
+to the size and field strength of ARIES-CS. Co-passing alpha particles (mu = 0, sign(v_{\|}) = +1) with
+the alpha particle birth energy are assumed.
 
-From this directory, run:
+The passing map is computed with the chaos_detection parameter enabled. Weighted Birkhoff Averaging is
+added as a setting to the passing map and applied to a particle canonical momentum
+to create a numerical metric (digit accuracy) of chaos, implemented as described in:
 
-python passing_map.py
+N. Duignan and J. D. Meiss. "Distinguishing between regular and chaotic orbits of flows by the weighted birkhoff average." Physical Nonlinear Phenomena. (2023): 449:133749.
 
-Adjust the parameters near the top of the script. Set use_catapult = True
-to trace on a GPU; the default False uses CPU tracing. Both use
-PassingPoincare with the same parameters. Outside GitHub Actions, rank zero
-saves passing_poincare.pdf in the current directory.
+Set use_catapult = True near the top of passing_map.py to use GPU tracing.
+The default False uses CPU tracing with the same parameters. Run from this
+directory with "python passing_map.py". Both backends use dense-output roots.

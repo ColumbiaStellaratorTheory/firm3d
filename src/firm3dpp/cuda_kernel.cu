@@ -679,15 +679,11 @@ __device__ void build_state(T* x_temp, bool* symmetry_exploited, int* cell_index
         x_temp[threadIdx.x] = t[threadIdx.x] + T(dp5_t_wgts[deriv_id])*dt[threadIdx.x];
     }
 
-    // Assign each component to one thread; a particle-stride loop repeats
-    // the later components in several lanes of the same warp.
-    for (int idx=threadIdx.x; idx<4*PARTICLES_PER_BLOCK; idx+=THREADS_PER_BLOCK) {
+    // store current location in x_temp
+    for (int idx=threadIdx.x; idx<4*PARTICLES_PER_BLOCK; idx+=PARTICLES_PER_BLOCK) {
         int particle_id = idx % PARTICLES_PER_BLOCK;
         int state_var = idx / PARTICLES_PER_BLOCK;
 
-        // Inactive slots have no initialized stages (for example tmax=0).
-        // All threads still reach the shared-memory barriers below.
-        if(!is_valid[particle_id]){ continue; }
         x_temp[(state_var+1)*PARTICLES_PER_BLOCK + particle_id] = state[state_var*PARTICLES_PER_BLOCK + particle_id];
         T dt_particle = dt[particle_id];
         for(int j=0; j<deriv_id; ++j){
@@ -1422,7 +1418,7 @@ py::array_t<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range
     gpuErrchk(cudaMemcpyToSymbol(n_x23_d, &n_x23, sizeof(int)) );
     gpuErrchk(cudaMemcpyToSymbol(nparticles_d, &nparticles, sizeof(int)));
 
-    vector<T> init_pos(4 * size_t(nparticles));
+    T init_pos[4*nparticles];
     // load initial conditions
     for(int i=0; i<nparticles; ++i){
         int start = 3*i;
@@ -1438,7 +1434,7 @@ py::array_t<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range
 
     T* init_pos_d;
     gpuErrchk(cudaMalloc((void**)&init_pos_d, 4 * nparticles * sizeof(T)) );
-    gpuErrchk(cudaMemcpy(init_pos_d, init_pos.data(), 4 * nparticles * sizeof(T), cudaMemcpyHostToDevice) );
+    gpuErrchk(cudaMemcpy(init_pos_d, init_pos, 4 * nparticles * sizeof(T), cudaMemcpyHostToDevice) );
 
     T* quadpts_d;
     gpuErrchk(cudaMalloc((void**)&quadpts_d, quad_pts.size() * sizeof(T)) );
