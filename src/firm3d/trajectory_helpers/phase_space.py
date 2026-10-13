@@ -1253,6 +1253,16 @@ class MapPhaseSpace:
             s, thetas, zetas, vpars, mus_per_mass : Filtered arrays with
                 equilibrium-lost particles removed.
         """
+        points = np.asarray(points)
+        vpars_init = np.asarray(vpars_init, dtype=float)
+        mus_per_mass = np.asarray(mus_per_mass, dtype=float)
+
+        # On the E' slice vpar solves the wave-frame invariant, so a particle's
+        # lab-frame energy is not self.Ekin; the equilibrium trace needs its own.
+        self.B0.set_points(points)
+        modB = self.B0.modB()[:, 0]
+        Ekin_lab = self.mass * (0.5 * vpars_init**2 + mus_per_mass * modB)
+
         # trace particles in equilibrium field to see if any are lost
         gc_tys, gc_zeta_hits = trace_particles_boozer(
             field=self.B0,
@@ -1261,7 +1271,7 @@ class MapPhaseSpace:
             tmax=2e-3,
             mass=self.mass,
             charge=self.charge,
-            Ekin=self.Ekin,
+            Ekin=Ekin_lab,
             comm=self.comm,
             forget_exact_path=True,
             dt_save=self.min_timestep,

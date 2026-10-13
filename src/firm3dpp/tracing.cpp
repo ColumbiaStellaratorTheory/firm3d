@@ -3,6 +3,7 @@
 #include "shearalfvenwave.h"
 #include "tracing.h"
 #include "ode_solvers.h"
+#include "collisions.h"
 #ifdef USE_GSL
     #include "symplectic.h"
 #endif
@@ -54,6 +55,8 @@ class GuidingCenterVacuumBoozerRHS : public BaseRHS {
         int get_state_size() const override {
             return Size;
         }
+
+        void set_mu(double mu_new) override { mu = mu_new; }
 
         void operator()(const vector<double> &ys, vector<double> &dydt, const double t) override {
             vector<double> stzv(Size), stzvdot(Size);
@@ -135,6 +138,8 @@ class GuidingCenterVacuumBoozerPerturbedRHS : public BaseRHS {
         int get_state_size() const override {
             return Size;
         }
+
+        void set_mu(double mu_new) override { mu = mu_new; }
 
         void operator()(const vector<double> &ys, vector<double> &dydt, const double t) override {
             vector<double> stzvt(Size), stzvtdot(Size);
@@ -240,6 +245,8 @@ class GuidingCenterNoKBoozerPerturbedRHS : public BaseRHS {
             return Size;
         }
 
+        void set_mu(double mu_new) override { mu = mu_new; }
+
         void operator()(const vector<double> &ys, vector<double> &dydt, const double t) override {
             vector<double> stzvt(Size), stzvtdot(Size);
             y_to_stzvt(ys, stzvt, axis, vnorm, tnorm);
@@ -332,6 +339,8 @@ class GuidingCenterNoKBoozerRHS : public BaseRHS {
             return Size;
         }
 
+        void set_mu(double mu_new) override { mu = mu_new; }
+
         void operator()(const vector<double> &ys, vector<double> &dydt, const double t) override {
             vector<double> stzv(Size), stzvdot(Size);
             y_to_stzvt(ys, stzv, axis, vnorm, tnorm);
@@ -400,6 +409,8 @@ class GuidingCenterBoozerRHS : public BaseRHS {
             return Size;
         }
 
+        void set_mu(double mu_new) override { mu = mu_new; }
+
         void operator()(const vector<double> &ys, vector<double> &dydt, const double t) override {
             vector<double> stzv(Size), stzvdot(Size);
             y_to_stzvt(ys, stzv, axis, vnorm, tnorm);
@@ -442,6 +453,33 @@ class GuidingCenterBoozerRHS : public BaseRHS {
         }
 };
 
+// Create the adaptive ODE solver selected by `ode_solver`.
+static std::unique_ptr<ODESolver> make_ode_solver(
+    const string& ode_solver,
+    double abstol,
+    double reltol,
+    double dtau_max,
+    double DP_hmin,
+    double tnorm) {
+    if (ode_solver == "dormand_prince") {
+        return create_dormand_prince_solver(
+            abstol,
+            reltol,
+            dtau_max,
+            DP_hmin / tnorm
+        );
+    } else if (ode_solver == "boost") {
+        return create_dopri_boost_solver(
+            abstol,
+            reltol,
+            dtau_max
+        );
+    }
+    throw std::invalid_argument(
+        "ode_solver is \"boost\", \"dormand_prince\" or \"symplectic\""
+    );
+}
+
 tuple<vector<vector<double>>, vector<vector<double>>>
 solve(
     BaseRHS& rhs,
@@ -450,12 +488,12 @@ solve(
     double dtau,
     double dtau_max,
     double abstol,
-    double reltol, 
+    double reltol,
     vector<double> phases,
     vector<double> n_zetas,
     vector<double> m_thetas,
     vector<double> omegas,
-    vector<shared_ptr<StoppingCriterion>> stopping_criteria, 
+    vector<shared_ptr<StoppingCriterion>> stopping_criteria,
     double dtau_save,
     vector<double> vpars,
     bool phases_stop,
@@ -471,31 +509,14 @@ solve(
     }
 
     int state_size = rhs.get_state_size();
-    
+
     vector<vector<double>> res = {};
     vector<vector<double>> res_hits = {};
     vector<double> y(state_size), temp(state_size);
-    
-    std::unique_ptr<ODESolver> solver;
-    if (ode_solver == "dormand_prince") {
-        solver = create_dormand_prince_solver(
-            abstol,
-            reltol,
-            dtau_max,
-            DP_hmin
-        );
-    } else if (ode_solver == "boost") {
-        solver = create_dopri_boost_solver(
-            abstol,
-            reltol,
-            dtau_max
-        );
-    } else {
-        throw std::invalid_argument(
-            "ode_solver is \"boost\", \"dormand_prince\" of \"symplectic\""
-        );
-    }
-    
+
+    std::unique_ptr<ODESolver> solver = make_ode_solver(
+        ode_solver, abstol, reltol, dtau_max, DP_hmin, tnorm);
+
     double tau = 0;
     int iter = 0;
     bool stop = false;
@@ -560,7 +581,6 @@ solve(
         }
     } while(tau < tau_max && !stop);
 
-    // Save t = tmax or time when StoppingCriterion is hit if we not already saved it 
     if (stop) {
         tau_max = tau_last;
     }
@@ -888,13 +908,13 @@ solve_sympl_wrapper(
     vector<double> m_thetas,
     vector<double> omegas,
     vector<shared_ptr<StoppingCriterion>> stopping_criteria,
-    vector<double> vpars, 
+    vector<double> vpars,
     bool phases_stop=false,
     bool vpars_stop=false,
-    bool forget_exact_path=false, 
+    bool forget_exact_path=false,
     bool predictor_step=true,
     double dtau_save=1e-6
-) {  
+) {
     // Call the vector-based symplectic solver directly
     return solve_sympl_vector(
         f,
@@ -909,7 +929,7 @@ solve_sympl_wrapper(
         stopping_criteria,
         vpars,
         phases_stop,
-        vpars_stop, 
+        vpars_stop,
         forget_exact_path,
         predictor_step,
         dtau_save
@@ -917,6 +937,358 @@ solve_sympl_wrapper(
 }
 #endif
 
+
+// ==========================================================================
+// Collision integrator: orbit equations at fixed mu, plus a collision kick
+// ==========================================================================
+
+// --------------------------------------------------------------------------
+// solve_sde: drive any guiding-center right-hand side with the Monte Carlo
+// collision operator.  Output rows are [t, s, theta, zeta, v_par, v].
+//
+// The orbit state is the ordinary [s, theta, zeta, v_par], optionally with t
+// as a fifth component for the perturbed right-hand sides.
+//
+// At each accepted step the kick converts (v_par, mu) -> (v, xi) using |B| at
+// the current position, applies drift and noise, and converts back.
+// --------------------------------------------------------------------------
+tuple<vector<vector<double>>, vector<vector<double>>>
+solve_sde(
+    BaseRHS& rhs,
+    shared_ptr<BoozerMagneticField> field,
+    const vector<ThermalBackground>& backgrounds,
+    double m_a, double q_a,
+    vector<double> stzv_init,      // [s, theta, zeta, v_par] (+ t if size 5)
+    double mu_init,                // magnetic moment [m^2/s^2/T]
+    double tau_max,
+    double dtau,
+    double dtau_max,
+    double abstol,
+    double reltol,
+    vector<shared_ptr<StoppingCriterion>> stopping_criteria,
+    int axis,
+    double vnorm,
+    double tnorm,
+    string ode_solver,
+    double DP_hmin,
+    uint64_t rng_seed)
+{
+    // 4 for a static field, [s, theta, zeta, v_par]; 5 for a perturbed one,
+    // which carries t as a fifth component.  stzvt_to_y/y_to_stzvt handle both,
+    // and the kick writes only v_par and the mu parameter, so t round-trips
+    // untouched.
+    const int state_size = rhs.get_state_size();
+    if (state_size != 4 && state_size != 5)
+        throw std::invalid_argument(
+            "solve_sde requires a 4- or 5-element guiding-center right-hand side"
+        );
+    if ((int)stzv_init.size() != state_size)
+        throw std::invalid_argument(
+            "solve_sde: initial state width does not match the right-hand side"
+        );
+
+    // Set up RNG
+    std::mt19937_64 rng(rng_seed);
+    std::normal_distribution<double> normal_dist(0.0, 1.0);
+
+    vector<vector<double>> res;
+    vector<vector<double>> res_hits;
+    vector<double> y(state_size), stzv(state_size);
+
+    std::unique_ptr<ODESolver> solver = make_ode_solver(
+        ode_solver, abstol, reltol, dtau_max, DP_hmin, tnorm);
+
+    // mu is carried alongside the state and updated by the kick.
+    double mu = mu_init;
+    rhs.set_mu(mu);
+
+    Array2 stz_pt = xt::zeros<double>({1, 3});
+    auto modB_at = [&](double s, double theta, double zeta) -> double {
+        stz_pt(0, 0) = s;
+        stz_pt(0, 1) = theta;
+        stz_pt(0, 2) = zeta;
+        field->set_points(stz_pt);
+        return field->modB_ref()(0);
+    };
+
+    // Speed reconstructed from the orbit state and the mu in force for the
+    // step the sample was taken in: v^2 = v_par^2 + 2 mu |B|.
+    auto speed_at = [&](const vector<double>& sv, double mu_now) -> double {
+        double vperp2 = 2.0 * mu_now * modB_at(sv[0], sv[1], sv[2]);
+        if (vperp2 < 0.0) vperp2 = 0.0;
+        return std::sqrt(sv[3] * sv[3] + vperp2);
+    };
+
+    // Helper: build a 6-element save record [t, s, theta, zeta, v_par, v]
+    auto make_record = [&](double t_phys, const vector<double>& sv,
+                           double mu_now) -> vector<double> {
+        return {t_phys, sv[0], sv[1], sv[2], sv[3], speed_at(sv, mu_now)};
+    };
+
+    // Save initial state
+    stzvt_to_y(stzv_init, y, axis, vnorm, tnorm);
+    res.push_back(make_record(0.0, stzv_init, mu));
+
+    solver->initialize(y, 0.0, dtau, rhs);
+
+    double tau = 0.0;
+    int iter = 0;
+    bool stop = false;
+    vector<double> y_now(state_size);
+
+    do {
+        auto step = solver->do_step(rhs);
+        iter++;
+        double tau_last    = std::get<0>(step);
+        double tau_current = std::get<1>(step);
+
+        // On the step that crosses tau_max the orbit is interpolated back to
+        // tau_max and the kick window shortened to match, so the endpoint is
+        // the post-kick state at exactly tau_max, as on the GPU.
+        const bool crossed = tau_current >= tau_max;
+        if (crossed) {
+            solver->calc_state(tau_max, y_now);
+            tau_current = tau_max;
+        } else {
+            y_now = solver->current_state();
+        }
+        double h_taken = tau_current - tau_last;  // normalized step
+        tau = tau_current;
+        y_to_stzvt(y_now, stzv, axis, vnorm, tnorm);
+
+        // ---- Collision kick applied to (v, xi) at tau_current ----
+        if (!backgrounds.empty()) {
+            double B = modB_at(stzv[0], stzv[1], stzv[2]);
+            double v_now = std::sqrt(stzv[3] * stzv[3] + 2.0 * mu * B);
+
+            if (v_now > 0.0 && B > 0.0) {
+                double xi_now = stzv[3] / v_now;
+
+                auto coef = compute_collision_coefficients(
+                    v_now, stzv[0], m_a, q_a, backgrounds);
+                double h_phys = h_taken * tnorm;
+
+                // Sub-cycle the kick over the accepted step: size one
+                // sub-step from the current coefficients, apply it,
+                // refresh the coefficients at the new speed, repeat on
+                // the remaining time.
+                double t_left = h_phys;
+                auto c = coef;
+                while (t_left > 0.0) {
+                    double h_sub  = t_left / collision_substeps(v_now, c, t_left);
+                    double sqrt_h = std::sqrt(h_sub);
+                    double dW_v  = normal_dist(rng) * sqrt_h;
+                    double dW_xi = normal_dist(rng) * sqrt_h;
+                    milstein_collision_step(v_now, xi_now, c, h_sub, dW_v, dW_xi);
+                    t_left -= h_sub;
+                    if (t_left <= 0.0) break;
+                    c = compute_collision_coefficients(
+                            v_now, stzv[0], m_a, q_a, backgrounds);
+                }
+
+                stzv[3] = v_now * xi_now;
+                mu = v_now * v_now * (1.0 - xi_now * xi_now) / (2.0 * B);
+                rhs.set_mu(mu);
+
+                if (!crossed) {
+                    stzvt_to_y(stzv, y_now, axis, vnorm, tnorm);
+                    // The kick invalidated the derivative the solver caches
+                    // between steps; re-initialize recomputes it, and
+                    // get_hnext() keeps the adaptive step size.
+                    solver->initialize(y_now, tau_current, solver->get_hnext(), rhs);
+                }
+            }
+        }
+
+        // ---- Check stopping criteria (post-kick state) ----
+        {
+            double t_current    = tau_current * tnorm;
+            double s_current    = stzv[0];
+            double th_current   = stzv[1];
+            double z_current    = stzv[2];
+            double vpar_current = stzv[3];
+
+            for (int i = 0; i < (int)stopping_criteria.size(); ++i) {
+                if (stopping_criteria[i] && (*stopping_criteria[i])(
+                        iter, h_taken * tnorm,
+                        t_current, s_current, th_current, z_current, vpar_current)) {
+                    stop = true;
+                    vector<double> hit = {t_current, -1.0 - double(i)};
+                    hit.push_back(s_current); hit.push_back(th_current);
+                    hit.push_back(z_current); hit.push_back(vpar_current);
+                    hit.push_back(speed_at(stzv, mu));
+                    res_hits.push_back(hit);
+                    break;
+                }
+            }
+        }
+
+    } while (tau < tau_max && !stop);
+
+    // Final state: post-kick, at tau_max or at the stop.
+    res.push_back(make_record(tau * tnorm, stzv, mu));
+
+    return std::make_tuple(res, res_hits);
+}
+
+// --------------------------------------------------------------------------
+// Public entry point: collision tracing in a shear-Alfven-wave field
+// --------------------------------------------------------------------------
+tuple<vector<vector<double>>, vector<vector<double>>>
+particle_guiding_center_boozer_perturbed_collision_tracing(
+    shared_ptr<ShearAlfvenWave> perturbed_field,
+    vector<double> stz_init,
+    double m,
+    double q,
+    double vtang,
+    double mu_init,
+    double tmax,
+    const vector<ThermalBackground>& backgrounds,
+    bool vacuum,
+    bool noK,
+    vector<shared_ptr<StoppingCriterion>> stopping_criteria,
+    int axis,
+    double abstol,
+    double reltol,
+    string ode_solver,
+    double DP_hmin,
+    uint64_t rng_seed)
+{
+    Array2 stzt({{stz_init[0], stz_init[1], stz_init[2], 0.0}});
+    perturbed_field->set_points(stzt);
+    auto field = perturbed_field->get_B0();
+    double modB = field->modB()(0);
+
+    double vtotal = std::sqrt(vtang * vtang + 2.0 * mu_init * modB);
+
+    double G0    = std::abs(field->G()(0));
+    double r0    = G0 / modB;
+    double vnorm = vtotal;
+    double tnorm = r0 * 2.0 * M_PI / vtotal;
+
+    double dtau_max = 0.25;
+    double dtau     = 1e-3 * dtau_max;
+
+    double tau_max = tmax / tnorm;
+
+    // [s, theta, zeta, v_par, t]
+    vector<double> stzvt_init = {
+        stz_init[0], stz_init[1], stz_init[2], vtang, 0.0
+    };
+
+    std::unique_ptr<BaseRHS> rhs;
+    if (vacuum) {
+        rhs = std::make_unique<GuidingCenterVacuumBoozerPerturbedRHS>(
+            perturbed_field, m, q, mu_init, axis, vnorm, tnorm);
+    } else if (noK) {
+        rhs = std::make_unique<GuidingCenterNoKBoozerPerturbedRHS>(
+            perturbed_field, m, q, mu_init, axis, vnorm, tnorm);
+    } else {
+        throw std::invalid_argument(
+            "perturbed collision tracing supports vacuum_saw and nok_saw only; "
+            "there is no full-K perturbed right-hand side"
+        );
+    }
+
+    return solve_sde(
+        *rhs,
+        field,
+        backgrounds,
+        m, q,
+        stzvt_init,
+        mu_init,
+        tau_max,
+        dtau,
+        dtau_max,
+        abstol,
+        reltol,
+        stopping_criteria,
+        axis,
+        vnorm,
+        tnorm,
+        ode_solver,
+        DP_hmin,
+        rng_seed
+    );
+}
+
+// --------------------------------------------------------------------------
+// Public entry point: collision tracing (vacuum, noK, or full GC)
+// --------------------------------------------------------------------------
+tuple<vector<vector<double>>, vector<vector<double>>>
+particle_guiding_center_boozer_collision_tracing(
+    shared_ptr<BoozerMagneticField> field,
+    vector<double> stz_init,      // [s, theta, zeta]
+    double m,
+    double q,
+    double vtotal,                // initial total speed [m/s]
+    double vtang,                 // initial v_par [m/s]
+    double tmax,
+    const vector<ThermalBackground>& backgrounds,
+    bool vacuum,
+    bool noK,
+    vector<shared_ptr<StoppingCriterion>> stopping_criteria,
+    int axis,
+    double abstol,
+    double reltol,
+    string ode_solver,
+    double DP_hmin,
+    uint64_t rng_seed)
+{
+    Array2 stz({{stz_init[0], stz_init[1], stz_init[2]}});
+    field->set_points(stz);
+    double modB = field->modB()(0);
+
+    double G0    = std::abs(field->G()(0));
+    double r0    = G0 / modB;
+    double vnorm = vtotal;
+    double tnorm = r0 * 2.0 * M_PI / vtotal;
+
+    double dtau_max = 0.25;
+    double dtau     = 1e-3 * dtau_max;
+
+    double tau_max = tmax / tnorm;
+
+    double vperp2  = vtotal * vtotal - vtang * vtang;
+    double mu_init = vperp2 / (2.0 * modB);
+
+    vector<double> stzv_init = {
+        stz_init[0], stz_init[1], stz_init[2], vtang
+    };
+
+    std::unique_ptr<BaseRHS> rhs;
+    if (vacuum) {
+        rhs = std::make_unique<GuidingCenterVacuumBoozerRHS>(
+            field, m, q, mu_init, axis, vnorm, tnorm);
+    } else if (noK) {
+        rhs = std::make_unique<GuidingCenterNoKBoozerRHS>(
+            field, m, q, mu_init, axis, vnorm, tnorm);
+    } else {
+        rhs = std::make_unique<GuidingCenterBoozerRHS>(
+            field, m, q, mu_init, axis, vnorm, tnorm);
+    }
+
+    return solve_sde(
+        *rhs,
+        field,
+        backgrounds,
+        m, q,
+        stzv_init,
+        mu_init,
+        tau_max,
+        dtau,
+        dtau_max,
+        abstol,
+        reltol,
+        stopping_criteria,
+        axis,
+        vnorm,
+        tnorm,
+        ode_solver,
+        DP_hmin,
+        rng_seed
+    );
+}
 
 // compute derivative for a single point, with vacuum switch
 void particle_guiding_center_boozer_derivs(
@@ -970,7 +1342,7 @@ void particle_guiding_center_saw_derivs(
     double t = stz_init[1];
 
     vector<double> y = {s*cos(t), s*sin(t), stz_init[2], vtang, time};
-    
+
     if(rhs == "vacuum_saw"){
         auto rhs_class = GuidingCenterVacuumBoozerPerturbedRHS(perturbed_field, m, q, mu, 2);
         rhs_class(y, out, time);

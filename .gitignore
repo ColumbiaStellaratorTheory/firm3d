@@ -15,9 +15,12 @@ dist/
 pip-wheel-metadata/
 *firm3d.egg-info/
 .DS_Store
+Icon?
 .coverage
+coverage.xml
 .tox
 *fort.9
+.ipynb_checkpoints/
 
 # f90wrap related
 src.*/
@@ -33,12 +36,20 @@ f90wrap_*.f90
 # IDE
 .idea
 
+# Local agent/editor state (shareable .claude/ config is deliberately not ignored)
+.claude/settings.local.json
+.claude/worktrees/
+.cursor/
+
 # examples
 examples/*.log
 examples/**/*.txt
 examples/**/*.pdf
 examples/**/*.png
 examples/**/*.vt*
+examples/**/*.log
+examples/**/*.npz
+examples/**/*.h5
 
 # Sphinx related files
 docs/build/
