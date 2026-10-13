@@ -382,7 +382,6 @@ template <typename T, RHS id, bool coll, int deriv_id>
 __device__ void rhs_GC_BoozerVacuumSAW(T* derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu,
                                          T saw_omega, int* saw_m, int* saw_n, T* saw_phihats, int saw_nharmonics, const bool* __restrict__ is_valid){
     constexpr int nout = map_rhs_to_n_deriv_outputs<id, coll>();
-    // const int p = threadIdx.x / 4; // [0,7]
     const int tid = threadIdx.x % 4; // [0,3]
 
     for(int p=threadIdx.x / 4; p<PARTICLES_PER_BLOCK; p+= THREADS_PER_BLOCK/4){
@@ -511,109 +510,138 @@ __device__ void rhs_GC_BoozerVacuumSAW(T* derivs, const T* __restrict__ x_temp, 
 // calc_derivs implementation for guiding center boozer NoK tracing with Shear Alfven Waves
 template <typename T, RHS id, bool coll, int deriv_id>
 __device__ void rhs_GC_BoozerNoKSAW(T* derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu,
-                                     T saw_omega, int* saw_m, int* saw_n, T* saw_phihats, int saw_nharmonics){
+                                     T saw_omega, int* saw_m, int* saw_n, T* saw_phihats, int saw_nharmonics, const bool* __restrict__ is_valid){
     constexpr int nout = map_rhs_to_n_deriv_outputs<id, coll>();
-    T time = x_temp[0];
-    T x1 = x_temp[1*PARTICLES_PER_BLOCK];
-    T x2 = x_temp[2*PARTICLES_PER_BLOCK];
+    const int tid = threadIdx.x % 4; // [0,3]
 
-    T s = hypot(x1, x2);
-    T inv_s = 1 / s;
-    T theta = atan2(x2, x1);
-    T zeta = x_temp[3*PARTICLES_PER_BLOCK];
-    T v_par = x_temp[4*PARTICLES_PER_BLOCK];
+    for(int p=threadIdx.x / 4; p<PARTICLES_PER_BLOCK; p+= THREADS_PER_BLOCK/4){
+        T time = x_temp[p];
+        T x1 = x_temp[1*PARTICLES_PER_BLOCK+p];
+        T x2 = x_temp[2*PARTICLES_PER_BLOCK+p];
 
-    T modB = block_interpolants[0*PARTICLES_PER_BLOCK];
-    T dmodBdpsi = block_interpolants[1*PARTICLES_PER_BLOCK] * T(inv_psi0_d);
-    T dmodBdtheta = block_interpolants[2*PARTICLES_PER_BLOCK];
-    T dmodBdzeta = block_interpolants[3*PARTICLES_PER_BLOCK];
-    T G = block_interpolants[4*PARTICLES_PER_BLOCK];
-    T dGdpsi = block_interpolants[5*PARTICLES_PER_BLOCK] * T(inv_psi0_d);
-    T I = block_interpolants[6*PARTICLES_PER_BLOCK];
-    T dIdpsi = block_interpolants[7*PARTICLES_PER_BLOCK] * T(inv_psi0_d);
-    T iota = block_interpolants[8*PARTICLES_PER_BLOCK];
-    T diotadpsi = block_interpolants[9*PARTICLES_PER_BLOCK] * T(inv_psi0_d);
+        T s = hypot(x1, x2);
+        T inv_s = 1 / s;
+        T theta = atan2(x2, x1);
+        T cos_theta = x1 * inv_s;
+        T sin_theta = x2 * inv_s;
+        T zeta = x_temp[3*PARTICLES_PER_BLOCK+p];
+        T v_par = x_temp[4*PARTICLES_PER_BLOCK+p];
 
-    T mu_val = mu[0];
+        T modB = block_interpolants[0*PARTICLES_PER_BLOCK+p];
+        T dmodBdpsi = block_interpolants[1*PARTICLES_PER_BLOCK+p] * T(inv_psi0_d);
+        T dmodBdtheta = block_interpolants[2*PARTICLES_PER_BLOCK+p];
+        T dmodBdzeta = block_interpolants[3*PARTICLES_PER_BLOCK+p];
+        T G = block_interpolants[4*PARTICLES_PER_BLOCK+p];
+        T dGdpsi = block_interpolants[5*PARTICLES_PER_BLOCK+p] * T(inv_psi0_d);
+        T I = block_interpolants[6*PARTICLES_PER_BLOCK+p];
+        T dIdpsi = block_interpolants[7*PARTICLES_PER_BLOCK+p] * T(inv_psi0_d);
+        T iota = block_interpolants[8*PARTICLES_PER_BLOCK+p];
+        T diotadpsi = block_interpolants[9*PARTICLES_PER_BLOCK+p] * T(inv_psi0_d);
+        T mu_val = mu[p];
 
-    T sign = symmetry_exploited[0] ? (T)-1.0 : (T)1.0;
-    dmodBdtheta *= sign;
-    dmodBdzeta *= sign;
+        T sign = symmetry_exploited[p] ? (T)-1.0 : (T)1.0;
+        dmodBdtheta *= sign;
+        dmodBdzeta *= sign;
 
-    // accumulate over harmonics
-    int s_index = (s - saw_srange_d[0]) / (saw_srange_d[3]);
-    s_index = min(s_index, (int)saw_srange_d[2]-1);
-    T s_diff = s - s_index*saw_srange_d[3];
+        // accumulate over harmonics
+        int s_index = (s - saw_srange_d[0]) / (saw_srange_d[3]);
+        s_index = min(s_index, (int)saw_srange_d[2]-1);
+        T s_diff = s - s_index*saw_srange_d[3];
 
-    // rhs values from SAW
-    T dphidpsi = 0.0;
-    T dphidtheta = 0.0;
-    T dphidzeta = 0.0;
-    T dalphadzeta = 0.0;
+        // rhs values from SAW
+        T dphidpsi = 0.0;
+        T dphidtheta = 0.0;
+        T dphidzeta = 0.0;
 
-    T alpha = 0.0;
-    T dalphadpsi = 0.0;
-    T dalphadtheta = 0.0;
-    T alphadot = 0.0;
+        T alpha = 0.0;
+        T dalphadpsi = 0.0;
+        T dalphadtheta = 0.0;
+        T dalphadzeta = 0.0;
+        T alphadot = 0.0;
 
-    for(int i=0; i<saw_nharmonics; ++i){
-        T left_phihat = saw_phihats[s_index*saw_nharmonics + i];
-        T right_phihat = saw_phihats[min(s_index+1, (int)saw_srange_d[2]-1)*saw_nharmonics + i];
-        T s_slope = (right_phihat - left_phihat) / saw_srange_d[3];
+        int phihat_offset_next = min(s_index+1, (int)saw_srange_d[2]-1)*saw_nharmonics;
+        int phihat_offset = s_index*saw_nharmonics;
 
-        int m = saw_m[i];
-        int n = saw_n[i];
-        T alpha_fac = (iota *m - n) / (saw_omega * (G + iota*I));
-        T dalpha_fac_dpsi = diotadpsi * m / (saw_omega * (G + iota*I)) - alpha_fac / (G+iota*I) * (dGdpsi + diotadpsi*I + iota*dIdpsi);
+        if (is_valid[p]){
+            for(int i=tid; i<saw_nharmonics; i+=4){
+                T left_phihat = saw_phihats[phihat_offset + i];
+                T right_phihat = saw_phihats[phihat_offset_next + i];
+                T s_slope = (right_phihat - left_phihat) / saw_srange_d[3];
 
-        T pt_cos = cos(m*theta - n*zeta + saw_omega*time);
-        T pt_sin = sin(m*theta - n*zeta + saw_omega*time);
+                int m = saw_m[i];
+                int n = saw_n[i];
 
-        T phihat_i = left_phihat + s_slope*(s_diff);
-        T dphihatdpsi = s_slope * T(inv_psi0_d);
+                T iota_mn = iota * m - n;
+                T G_iotaI = G + iota*I;
+                T alpha_fac = iota_mn / (saw_omega * G_iotaI);
+                T dalpha_fac_dpsi = diotadpsi * m / (saw_omega * G_iotaI) - alpha_fac / G_iotaI * (dGdpsi + diotadpsi*I + iota*dIdpsi);
 
-        T phi_i = phihat_i * pt_sin;
-        T dphidpsi_i = dphihatdpsi * pt_sin;
-        T phidot_i = phihat_i * pt_cos * saw_omega;
-        T dphidtheta_i = phidot_i * (m / saw_omega);
-        T dphidzeta_i = -phidot_i * (n / saw_omega);
+                // compute cos and sin at once
+                T pt_cos, pt_sin;
+                sincos(m*theta - n*zeta + saw_omega*time, &pt_sin, &pt_cos);
 
-        T alpha_i = -phi_i*alpha_fac;
-        T alphadot_i = -phidot_i * alpha_fac;
-        T dalphadpsi_i = -dphidpsi_i * alpha_fac - phi_i*dalpha_fac_dpsi;
-        T dalphadtheta_i = -dphidtheta_i * alpha_fac;
-        T dalphadzeta_i = -dphidzeta_i*alpha_fac;
+                T phihat_i = left_phihat + s_slope*(s_diff);
+                T dphihatdpsi = s_slope * T(inv_psi0_d);
 
-        dphidpsi += dphidpsi_i;
-        dphidtheta += dphidtheta_i;
-        dphidzeta += dphidzeta_i;
+                T phi_i = phihat_i * pt_sin;
+                T dphidpsi_i = dphihatdpsi * pt_sin;
+                T phidot_i = phihat_i * pt_cos * saw_omega;
+                T dphidtheta_i = phidot_i * (m / saw_omega);
+                T dphidzeta_i = -phidot_i * (n / saw_omega);
 
-        alpha += alpha_i;
-        alphadot += alphadot_i;
-        dalphadpsi += dalphadpsi_i;
-        dalphadtheta += dalphadtheta_i;
-        dalphadzeta += dalphadzeta_i;
-    }
-    T fak1 = T(mass_d)*v_par*v_par/modB + T(mass_d)*mu_val;
-    T denom = (T(charge_d)*(G + I*(-alpha*dGdpsi + iota) + alpha*G*dIdpsi)
-            + T(mass_d)*v_par/modB * (-dGdpsi*I + G*dIdpsi));
-    T sdot = (-G*dphidtheta*T(charge_d) + I*dphidzeta*T(charge_d) + modB*T(charge_d)*v_par*(dalphadtheta*G-dalphadzeta*I) + (-dmodBdtheta*G + dmodBdzeta*I)*fak1)*T(inv_psi0_d)/(denom);
-    T tdot = (G*T(charge_d)*dphidpsi + modB*T(charge_d)*v_par*(-dalphadpsi*G - alpha*dGdpsi + iota) - dGdpsi*T(mass_d)*v_par*v_par \
-                    + dmodBdpsi*G*fak1)/denom;
-    derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = sdot*x1*inv_s - x2*tdot;
-    derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK] = sdot*x2*inv_s + x1*tdot;
-    derivs[(nout*deriv_id + 2)*PARTICLES_PER_BLOCK] = v_par*modB/G;
-    derivs[(nout*deriv_id + 3)*PARTICLES_PER_BLOCK] = (modB*T(charge_d)/T(mass_d) * ( -T(mass_d)*mu_val * (dmodBdzeta*(1 + dalphadpsi*I + alpha*dIdpsi) \
-                    + dmodBdpsi*(dalphadtheta*G - dalphadzeta*I) + dmodBdtheta*(iota - alpha*dGdpsi - dalphadpsi*G)) \
-                    - T(charge_d)*(alphadot*(G + I*(iota - alpha*dGdpsi) + alpha*G*dIdpsi) \
-                    + (dalphadtheta*G - dalphadzeta*I)*dphidpsi \
-                    + (iota - alpha*dGdpsi - dalphadpsi*G)*dphidtheta \
-                    + (1 + alpha*dIdpsi + dalphadpsi*I)*dphidzeta)) \
-                    + T(charge_d)*v_par/modB * ((dmodBdtheta*G - dmodBdzeta*I)*dphidpsi \
-                    + dmodBdpsi*(I*dphidzeta - G*dphidtheta)) \
-                    + v_par*(T(mass_d)*mu_val*(dmodBdtheta*dGdpsi - dmodBdzeta*dIdpsi) \
-                    + T(charge_d)*(alphadot*(dGdpsi*I-G*dIdpsi) + dGdpsi*dphidtheta - dIdpsi*dphidzeta)))/denom;
+                T alpha_i = -phi_i*alpha_fac;
+                T alphadot_i = -phidot_i * alpha_fac;
+                T dalphadpsi_i = -dphidpsi_i * alpha_fac - phi_i*dalpha_fac_dpsi;
+                T dalphadtheta_i = -dphidtheta_i * alpha_fac;
+                T dalphadzeta_i = -dphidzeta_i*alpha_fac;
 
+                dphidpsi += dphidpsi_i;
+                dphidtheta += dphidtheta_i;
+                dphidzeta += dphidzeta_i;
+
+                alpha += alpha_i;
+                alphadot += alphadot_i;
+                dalphadpsi += dalphadpsi_i;
+                dalphadtheta += dalphadtheta_i;
+                dalphadzeta += dalphadzeta_i;
+            }
+        }
+        // we have now accumulated the contributions from all harmonics
+        // reduce across the 4 threads working together on the same particle
+        for (int offset = 2; offset > 0; offset /= 2) {
+            dphidpsi += __shfl_down_sync(FULL_MASK, dphidpsi, offset);
+            dphidtheta += __shfl_down_sync(FULL_MASK, dphidtheta, offset);
+            dphidzeta += __shfl_down_sync(FULL_MASK, dphidzeta, offset);
+            alpha += __shfl_down_sync(FULL_MASK, alpha, offset);
+            alphadot += __shfl_down_sync(FULL_MASK, alphadot, offset);
+            dalphadpsi += __shfl_down_sync(FULL_MASK, dalphadpsi, offset);
+            dalphadtheta += __shfl_down_sync(FULL_MASK, dalphadtheta, offset);
+            dalphadzeta += __shfl_down_sync(FULL_MASK, dalphadzeta, offset);
+        }
+
+        if(tid == 0 && is_valid[p]){
+            T fak1 = T(mass_d)*v_par*v_par/modB + T(mass_d)*mu_val;
+            T denom = (T(charge_d)*(G + I*(-alpha*dGdpsi + iota) + alpha*G*dIdpsi)
+                    + T(mass_d)*v_par/modB * (-dGdpsi*I + G*dIdpsi));
+            T sdot = (-G*dphidtheta*T(charge_d) + I*dphidzeta*T(charge_d) + modB*T(charge_d)*v_par*(dalphadtheta*G-dalphadzeta*I) + (-dmodBdtheta*G + dmodBdzeta*I)*fak1)*T(inv_psi0_d)/(denom);
+            T tdot = (G*T(charge_d)*dphidpsi + modB*T(charge_d)*v_par*(-dalphadpsi*G - alpha*dGdpsi + iota) - dGdpsi*T(mass_d)*v_par*v_par \
+                            + dmodBdpsi*G*fak1)/denom;
+            derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK+p] = sdot*cos_theta - x2*tdot;
+            derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK+p] = sdot*sin_theta + x1*tdot;
+            derivs[(nout*deriv_id + 2)*PARTICLES_PER_BLOCK+p] = (-I*(dmodBdpsi*T(mass_d)*mu_val + dphidpsi*T(charge_d)) + modB*T(charge_d)*v_par*(1 + dalphadpsi*I + alpha*dIdpsi) \
+                            + T(mass_d)*v_par*v_par/modB * (modB*dIdpsi - dmodBdpsi*I))/denom;
+            derivs[(nout*deriv_id + 3)*PARTICLES_PER_BLOCK+p] = (modB*T(charge_d)/T(mass_d) * ( -T(mass_d)*mu_val * (dmodBdzeta*(1 + dalphadpsi*I + alpha*dIdpsi) \
+                            + dmodBdpsi*(dalphadtheta*G - dalphadzeta*I) + dmodBdtheta*(iota - alpha*dGdpsi - dalphadpsi*G)) \
+                            - T(charge_d)*(alphadot*(G + I*(iota - alpha*dGdpsi) + alpha*G*dIdpsi) \
+                            + (dalphadtheta*G - dalphadzeta*I)*dphidpsi \
+                            + (iota - alpha*dGdpsi - dalphadpsi*G)*dphidtheta \
+                            + (1 + alpha*dIdpsi + dalphadpsi*I)*dphidzeta)) \
+                            + T(charge_d)*v_par/modB * ((dmodBdtheta*G - dmodBdzeta*I)*dphidpsi \
+                            + dmodBdpsi*(I*dphidzeta - G*dphidtheta)) \
+                            + v_par*(T(mass_d)*mu_val*(dmodBdtheta*dGdpsi - dmodBdzeta*dIdpsi) \
+                            + T(charge_d)*(alphadot*(dGdpsi*I-G*dIdpsi) + dGdpsi*dphidtheta - dIdpsi*dphidzeta)))/denom;
+        }
+    }   
 };
 
 // calc_derivs computes the derivatives at points for which the corresponding
@@ -641,10 +669,7 @@ __device__ void calc_derivs(T* derivs, const T* __restrict__ quadpts_arr, const 
             rhs_GC_BoozerVacuum<T, id, coll, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
         } else if constexpr(id == RHS::GC_Boozer){
             rhs_GC_Boozer<T, id, coll, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
-        } else if constexpr(id == RHS::GC_BoozerNoKSAW){
-            rhs_GC_BoozerNoKSAW<T, id, coll, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu,
-                saw_omega, saw_m, saw_n, saw_phihats,saw_nharmonics);
-        }
+        } 
     }
 
     // if a SAW is present, there is more to cooperate on
@@ -652,7 +677,11 @@ __device__ void calc_derivs(T* derivs, const T* __restrict__ quadpts_arr, const 
         rhs_GC_BoozerVacuumSAW<T, id, coll, deriv_id>(derivs-threadIdx.x, x_temp-threadIdx.x, block_interpolants, symmetry_exploited-threadIdx.x, mu-threadIdx.x,
             saw_omega, saw_m, saw_n, saw_phihats, saw_nharmonics, is_valid);
         __syncthreads();
-    } 
+    } else if constexpr(id == RHS::GC_BoozerNoKSAW){
+        rhs_GC_BoozerNoKSAW<T, id, coll, deriv_id>(derivs-threadIdx.x, x_temp-threadIdx.x, block_interpolants, symmetry_exploited-threadIdx.x, mu-threadIdx.x,
+            saw_omega, saw_m, saw_n, saw_phihats, saw_nharmonics, is_valid);
+        __syncthreads();
+    }
 };
 
 
