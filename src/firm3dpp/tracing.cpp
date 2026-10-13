@@ -551,8 +551,7 @@ solve(
             vpars_stop && !continuous_limits,
             axis,
             vnorm,
-            tnorm,
-            continuous_limits
+            tnorm
         );
         if (continuous_limits) {
             // Apply roots and endpoint criteria chronologically. A phase root

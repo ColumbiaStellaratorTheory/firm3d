@@ -121,6 +121,11 @@ class TestDenseOutputHost(unittest.TestCase):
             "CPU custom and Boost interpolation agree; minimum-step controls preserved",
         )
 
+    def test_cpu_event_endpoints(self):
+        self._compile_dense_check(
+            "tracing_helpers_events.cpp", "CPU endpoint crossing checks passed"
+        )
+
     def test_save_grid(self):
         np.testing.assert_allclose(_save_times([2.5, 4.0], 1), [1, 2, 3])
         self.assertEqual(len(_save_times([1e-3], 1e-6)), 999)
