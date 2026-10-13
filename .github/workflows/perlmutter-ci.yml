@@ -162,11 +162,11 @@ jobs:
             "${{ runner.temp }}/firm3d-base-${{ github.sha }}/gpu_boozer_saw_tracing_results.json" \
             "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_boozer_saw_tracing_results.json" \
             "GC Boozer Vacuum + SAW" \
-            "${{ runner.temp }}/firm3d-base-${{ github.sha }}/gpu_boozer_collisional_tracing_results.json" \
-            "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_boozer_collisional_tracing_results.json" \
-            "GC Boozer NoK + SAW" \
             "${{ runner.temp }}/firm3d-base-${{ github.sha }}/gpu_saw_nok_tracing_results.json" \
             "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_saw_nok_tracing_results.json" \
+            "GC Boozer NoK + SAW" \
+            "${{ runner.temp }}/firm3d-base-${{ github.sha }}/gpu_boozer_collisional_tracing_results.json" \
+            "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_boozer_collisional_tracing_results.json" \
             "Boozer Vacuum Collisions" \
             "${{ runner.temp }}/firm3d-base-${{ github.sha }}/gpu_cartesian_collisional_tracing_results.json" \
             "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_cartesian_collisional_tracing_results.json" \
