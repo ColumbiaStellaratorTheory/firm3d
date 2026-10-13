@@ -28,7 +28,14 @@ from ._utils import (
 
 def _catapult_tolerance(options):
     """Translate supported CPU options without silently ignoring differences."""
-    unsupported = set(options) - {"tol", "abstol", "reltol", "axis", "ODE_solver"}
+    unsupported = set(options) - {
+        "tol",
+        "abstol",
+        "reltol",
+        "axis",
+        "ODE_solver",
+        "dt_save",
+    }
     if unsupported:
         raise ValueError(f"Unsupported CATAPULT solver options: {sorted(unsupported)}")
     if options.get("axis") not in (None, 0):
@@ -44,6 +51,9 @@ def _catapult_tolerance(options):
         raise ValueError("CATAPULT requires equal abstol and reltol")
     if not np.isfinite(absolute) or absolute <= 0:
         raise ValueError("CATAPULT tolerance must be finite and positive")
+    dt_save = options.get("dt_save", 1e-6)
+    if not np.isfinite(dt_save) or dt_save <= 0:
+        raise ValueError("dt_save must be finite and positive")
     return absolute
 
 
@@ -81,7 +91,6 @@ class PassingPoincare:
         helicity_Mp=None,
         chaos_detection=False,
         nconvergence_points=None,
-        dt_save=1e-7,
     ):
         r"""
         Initialize and compute the passing Poincare map, evaluated by
@@ -113,7 +122,8 @@ class PassingPoincare:
                    backend (default: 1e-2 s). Both trace continuously with a
                    total upper bound of Nmaps * tmax, stopping at Nmaps returns.
             solver_options : Dictionary of options to pass to the adaptive ODE
-                             solver (default: {}).
+                             solver (default: {}). Set "dt_save" here to control
+                             WBA history spacing (default: 1e-6 s).
             helicity_M : Poloidal helicity of the field-strength contours.
                          Required when computing the canonical momentum
                          :math:`p_{\eta}` or performing chaos detection.
@@ -132,10 +142,6 @@ class PassingPoincare:
                                   detection metric. If None and
                                   chaos_detection=True, a single evaluation
                                   at the end of the trajectory is used.
-            dt_save : History interval for WBA on either backend (default: 1e-7 s).
-                      Section and velocity crossings use dense event roots,
-                      independently of this interval. Flux stopping is checked
-                      at accepted endpoints, as on the CPU.
         """
         from ..catapult.field import CatapultBoozerField
 
@@ -146,12 +152,9 @@ class PassingPoincare:
 
         self.catapult_field = field if isinstance(field, CatapultBoozerField) else None
         self.backend = "catapult" if self.catapult_field is not None else "cpu"
-        self.dt_save = dt_save
         if self.catapult_field is not None:
             field = self.catapult_field.field
             self._gpu_tol = _catapult_tolerance(solver_options)
-        if not np.isfinite(dt_save) or dt_save <= 0:
-            raise ValueError("dt_save must be finite and positive")
         if not np.isfinite(tmax) or tmax < 0:
             raise ValueError("tmax must be finite and nonnegative")
         if (
@@ -371,7 +374,6 @@ class PassingPoincare:
             "mass": self.mass,
             "charge": self.charge,
             "Ekin": self.Ekin,
-            "dt_save": self.dt_save,
             "phases": [0],
             "n_zetas": [1],
             "m_thetas": [0],
@@ -395,6 +397,7 @@ class PassingPoincare:
             initial,
             speeds,
             tol=self._gpu_tol,
+            dt_save=self.solver_options.get("dt_save", 1e-6),
             max_hits=count + 1,
             **options,
         )
@@ -2368,7 +2371,6 @@ def compute_rotational_profile(
     s_profile=False,
     tmax=1e-2,
     solver_options=None,
-    dt_save=1e-7,
 ):
     r"""
     Compute the rotational-transform and orbit-helicity profile from a
@@ -2394,7 +2396,6 @@ def compute_rotational_profile(
         tmax : Maximum integration time (default: 1e-2).
         solver_options : Dict of solver options passed to PassingPoincare. If
                           None, defaults to {"axis": 0}.
-        dt_save : Trajectory saving interval for either backend (default: 1e-7 s).
 
     Returns:
         profiles : Array of shape (npoints, 4) containing, for each initial
@@ -2416,7 +2417,6 @@ def compute_rotational_profile(
         comm=comm,
         tmax=tmax,
         solver_options=solver_options,
-        dt_save=dt_save,
         helicity_M=helicity_M,
         helicity_N=helicity_N,
         helicity_Mp=helicity_Mp,

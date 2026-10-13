@@ -131,7 +131,7 @@ To use CATAPULT, pass a ``CatapultBoozerField`` to the same helper:
         field_gpu, lam=0.0, sign_vpar=1, mass=ALPHA_PARTICLE_MASS,
         charge=ALPHA_PARTICLE_CHARGE, Ekin=FUSION_ALPHA_PARTICLE_ENERGY,
         ns_poinc=120, ntheta_poinc=1, Nmaps=1000, tmax=1e-2,
-        dt_save=1e-7, solver_options={"abstol": 1e-8, "reltol": 1e-8},
+        solver_options={"abstol": 1e-8, "reltol": 1e-8},
     )
     poinc.plot_poincare(filename="passing_poincare_gpu.png")
 
@@ -146,8 +146,10 @@ WBA, and plotting methods remain available.
 
 For WBA, CPU saves history during its continuous trace. CATAPULT first finds
 returns without saving history, then saves through the completed returns to
-bound its preallocated GPU buffer. CPU passing maps use an adaptive solver (``boost`` or ``dormand_prince``). ``dt_save`` controls WBA
-history on both backends; momentum at returns is evaluated at the dense roots.
+bound its preallocated GPU buffer. CPU passing maps use an adaptive solver
+(``boost`` or ``dormand_prince``). Set ``solver_options["dt_save"]`` to control
+WBA history on either backend; its default remains ``1e-6`` s. Momentum at
+returns is evaluated at the dense roots.
 Continuous integration can change long trajectories compared with restarting
 the solver at every return, so check tolerance convergence for the observable.
 GPU section angles retain accumulated turns; plotting wraps them periodically.

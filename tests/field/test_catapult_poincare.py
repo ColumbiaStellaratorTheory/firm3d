@@ -84,7 +84,7 @@ class TestPassingPoincareCPU(unittest.TestCase):
                 tmax=10,
                 helicity_M=1,
                 helicity_N=0,
-                dt_save=0.13,
+                solver_options={"dt_save": 0.13},
             )
         trace.assert_called_once()
         options = trace.call_args.kwargs
@@ -192,8 +192,7 @@ class TestCatapultPoincareHost(unittest.TestCase):
                 self.field,
                 **map_options(),
                 tmax=25,
-                dt_save=0.13,
-                solver_options={"abstol": 1e-8, "reltol": 1e-8},
+                solver_options={"abstol": 1e-8, "reltol": 1e-8, "dt_save": 0.13},
             )
         trace.assert_called_once()
         self.assertTrue(trace.call_args.kwargs["forget_exact_path"])
@@ -204,6 +203,7 @@ class TestCatapultPoincareHost(unittest.TestCase):
         self.assertEqual(trace.call_args.kwargs["tmax"], 50)
         self.assertEqual(trace.call_args.kwargs["max_phase_interval"], 25)
         self.assertEqual(trace.call_args.kwargs["tol"], 1e-8)
+        self.assertEqual(trace.call_args.kwargs["dt_save"], 0.13)
         self.assertIs(poinc.field, self.source)
         self.assertEqual(poinc.backend, "catapult")
         np.testing.assert_allclose(poinc.t_all, [[0, 7, 7]])
@@ -212,11 +212,20 @@ class TestCatapultPoincareHost(unittest.TestCase):
         self.assertEqual(poinc.peta_all, [])
         self.assertEqual(poinc.DA_all, [[]])
 
+    def test_default_history_cadence_matches_cpu_tracing(self):
+        with patch(
+            GPU_TRACE, return_value=([sampled_path()], [native_hits()])
+        ) as trace:
+            PassingPoincare(self.field, **map_options())
+        self.assertEqual(trace.call_args.kwargs["dt_save"], 1e-6)
+
     def test_section_points_come_from_native_hits(self):
         hits = native_hits()
         hits[:, 2] = [0.42, 0.43]
         with patch(GPU_TRACE, return_value=([sampled_path()[[0, -1]]], [hits])):
-            poinc = PassingPoincare(self.field, **map_options(), tmax=25, dt_save=25)
+            poinc = PassingPoincare(
+                self.field, **map_options(), tmax=25, solver_options={"dt_save": 25}
+            )
         np.testing.assert_allclose(poinc.s_all, [[0.3, 0.42, 0.43]])
         np.testing.assert_allclose(poinc.t_all, [[0, 7, 7]])
 
@@ -319,7 +328,9 @@ class TestCatapultPoincareHost(unittest.TestCase):
                 PassingPoincare(self.field, **map_options(), solver_options=options)
         for cadence in [0, -1, np.nan, np.inf]:
             with self.subTest(cadence=cadence), self.assertRaises(ValueError):
-                PassingPoincare(self.field, **map_options(), dt_save=cadence)
+                PassingPoincare(
+                    self.field, **map_options(), solver_options={"dt_save": cadence}
+                )
 
 
 @unittest.skipUnless(HAS_CUDA, "requires CUDA bindings and a GPU")
@@ -342,8 +353,7 @@ class TestCatapultPoincareGPU(unittest.TestCase):
             Nmaps=4,
             s_profile=True,
             tmax=1.5e-5,
-            dt_save=1e-8,
-            solver_options={"tol": 1e-10},
+            solver_options={"tol": 1e-10, "dt_save": 1e-8},
         )
         np.testing.assert_allclose(profile[:, 0], [1 / 3, 2 / 3], atol=1e-8)
         np.testing.assert_allclose(profile[:, 3], 0.4, atol=1e-6)
@@ -360,12 +370,13 @@ class TestCatapultPoincareGPU(unittest.TestCase):
                         # interpretation would keep only the first return.
                         tmax=1.1 * period,
                         solver_options={
-                            "tol": 1e-10 if precision == "double" else 1e-8
+                            "tol": 1e-10 if precision == "double" else 1e-8,
+                            "dt_save": 1e-8,
                         },
                     )
                     options.update(sign_vpar=sign, Nmaps=4)
                     cpu = PassingPoincare(source, **options)
-                    gpu = PassingPoincare(field, **options, dt_save=1e-8)
+                    gpu = PassingPoincare(field, **options)
                     tolerance = 1e-6 if precision == "double" else 3e-4
                     np.testing.assert_allclose(gpu.s_all, cpu.s_all, atol=tolerance)
                     # CPU event maps wrap each return; a continuous GPU trace
@@ -436,10 +447,10 @@ class TestCatapultPoincareGPU(unittest.TestCase):
         self.assertLess(
             np.max(np.abs(actual - expected) / (1 + np.abs(expected))), 1e-10
         )
-        options = map_options(tmax=1e-4, solver_options={"tol": 1e-9})
+        options = map_options(tmax=1e-4, solver_options={"tol": 1e-9, "dt_save": 1e-9})
         options.update(s_init=[0.2, 0.4], thetas_init=[0, 0], Nmaps=5)
         cpu = PassingPoincare(source, **options)
-        gpu = PassingPoincare(field, **options, dt_save=1e-9)
+        gpu = PassingPoincare(field, **options)
         self.assertEqual([len(p) for p in cpu.s_all], [6, 6])
         self.assertEqual([len(p) for p in gpu.s_all], [6, 6])
         np.testing.assert_allclose(gpu.s_all, cpu.s_all, atol=2e-4)
