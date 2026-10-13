@@ -53,7 +53,9 @@ from firm3d.catapult.field import (
     CatapultPerturbedBoozerField,
 )
 from firm3d.catapult.tracing import (
-    save_trajectories_boozer_gpu,
+    _launch_boozer,
+    _to_boozer,
+    _to_pseudo_cartesian,
     trace_particles_boozer_gpu,
     trace_particles_boozer_perturbed_gpu,
     trace_particles_cartesian_gpu,
@@ -709,7 +711,7 @@ class CATAPULTField:
     def compute_gpu_trajectories(self, stz, vpar, vtotal, tmax, dt_save, psi0):
 
         if self.field_type == "boozer_vacuum":
-            trajectories = save_trajectories_boozer_gpu(
+            trajectories, _ = trace_particles_boozer_gpu(
                 field=CatapultBoozerField(self.field, self.ns, self.ntheta, self.nzeta),
                 stz_inits=stz.copy(),
                 parallel_speeds=vpar.copy(),
@@ -717,7 +719,7 @@ class CATAPULTField:
                 dt_save=dt_save,
                 mass=MASS,
                 charge=CHARGE,
-                vtotal=vtotal,
+                Ekin=0.5 * MASS * vtotal**2,
                 tol=1e-9,
             )
         else:
@@ -769,7 +771,7 @@ class CATAPULTField:
         final_pos_traj = np.array([trajectory[-1] for trajectory in gpu_trajectories])
 
         gpu_final_pos = self.compute_gpu_final_pos(stz, vpar, vtotal, tmax, psi0)
-        # save_trajectories_boozer_gpu returns Boozer coordinates, while
+        # trace_particles_boozer_gpu returns Boozer coordinates, while
         # boozer_gpu_tracing returns pseudo-Cartesian (x1, x2): compare in Boozer
         x1, x2 = gpu_final_pos[:, 1].copy(), gpu_final_pos[:, 2].copy()
         gpu_final_pos[:, 1] = np.hypot(x1, x2)
@@ -888,13 +890,19 @@ class TestGPUTracingBoozerVacuum(unittest.TestCase):
         }
         cfield = CatapultBoozerField(field, res, res, res)
         # the kernel's own state, one row per particle, to check the rows against
-        state = np.array(
-            [
-                traj[-1]
-                for traj in save_trajectories_boozer_gpu(
-                    cfield, stz, vpar, tmax, tmax, MASS, CHARGE, self.VELOCITY, 1e-8
-                )
-            ]
+        state = _to_boozer(
+            _launch_boozer(
+                cfield,
+                _to_pseudo_cartesian(stz, cfield.dtype),
+                vpar,
+                np.full(len(stz), tmax),
+                -np.ones(len(stz)),
+                -np.ones(len(stz)),
+                MASS,
+                CHARGE,
+                self.VELOCITY,
+                1e-8,
+            )
         )
         lost = state[:, 0] < tmax
 

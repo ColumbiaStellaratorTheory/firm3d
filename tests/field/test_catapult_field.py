@@ -5,7 +5,6 @@ import numpy as np
 
 from firm3d.catapult.field import CatapultBoozerField, CatapultPerturbedBoozerField
 from firm3d.catapult.tracing import (
-    save_trajectories_boozer_gpu,
     trace_particles_boozer_gpu,
     trace_particles_boozer_perturbed_gpu,
 )
@@ -143,13 +142,9 @@ class TestCatapultPerturbedBoozerField(unittest.TestCase):
         vpar = np.array([1e6, -1e6])
         mus = np.array([1e6, 1e6])
 
-        # each tracer and saver keeps to its kind of field, on both backends
+        # each tracer keeps to its kind of field, on both backends
         with self.assertRaises(TypeError):
             trace_particles_boozer_gpu(perturbed, stz, vpar)
-        with self.assertRaises(ValueError):
-            save_trajectories_boozer_gpu(
-                perturbed, stz, vpar, 1e-6, 1e-7, 1.0, 1.0, 1e6, 1e-8
-            )
         with self.assertRaises(TypeError):
             trace_particles_boozer_perturbed_gpu(equilibrium, stz, vpar, mus)
         with self.assertRaises(TypeError):

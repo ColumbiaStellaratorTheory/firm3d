@@ -2,8 +2,6 @@ __all__ = [
     "trace_particles_boozer_gpu",
     "trace_particles_boozer_perturbed_gpu",
     "trace_particles_cartesian_gpu",
-    "save_trajectories_boozer_gpu",
-    "save_trajectories_cartesian_gpu",
 ]
 
 import numpy as np
@@ -387,106 +385,6 @@ def _save_times(tmax, dt_save):
     return times[times < end]
 
 
-def save_trajectories_boozer_gpu(
-    field,
-    stz_inits,
-    parallel_speeds,
-    tmax,
-    dt_save,
-    mass,
-    charge,
-    vtotal,
-    tol,
-    dt=None,
-    mu=None,
-):
-    """
-    Trace in one integration launch, sampling the Dormand-Prince dense output
-    every dt_save and at each particle's tmax. tmax may be scalar or per particle.
-
-    field is a CatapultBoozerField or CatapultPerturbedBoozerField. Waves
-    require explicit mu; their absolute phase is preserved throughout the
-    launch. dt and mu optionally specify the initial step and magnetic moment.
-
-    Returns a list of (nsaved, 7) arrays with rows
-    (t, s, theta, zeta, vpar, dt, mu), excluding the initial state at t=0.
-    Every requested time is sampled, including multiple times inside one
-    accepted step. dt is the enclosing accepted step's size; an interpolated
-    row is not an adaptive integrator checkpoint. Lost particles end at the
-    kernel's first accepted endpoint beyond the boundary. zeta retains its
-    accumulated turns. Sampling does not change the adaptive step sequence.
-    """
-    if not isinstance(field, (CatapultBoozerField, CatapultPerturbedBoozerField)):
-        raise TypeError(
-            "field must be a CatapultBoozerField or CatapultPerturbedBoozerField, "
-            f"got {type(field).__name__}"
-        )
-    if isinstance(field, CatapultPerturbedBoozerField) and mu is None:
-        raise ValueError("a perturbed field requires explicit magnetic moments (mu)")
-    dtype = field.dtype
-    nparticles = stz_inits.shape[0]
-    tmax = _per_particle(tmax, nparticles, np.float64, None)
-    trajectories = _launch_boozer(
-        field,
-        _to_pseudo_cartesian(stz_inits, dtype),
-        parallel_speeds,
-        tmax,
-        _per_particle(dt, nparticles, dtype, -1.0),
-        _per_particle(mu, nparticles, dtype, -1.0),
-        mass,
-        charge,
-        vtotal,
-        tol,
-        save_times=_save_times(tmax, dt_save),
-    )
-    return [_to_boozer(traj) for traj in trajectories]
-
-
-def save_trajectories_cartesian_gpu(
-    field,
-    xyz_inits,
-    parallel_speeds,
-    tmax,
-    dt_save,
-    mass,
-    charge,
-    vtotal,
-    tol,
-    dt=None,
-    mu=None,
-):
-    """
-    Trace in one integration launch, sampling the Dormand-Prince dense output
-    every dt_save and at each particle's tmax. tmax may be scalar or per particle.
-
-    Returns a list of (nsaved, 7) arrays with rows (t, x, y, z, vpar, dt, mu),
-    excluding the initial state at t=0. Every requested time is sampled;
-    dt is the enclosing accepted step's size. Lost particles end at the first
-    accepted endpoint beyond the classifier's surface. The adaptive step
-    sequence is independent of dt_save.
-    """
-    if not isinstance(field, CatapultCartesianField):
-        raise TypeError(
-            f"field must be a CatapultCartesianField, got {type(field).__name__}"
-        )
-    dtype = field.dtype
-    nparticles = xyz_inits.shape[0]
-    tmax = _per_particle(tmax, nparticles, np.float64, None)
-    return _launch_cartesian(
-        field,
-        xyz_inits,
-        parallel_speeds,
-        tmax,
-        _per_particle(dt, nparticles, dtype, -1.0),
-        _per_particle(mu, nparticles, dtype, -1.0),
-        mass,
-        charge,
-        vtotal,
-        tol,
-        save_times=_save_times(tmax, dt_save),
-    )
-
-
 def _vtotal(Ekin, mass):
     """The speed for a kinetic energy, which CATAPULT takes once for all particles."""
     if np.ndim(Ekin) != 0:
@@ -575,7 +473,9 @@ def trace_particles_boozer_gpu(
         forget_exact_path is False
     forget_exact_path: if True, keep only the initial and final state of each
         particle, in one uninterrupted trace; if False, save the trajectory
-        every dt_save using dense output within accepted steps
+        every dt_save using dense output within accepted steps. Saving does
+        not change the adaptive step sequence. Interpolated rows are not
+        integrator checkpoints.
 
     zetas: section angles modulo 2*pi; shorthand for phases with n_zetas=1,
         m_thetas=0 and omegas=0. Alternatively, phases, n_zetas, m_thetas and
@@ -611,12 +511,7 @@ def trace_particles_boozer_gpu(
     dtype = field.dtype
     nparticles = stz_inits.shape[0]
     tmax = _per_particle(tmax, nparticles, np.float64, None)
-    kwargs = {
-        "mass": mass,
-        "charge": charge,
-        "vtotal": _vtotal(Ekin, mass),
-        "tol": tol,
-    }
+    vtotal = _vtotal(Ekin, mass)
     events = _event_options(
         stz_inits,
         zetas=zetas,
@@ -632,53 +527,30 @@ def trace_particles_boozer_gpu(
         max_phase_hits=max_phase_hits,
         max_phase_interval=max_phase_interval,
     )
+    output = _launch_boozer(
+        field,
+        _to_pseudo_cartesian(stz_inits, dtype),
+        parallel_speeds,
+        tmax,
+        _per_particle(dt, nparticles, dtype, -1.0),
+        _per_particle(None, nparticles, dtype, -1.0),
+        mass,
+        charge,
+        vtotal,
+        tol,
+        save_times=None if forget_exact_path else _save_times(tmax, dt_save),
+        event_options=events,
+    )
     if events is not None:
-        output, hits = _launch_boozer(
-            field,
-            _to_pseudo_cartesian(stz_inits, dtype),
-            parallel_speeds,
-            tmax,
-            _per_particle(dt, nparticles, dtype, -1.0),
-            _per_particle(None, nparticles, dtype, -1.0),
-            mass,
-            charge,
-            kwargs["vtotal"],
-            tol,
-            save_times=None if forget_exact_path else _save_times(tmax, dt_save),
-            event_options=events,
-        )
-        bodies = (
-            _to_boozer(output)[:, None, :]
-            if forget_exact_path
-            else [_to_boozer(traj) for traj in output]
-        )
-        paths, _ = _cpu_format(
-            stz_inits, parallel_speeds, bodies, tmax, infer_losses=False
-        )
-        return paths, hits
+        output, hits = output
     if forget_exact_path:
-        # one uninterrupted trace, in the pseudo-Cartesian coordinates the kernel
-        # integrates in, and back. The step and the magnetic moment are the
-        # kernel's to choose: mu follows from Ekin and the parallel speed,
-        # as it does for trace_particles_boozer.
-        final = _launch_boozer(
-            field,
-            _to_pseudo_cartesian(stz_inits, dtype),
-            parallel_speeds,
-            tmax,
-            _per_particle(dt, nparticles, dtype, -1.0),
-            _per_particle(None, nparticles, dtype, -1.0),
-            mass,
-            charge,
-            kwargs["vtotal"],
-            tol,
-        )
-        bodies = _to_boozer(final)[:, None, :]
+        bodies = _to_boozer(output)[:, None, :]
     else:
-        bodies = save_trajectories_boozer_gpu(
-            field, stz_inits, parallel_speeds, tmax, dt_save, dt=dt, **kwargs
-        )
-    return _cpu_format(stz_inits, parallel_speeds, bodies, tmax)
+        bodies = [_to_boozer(traj) for traj in output]
+    paths, losses = _cpu_format(
+        stz_inits, parallel_speeds, bodies, tmax, infer_losses=events is None
+    )
+    return paths, hits if events is not None else losses
 
 
 def trace_particles_boozer_perturbed_gpu(
@@ -863,12 +735,7 @@ def trace_particles_cartesian_gpu(
     dtype = field.dtype
     nparticles = xyz_inits.shape[0]
     tmax = _per_particle(tmax, nparticles, np.float64, None)
-    kwargs = {
-        "mass": mass,
-        "charge": charge,
-        "vtotal": _vtotal(Ekin, mass),
-        "tol": tol,
-    }
+    vtotal = _vtotal(Ekin, mass)
     events = _event_options(
         xyz_inits,
         vpars=vpars,
@@ -877,41 +744,24 @@ def trace_particles_cartesian_gpu(
         max_hits=max_hits,
         boozer=False,
     )
+    output = _launch_cartesian(
+        field,
+        xyz_inits,
+        parallel_speeds,
+        tmax,
+        _per_particle(dt, nparticles, dtype, -1.0),
+        _per_particle(None, nparticles, dtype, -1.0),
+        mass,
+        charge,
+        vtotal,
+        tol,
+        save_times=None if forget_exact_path else _save_times(tmax, dt_save),
+        event_options=events,
+    )
     if events is not None:
-        output, hits = _launch_cartesian(
-            field,
-            xyz_inits,
-            parallel_speeds,
-            tmax,
-            _per_particle(dt, nparticles, dtype, -1.0),
-            _per_particle(None, nparticles, dtype, -1.0),
-            mass,
-            charge,
-            kwargs["vtotal"],
-            tol,
-            save_times=None if forget_exact_path else _save_times(tmax, dt_save),
-            event_options=events,
-        )
-        bodies = output[:, None, :] if forget_exact_path else output
-        paths, _ = _cpu_format(
-            xyz_inits, parallel_speeds, bodies, tmax, infer_losses=False
-        )
-        return paths, hits
-    if forget_exact_path:
-        bodies = _launch_cartesian(
-            field,
-            xyz_inits,
-            parallel_speeds,
-            tmax,
-            _per_particle(dt, nparticles, dtype, -1.0),
-            _per_particle(None, nparticles, dtype, -1.0),
-            mass,
-            charge,
-            kwargs["vtotal"],
-            tol,
-        )[:, None, :]
-    else:
-        bodies = save_trajectories_cartesian_gpu(
-            field, xyz_inits, parallel_speeds, tmax, dt_save, dt=dt, **kwargs
-        )
-    return _cpu_format(xyz_inits, parallel_speeds, bodies, tmax)
+        output, hits = output
+    bodies = output[:, None, :] if forget_exact_path else output
+    paths, losses = _cpu_format(
+        xyz_inits, parallel_speeds, bodies, tmax, infer_losses=events is None
+    )
+    return paths, hits if events is not None else losses

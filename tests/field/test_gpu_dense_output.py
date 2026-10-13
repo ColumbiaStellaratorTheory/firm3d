@@ -21,8 +21,7 @@ from firm3d.catapult.tracing import (
     _cpu_format,
     _save_times,
     _to_boozer,
-    save_trajectories_boozer_gpu,
-    save_trajectories_cartesian_gpu,
+    _launch_cartesian,
     trace_particles_boozer_gpu,
     trace_particles_boozer_perturbed_gpu,
     trace_particles_cartesian_gpu,
@@ -235,22 +234,33 @@ class TestDenseOutputGPU(unittest.TestCase):
 
     def test_multiple_samples_in_one_step_and_off_grid_tmax(self):
         tmax, dt_save = 5.55e-9, 1e-10
-        expected_times = np.r_[np.arange(1, 56) * dt_save, tmax]
+        expected_times = np.r_[0, np.arange(1, 56) * dt_save, tmax]
         for precision, tol in [("double", 1e-9), ("single", 1e-6)]:
             with self.subTest(precision=precision):
                 gpu = CatapultBoozerField(self.field, 3, 3, 3, precision=precision)
-                trajectories = save_trajectories_boozer_gpu(
-                    gpu,
-                    self.stz,
-                    self.vpar,
-                    tmax,
-                    dt_save,
-                    MASS,
-                    CHARGE,
-                    SPEED,
-                    tol,
-                    dt=1e-9,
-                )
+                native = firm3dpp.boozer_gpu_tracing
+                output = []
+
+                def launch(native=native, output=output, **kwargs):
+                    result = native(**kwargs)
+                    output.append(np.asarray(result).reshape(len(self.stz), -1, 7))
+                    return result
+
+                with patch.object(firm3dpp, "boozer_gpu_tracing", side_effect=launch):
+                    trajectories, _ = trace_particles_boozer_gpu(
+                        gpu,
+                        self.stz,
+                        self.vpar,
+                        tmax=tmax,
+                        dt_save=dt_save,
+                        mass=MASS,
+                        charge=CHARGE,
+                        Ekin=ENERGY,
+                        tol=tol,
+                        dt=1e-9,
+                        forget_exact_path=False,
+                    )
+                self.assertEqual(len(output), 1)
                 final, _ = trace_particles_boozer_gpu(
                     gpu,
                     self.stz,
@@ -263,7 +273,7 @@ class TestDenseOutputGPU(unittest.TestCase):
                     np.testing.assert_allclose(
                         traj[:, 0], expected_times, rtol=1e-7, atol=0
                     )
-                    self.assertTrue(np.any(traj[:, 5] > 5 * dt_save))
+                    self.assertTrue(np.any(output[0][i, :, 5] > 5 * dt_save))
                     exact = np.column_stack(
                         (
                             np.full(len(traj), self.stz[i, 0]),
@@ -540,17 +550,18 @@ class TestDenseOutputGPU(unittest.TestCase):
 
         # The accepted loss step is h=1e-9; the next proposed step is larger.
         # Seven-column output reports the enclosing step, including at a loss.
-        loss = save_trajectories_cartesian_gpu(
+        loss = _launch_cartesian(
             gpu,
             stz[1:2],
             vpar[1:2],
-            1e-8,
-            1e-10,
+            np.array([1e-8]),
+            np.array([1e-9]),
+            np.array([-1.0]),
             MASS,
             CHARGE,
             SPEED,
             1e-9,
-            dt=1e-9,
+            save_times=_save_times([1e-8], 1e-10),
         )[0]
         self.assertAlmostEqual(loss[-1, 0], 1e-9, delta=1e-23)
         self.assertAlmostEqual(loss[-1, 5], 1e-9, delta=1e-23)

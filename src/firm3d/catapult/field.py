@@ -62,8 +62,8 @@ class CatapultBoozerField(_CatapultBoozerTable):
     :math:`(s, \theta, \zeta)`. This class builds that table once, at a chosen
     resolution and precision, so that it can be reused across tracing calls;
     it is the GPU counterpart of :class:`InterpolatedBoozerField`. Pass it as
-    the ``field`` argument of :func:`trace_particles_boozer_gpu` or
-    :func:`save_trajectories_boozer_gpu`. For a perturbed field use
+    the ``field`` argument of :func:`trace_particles_boozer_gpu`.
+    For a perturbed field use
     :class:`CatapultPerturbedBoozerField`.
 
     Args:
@@ -182,8 +182,7 @@ class CatapultCartesianField:
 
     Builds the table the Cartesian GPU kernel reads, once, so that it can be
     reused across tracing calls. Pass it as the ``field`` argument of
-    :func:`trace_particles_cartesian_gpu` or
-    :func:`save_trajectories_cartesian_gpu`, with ``surface_classifier=None``.
+    :func:`trace_particles_cartesian_gpu`.
 
     Args:
         field: A simsopt :class:`InterpolatedField` in cylindrical coordinates,

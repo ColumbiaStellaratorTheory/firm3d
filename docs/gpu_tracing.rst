@@ -73,10 +73,8 @@ GPU boundary detection does not locate crossings with the CPU's root finder.
 
 The public ``trace_particles_*_gpu`` functions return five-column paths
 ``(t, coordinate_1, coordinate_2, coordinate_3, vpar)`` in ``float64``.
-The lower-level ``save_trajectories_boozer_gpu`` and
-``save_trajectories_cartesian_gpu`` omit the initial state and return
-seven-column rows with the enclosing step size and magnetic moment appended.
-Native ``firm3dpp.*_gpu_tracing`` arrays use the field's precision.
+Native ``firm3dpp.*_gpu_tracing`` arrays use the field's precision and append
+the enclosing step size and magnetic moment to their seven-column rows.
 An interpolated sample is not an integrator checkpoint.
 
 Trajectory storage grows with particles times requested samples. Allow for
