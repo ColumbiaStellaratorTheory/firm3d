@@ -519,7 +519,7 @@ def _cpu_format(inits, parallel_speeds, bodies, tmax, infer_losses=True):
     res_hits = []
     for i in range(nparticles):
         body = np.asarray(bodies[i], dtype=np.float64)[:, :5]
-        res_tys.append(np.vstack((first[i], body[body[:, 0] > 0])))
+        res_tys.append(np.vstack((first[i], body[1:] if body[0, 0] == 0 else body)))
         # the kernel stops at t >= tmax in the field's precision, so allow
         # for tmax's own rounding to float32 before calling a particle lost
         if infer_losses and body[-1, 0] < tmax[i] * (1 - 1e-6):
