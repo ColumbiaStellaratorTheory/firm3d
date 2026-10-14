@@ -109,7 +109,31 @@ FIRM3D_HD inline double debye_length(
     double inv_lD_sq = 0.0;
     for (int ib = 0; ib < n_backgrounds; ++ib) {
         const ThermalBackgroundView& bg = backgrounds[ib];
-        double n_b = bg.n(s), T_b = bg.T_eV(s) * COLL_EV_TO_J;
+        // for each background we perform 2 linear interpolations for n_b and T_b
+        // on the same grid
+        // compute these indices once
+        const double lo = bg.s_min;
+        const double hi = bg.s_max;
+        double s_interp = s;
+        if (s < lo) {
+            s_interp = lo;
+        } else if (s > hi) {
+            s_interp = hi;
+        }
+
+        double grid_size = (bg.s_max - bg.s_min) / (bg.n_points - 1);
+        int i = (int)((s_interp - lo) / grid_size);
+        if (i < 0) {
+            i = 0;
+        } else if (i > bg.n_points - 2) {
+            i = bg.n_points - 2;
+        }
+
+        double t = (s_interp - (bg.s_min + i*grid_size)) / grid_size;
+
+        double n_b = bg.n_grid[i]*(1.0 - t) + bg.n_grid[i+1]*t;
+        double T_b = (bg.T_grid[i]*(1.0 - t) + bg.T_grid[i+1]*t)* COLL_EV_TO_J;
+
         if (n_b > 0.0 && T_b > 0.0) {
             inv_lD_sq += n_b * bg.charge * bg.charge / (COLL_EPSILON0 * T_b);
         }
