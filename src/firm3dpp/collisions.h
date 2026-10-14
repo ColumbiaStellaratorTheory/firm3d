@@ -144,9 +144,9 @@ FIRM3D_HD inline double coulomb_log(
     double v, double m_a, double q_a,
     double m_b, double q_b, double T_b, double lambda_D)
 {
-    double v_th     = std::sqrt(2.0 * T_b / m_b);
+    double v_th_sq     = 2.0 * T_b / m_b;
     double m_r      = m_a * m_b / (m_a + m_b);
-    double v_eff_sq = v * v + v_th * v_th;
+    double v_eff_sq = v * v + v_th_sq;
     double bcl      = std::abs(q_a * q_b)
                       / (4.0 * M_PI * COLL_EPSILON0 * m_r * v_eff_sq);
     double bqm      = COLL_HBAR / (2.0 * m_r * std::sqrt(v_eff_sq));
