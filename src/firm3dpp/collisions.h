@@ -280,9 +280,17 @@ FIRM3D_HD inline int compute_collision_coefficients_core(
             return COLL_LNLAMBDA_NONPOSITIVE;
         }
 
-        double G      = chandrasekhar_G(x);
-        double Gp     = chandrasekhar_G_deriv(x);   // dG/dx
-        double erf_x  = std::erf(x);
+        // double G      = chandrasekhar_G(x);
+        // double Gp     = chandrasekhar_G_deriv(x);   // dG/dx
+        // double erf_x  = std::erf(x);
+        double erf_x = erf(x);
+        double G = 0.0;
+        double Gp = 2.0 / (3.0 * COLL_SQRT_PI);
+        if (x != 0.0){
+            double twoexp_over_sqrtpi = (2.0 / COLL_SQRT_PI)*exp(-x*x);
+            G = (erf_x - x * twoexp_over_sqrtpi) / (2.0 * x * x);
+            Gp = twoexp_over_sqrtpi - 2.0 * G / x;
+        }
 
         // Prefactor: Gamma = n_b q_a^2 q_b^2 lnL / (4 pi eps0^2 m_a^2)  [m^3/s^4]
         double Gamma  = n_b[ib] * q_a * q_a * q_b * q_b * lnL
