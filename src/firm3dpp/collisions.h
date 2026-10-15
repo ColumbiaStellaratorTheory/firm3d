@@ -213,8 +213,12 @@ FIRM3D_HD inline int compute_collision_coefficients_core(
     int n_backgrounds,
     CollisionCoefficients* out)
 {
-    CollisionCoefficients c = {0.0, 0.0, 0.0, 0.0, 0.0};
-
+    // CollisionCoefficients c = {0.0, 0.0, 0.0, 0.0, 0.0};
+    double D_par = 0.0;
+    double dD_par_dv = 0.0;
+    double nu_D = 0.0;
+    double K = 0.0;
+    double v_cutoff = 0.0;
     // double lambda_D = debye_length(backgrounds, n_backgrounds, s);
 
     // Coldest active species sets the reflecting boundary v_cutoff.
@@ -262,7 +266,7 @@ FIRM3D_HD inline int compute_collision_coefficients_core(
     }
 
     if (T_min < HUGE_VAL)
-        c.v_cutoff = COLL_CUTOFF * std::sqrt(T_min / m_a);
+        v_cutoff = COLL_CUTOFF * std::sqrt(T_min / m_a);
 
     for (int ib = 0; ib < n_backgrounds; ++ib) {
         const ThermalBackgroundView& bg = backgrounds[ib];
@@ -313,12 +317,17 @@ FIRM3D_HD inline int compute_collision_coefficients_core(
         // Total deterministic drift in v: K = Q + d(D_par)/dv + 2*D_par/v
         double K_b = Q_b + dD_par_dv_b + 2.0 * D_par_b / v;
 
-        c.D_par     += D_par_b;
-        c.dD_par_dv += dD_par_dv_b;
-        c.nu_D      += nu_D_b;
-        c.K         += K_b;
+        D_par     += D_par_b;
+        dD_par_dv += dD_par_dv_b;
+        nu_D      += nu_D_b;
+        K         += K_b;
     }
-    *out = c;
+    out->D_par = D_par;
+    out->dD_par_dv = dD_par_dv;
+    out->nu_D = nu_D;
+    out->K = K;
+    out->v_cutoff = v_cutoff;
+
     return COLL_OK;
 }
 
