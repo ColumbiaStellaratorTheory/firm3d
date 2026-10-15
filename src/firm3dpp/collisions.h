@@ -44,6 +44,8 @@ FIRM3D_HD inline double chandrasekhar_G_deriv(double x) {
     return (2.0 / COLL_SQRT_PI) * std::exp(-x * x) - 2.0 * chandrasekhar_G(x) / x;
 }
 
+
+
 // --------------------------------------------------------------------------
 // Background species specification.
 //
@@ -107,7 +109,31 @@ FIRM3D_HD inline double debye_length(
     double inv_lD_sq = 0.0;
     for (int ib = 0; ib < n_backgrounds; ++ib) {
         const ThermalBackgroundView& bg = backgrounds[ib];
-        double n_b = bg.n(s), T_b = bg.T_eV(s) * COLL_EV_TO_J;
+        // for each background we perform 2 linear interpolations for n_b and T_b
+        // on the same grid
+        // compute these indices once
+        const double lo = bg.s_min;
+        const double hi = bg.s_max;
+        double s_interp = s;
+        if (s < lo) {
+            s_interp = lo;
+        } else if (s > hi) {
+            s_interp = hi;
+        }
+
+        double grid_size = (bg.s_max - bg.s_min) / (bg.n_points - 1);
+        int i = (int)((s_interp - lo) / grid_size);
+        if (i < 0) {
+            i = 0;
+        } else if (i > bg.n_points - 2) {
+            i = bg.n_points - 2;
+        }
+
+        double t = (s_interp - (bg.s_min + i*grid_size)) / grid_size;
+
+        double n_b = bg.n_grid[i]*(1.0 - t) + bg.n_grid[i+1]*t;
+        double T_b = (bg.T_grid[i]*(1.0 - t) + bg.T_grid[i+1]*t)* COLL_EV_TO_J;
+
         if (n_b > 0.0 && T_b > 0.0) {
             inv_lD_sq += n_b * bg.charge * bg.charge / (COLL_EPSILON0 * T_b);
         }
@@ -142,9 +168,9 @@ FIRM3D_HD inline double coulomb_log(
     double v, double m_a, double q_a,
     double m_b, double q_b, double T_b, double lambda_D)
 {
-    double v_th     = std::sqrt(2.0 * T_b / m_b);
+    double v_th_sq     = 2.0 * T_b / m_b;
     double m_r      = m_a * m_b / (m_a + m_b);
-    double v_eff_sq = v * v + v_th * v_th;
+    double v_eff_sq = v * v + v_th_sq;
     double bcl      = std::abs(q_a * q_b)
                       / (4.0 * M_PI * COLL_EPSILON0 * m_r * v_eff_sq);
     double bqm      = COLL_HBAR / (2.0 * m_r * std::sqrt(v_eff_sq));
@@ -187,46 +213,91 @@ FIRM3D_HD inline int compute_collision_coefficients_core(
     int n_backgrounds,
     CollisionCoefficients* out)
 {
-    CollisionCoefficients c = {0.0, 0.0, 0.0, 0.0, 0.0};
-
-    double lambda_D = debye_length(backgrounds, n_backgrounds, s);
+    // CollisionCoefficients c = {0.0, 0.0, 0.0, 0.0, 0.0};
+    double D_par = 0.0;
+    double dD_par_dv = 0.0;
+    double nu_D = 0.0;
+    double K = 0.0;
+    double v_cutoff = 0.0;
+    // double lambda_D = debye_length(backgrounds, n_backgrounds, s);
 
     // Coldest active species sets the reflecting boundary v_cutoff.
     double T_min = HUGE_VAL;
-    for (int ib = 0; ib < n_backgrounds; ++ib) {
-        const ThermalBackgroundView& bg = backgrounds[ib];
-        double n_b = bg.n(s), T_b = bg.T_eV(s) * COLL_EV_TO_J;
-        if (n_b > 0.0 && T_b > 0.0 && T_b < T_min) {
-            T_min = T_b;
-        }
-    }
-    if (T_min < HUGE_VAL)
-        c.v_cutoff = COLL_CUTOFF * std::sqrt(T_min / m_a);
+    double n_b[8];
+    double T_b[8];
+    double inv_lD_sq = 0.0;
 
     for (int ib = 0; ib < n_backgrounds; ++ib) {
         const ThermalBackgroundView& bg = backgrounds[ib];
-        double n_b = bg.n(s);
-        double T_b = bg.T_eV(s) * COLL_EV_TO_J;
-        if (n_b <= 0.0 || T_b <= 0.0) continue;
+
+        // compute n_b and T_b reusing interpolant grid computation
+        const double lo = bg.s_min;
+        const double hi = bg.s_max;
+        double s_interp = s;
+        if (s < lo) {
+            s_interp = lo;
+        } else if (s > hi) {
+            s_interp = hi;
+        }
+
+        double grid_size = (bg.s_max - bg.s_min) / (bg.n_points - 1);
+        int i = (int)((s_interp - lo) / grid_size);
+        if (i < 0) {
+            i = 0;
+        } else if (i > bg.n_points - 2) {
+            i = bg.n_points - 2;
+        }
+
+        double t = (s_interp - (bg.s_min + i*grid_size)) / grid_size;
+
+        n_b[ib] = bg.n_grid[i]*(1.0 - t) + bg.n_grid[i+1]*t;
+        T_b[ib] = (bg.T_grid[i]*(1.0 - t) + bg.T_grid[i+1]*t)* COLL_EV_TO_J;
+        
+        if (n_b[ib] > 0.0 && T_b[ib] > 0.0){
+            inv_lD_sq += n_b[ib] * bg.charge * bg.charge / (COLL_EPSILON0 * T_b[ib]);
+            if(T_b[ib] < T_min) {
+                T_min = T_b[ib];
+            }
+        }
+    }
+    double lambda_D = 0.0;
+    if (inv_lD_sq > 0.0) {
+        lambda_D = 1.0 / std::sqrt(inv_lD_sq);
+    }
+
+    if (T_min < HUGE_VAL)
+        v_cutoff = COLL_CUTOFF * std::sqrt(T_min / m_a);
+
+    for (int ib = 0; ib < n_backgrounds; ++ib) {
+        const ThermalBackgroundView& bg = backgrounds[ib];
+        if (n_b[ib] <= 0.0 || T_b[ib] <= 0.0) continue;
 
         double m_b    = bg.mass;
         double q_b    = bg.charge;
 
         // Background thermal speed and normalized EP speed
-        double v_th   = std::sqrt(2.0 * T_b / m_b);
+        double v_th   = std::sqrt(2.0 * T_b[ib] / m_b);
         double x      = v / v_th;
 
-        double lnL = coulomb_log(v, m_a, q_a, m_b, q_b, T_b, lambda_D);
+        double lnL = coulomb_log(v, m_a, q_a, m_b, q_b, T_b[ib], lambda_D);
         if (lnL <= 0.0) {
             return COLL_LNLAMBDA_NONPOSITIVE;
         }
 
-        double G      = chandrasekhar_G(x);
-        double Gp     = chandrasekhar_G_deriv(x);   // dG/dx
-        double erf_x  = std::erf(x);
+        // double G      = chandrasekhar_G(x);
+        // double Gp     = chandrasekhar_G_deriv(x);   // dG/dx
+        // double erf_x  = std::erf(x);
+        double erf_x = erf(x);
+        double G = 0.0;
+        double Gp = 2.0 / (3.0 * COLL_SQRT_PI);
+        if (x != 0.0){
+            double twoexp_over_sqrtpi = (2.0 / COLL_SQRT_PI)*exp(-x*x);
+            G = (erf_x - x * twoexp_over_sqrtpi) / (2.0 * x * x);
+            Gp = twoexp_over_sqrtpi - 2.0 * G / x;
+        }
 
         // Prefactor: Gamma = n_b q_a^2 q_b^2 lnL / (4 pi eps0^2 m_a^2)  [m^3/s^4]
-        double Gamma  = n_b * q_a * q_a * q_b * q_b * lnL
+        double Gamma  = n_b[ib] * q_a * q_a * q_b * q_b * lnL
                         / (4.0 * M_PI * COLL_EPSILON0 * COLL_EPSILON0 * m_a * m_a);
 
         // Parallel diffusion and its v-derivative
@@ -241,17 +312,22 @@ FIRM3D_HD inline int compute_collision_coefficients_core(
         //                             = -Gamma * G * m_a / T_b.
         // Matches ASCOT5 mccc_coefs_Q and guarantees relaxation to the
         // background Maxwellian.
-        double Q_b = -Gamma * G * m_a / T_b;
+        double Q_b = -Gamma * G * m_a / T_b[ib];
 
         // Total deterministic drift in v: K = Q + d(D_par)/dv + 2*D_par/v
         double K_b = Q_b + dD_par_dv_b + 2.0 * D_par_b / v;
 
-        c.D_par     += D_par_b;
-        c.dD_par_dv += dD_par_dv_b;
-        c.nu_D      += nu_D_b;
-        c.K         += K_b;
+        D_par     += D_par_b;
+        dD_par_dv += dD_par_dv_b;
+        nu_D      += nu_D_b;
+        K         += K_b;
     }
-    *out = c;
+    out->D_par = D_par;
+    out->dD_par_dv = dD_par_dv;
+    out->nu_D = nu_D;
+    out->K = K;
+    out->v_cutoff = v_cutoff;
+
     return COLL_OK;
 }
 
