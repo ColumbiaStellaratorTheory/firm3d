@@ -511,8 +511,7 @@ solve(
     initial_state.insert(initial_state.end(), stzvt.begin(), stzvt.end());
     res.push_back(initial_state);
 
-    const bool continuous_limits = max_phase_hits > 0 || max_phase_interval > 0;
-    if (continuous_limits && tau_max == 0) return std::make_tuple(res, res_hits);
+    if (tau_max == 0) return std::make_tuple(res, res_hits);
     int phase_hits = 0;
     double last_phase_time = 0;
     double terminal_tau = tau_max;
@@ -530,12 +529,12 @@ solve(
         dtau = tau_current - tau_last;
 
         vector<vector<double>> step_hits;
-        double step_end = continuous_limits ? std::min(tau_current, tau_max) : tau_current;
+        double step_end = std::min(tau_current, tau_max);
         // Check if we have hit a stopping criterion between tau_last and tau_current
-        stop = check_stopping_criteria(
+        check_stopping_criteria(
             state_size,
             iter,
-            continuous_limits ? step_hits : res_hits,
+            step_hits,
             *solver,
             tau_last,
             step_end,
@@ -547,43 +546,40 @@ solve(
             omegas,
             stopping_criteria,
             vpars,
-            phases_stop && !continuous_limits,
-            vpars_stop && !continuous_limits,
+            false,
+            false,
             axis,
             vnorm,
             tnorm
         );
-        if (continuous_limits) {
-            // Apply roots and endpoint criteria chronologically. A phase root
-            // at the deadline completes that return and resets the timeout.
-            stop = false;
-            std::stable_sort(step_hits.begin(), step_hits.end(),
-                [](const vector<double>& a, const vector<double>& b) { return a[0] < b[0]; });
-            for (const auto& hit : step_hits) {
-                if (max_phase_interval > 0 && hit[0] > last_phase_time + max_phase_interval) break;
-                res_hits.push_back(hit);
-                bool phase_hit = hit[1] >= 0 && hit[1] < phases.size();
-                if (phase_hit) {
-                    last_phase_time = hit[0];
-                    ++phase_hits;
-                }
-                if (hit[1] < 0 ||
-                    (phase_hit && (phases_stop || (max_phase_hits > 0 && phase_hits >= max_phase_hits))) ||
-                    (!phase_hit && vpars_stop)) {
-                    terminal_tau = hit[0] / tnorm;
-                    stop = true;
-                    break;
-                }
+        // Apply roots and endpoint criteria chronologically. A phase root
+        // at the deadline completes that return and resets the timeout.
+        std::stable_sort(step_hits.begin(), step_hits.end(),
+            [](const vector<double>& a, const vector<double>& b) { return a[0] < b[0]; });
+        for (const auto& hit : step_hits) {
+            if (max_phase_interval > 0 && hit[0] > last_phase_time + max_phase_interval) break;
+            res_hits.push_back(hit);
+            bool phase_hit = hit[1] >= 0 && hit[1] < phases.size();
+            if (phase_hit) {
+                last_phase_time = hit[0];
+                ++phase_hits;
             }
-            if (!stop && max_phase_interval > 0 &&
-                step_end * tnorm >= last_phase_time + max_phase_interval) {
-                terminal_tau = (last_phase_time + max_phase_interval) / tnorm;
+            if (hit[1] < 0 ||
+                (phase_hit && (phases_stop || (max_phase_hits > 0 && phase_hits >= max_phase_hits))) ||
+                (!phase_hit && vpars_stop)) {
+                terminal_tau = hit[0] / tnorm;
                 stop = true;
+                break;
             }
+        }
+        if (!stop && max_phase_interval > 0 &&
+            step_end * tnorm >= last_phase_time + max_phase_interval) {
+            terminal_tau = (last_phase_time + max_phase_interval) / tnorm;
+            stop = true;
         }
 
         // Save path if forget_exact_path = False
-        if (forget_exact_path == 0 && (!stop || continuous_limits)) {
+        if (forget_exact_path == 0) {
             // This will give the first save point after tau_last
             double tau_save_last = (std::floor(tau_last/dtau_save) + 1) * dtau_save;
             for (double tau_save = tau_save_last; tau_save <= std::min(tau_current, terminal_tau); tau_save += dtau_save) {
@@ -601,10 +597,10 @@ solve(
 
     // Save t = tmax or time when StoppingCriterion is hit if we not already saved it 
     if (stop) {
-        tau_max = continuous_limits ? terminal_tau : tau_last;
+        tau_max = terminal_tau;
     }
     double t_max = tau_max * tnorm;
-    if (continuous_limits ? t_max > res.back()[0] : t_max - res.back()[0] > 1e-15) {
+    if (t_max > res.back()[0]) {
         solver->calc_state(tau_max, y);
         y_to_stzvt(y, stzvt, axis, vnorm, tnorm);
         vector<double> final_state = {t_max};

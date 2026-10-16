@@ -167,6 +167,96 @@ class TestCPUPhaseLimits(unittest.TestCase):
         self.assertEqual(len(paths[0]), 1)
         self.assertTrue(all(np.asarray(particle).size == 0 for particle in hits))
 
+    def test_phase_stop_without_limits_selects_earliest_root_and_saves_prefix(self):
+        horizon = 1e-12
+        for solver in ["boost", "dormand_prince"]:
+            for forget in [False, True]:
+                with self.subTest(solver=solver, forget=forget):
+                    paths, hits = self.trace(
+                        ODE_solver=solver,
+                        max_phase_hits=0,
+                        max_phase_interval=None,
+                        tmax=horizon,
+                        phases=[0.75, 0.25],
+                        n_zetas=[0, 0],
+                        m_thetas=[0, 0],
+                        omegas=[-1 / horizon, -1 / horizon],
+                        phases_stop=True,
+                        vpars=[],
+                        vpars_stop=False,
+                        dt_save=horizon / 10,
+                        forget_exact_path=forget,
+                    )
+                    self.assertEqual(hits[0].shape, (1, 6))
+                    self.assertEqual(hits[0][0, 1], 1)
+                    self.assertAlmostEqual(hits[0][0, 0], horizon / 4, delta=1e-24)
+                    np.testing.assert_allclose(
+                        paths[0][-1], hits[0][0, [0, 2, 3, 4, 5]], rtol=2e-15
+                    )
+                    expected = (
+                        [0, horizon / 4]
+                        if forget
+                        else [0, horizon / 10, horizon / 5, horizon / 4]
+                    )
+                    np.testing.assert_allclose(paths[0][:, 0], expected, atol=1e-24)
+
+    def test_horizon_without_limits_discards_later_roots(self):
+        horizon = 1e-12
+        for solver in ["boost", "dormand_prince"]:
+            with self.subTest(solver=solver):
+                paths, hits = self.trace(
+                    ODE_solver=solver,
+                    max_phase_hits=0,
+                    max_phase_interval=None,
+                    tmax=horizon,
+                    phases=[1.5],
+                    n_zetas=[0],
+                    omegas=[-1 / horizon],
+                    vpars=[],
+                    vpars_stop=False,
+                    forget_exact_path=True,
+                )
+                self.assertEqual(np.asarray(hits[0]).size, 0)
+                self.assertAlmostEqual(paths[0][-1, 0], horizon, delta=1e-24)
+
+    def test_zero_horizon_without_limits_keeps_only_launch(self):
+        for solver in ["boost", "dormand_prince"]:
+            with self.subTest(solver=solver):
+                paths, hits = self.trace(
+                    ODE_solver=solver,
+                    max_phase_hits=0,
+                    max_phase_interval=None,
+                    tmax=0,
+                    stopping_criteria=[IterationStoppingCriterion(0)],
+                )
+                self.assertEqual(len(paths[0]), 1)
+                self.assertEqual(paths[0][0, 0], 0)
+                self.assertEqual(np.asarray(hits[0]).size, 0)
+
+    def test_velocity_stop_without_limits_ends_at_root(self):
+        field = BoozerAnalytic(etabar=0.03, B0=5, N=0, G0=25, psi0=100, iota0=0.4)
+        for solver in ["boost", "dormand_prince"]:
+            for forget in [False, True]:
+                with self.subTest(solver=solver, forget=forget):
+                    paths, hits = self.trace(
+                        field,
+                        initial=np.array([[0.3, np.pi + 0.2, 0]]),
+                        speeds=[0.15 * SPEED],
+                        ODE_solver=solver,
+                        max_phase_hits=0,
+                        max_phase_interval=None,
+                        forget_exact_path=forget,
+                    )
+                    self.assertEqual(hits[0][-1, 1], 1)
+                    self.assertAlmostEqual(hits[0][-1, 5], 0, delta=1e-7)
+                    np.testing.assert_allclose(
+                        paths[0][-1],
+                        hits[0][-1, [0, 2, 3, 4, 5]],
+                        rtol=2e-15,
+                        atol=1e-14,
+                    )
+                    self.assertTrue(np.all(np.diff(paths[0][:, 0]) > 0))
+
     def test_velocity_root_stops_before_return(self):
         field = BoozerAnalytic(etabar=0.03, B0=5, N=0, G0=25, psi0=100, iota0=0.4)
         paths, hits = self.trace(

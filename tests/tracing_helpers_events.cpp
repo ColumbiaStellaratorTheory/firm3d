@@ -77,6 +77,14 @@ int main() {
             }
         }
     }
+    // Refining an exact endpoint must not exhaust the next plane's root budget.
+    LinearStep dense{{0.3, 0.2, 0, 1}, {0.3, 0.2, 1, 1}};
+    vector<vector<double>> hits;
+    check_stopping_criteria(4, 1, hits, dense, 0, 1, 1, 1e-12,
+        {1, 0.25}, {1, 1}, {0, 0}, {0, 0}, {}, {}, false, false, 0, 1, 1);
+    check(hits.size() == 2, "Missing CPU phase plane");
+    check(hits[0][0] == 1 && std::abs(hits[1][0] - 0.25) < 1e-12,
+          "CPU phase planes share a consumed root budget");
     std::cout << "CPU endpoint crossing checks passed.\n";
 }
 #else

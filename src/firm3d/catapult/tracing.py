@@ -623,9 +623,6 @@ def trace_particles_boozer_perturbed_gpu(
     if mus.shape != (nparticles,):
         raise ValueError(f"mus must have shape ({nparticles},), got {mus.shape}")
 
-    if nparticles == 0:
-        return [], []
-
     if Ekin is None:
         # the speed the kernel normalizes by, from the first particle's
         # energy at its birth point in the equilibrium

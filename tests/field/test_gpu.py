@@ -625,7 +625,7 @@ class CATAPULTField:
                 charge=CHARGE,
                 Ekin=ENERGY,
                 tol=1e-9,
-                stopping_criteria=[IterationStoppingCriterion(1)],
+                stopping_criteria=[IterationStoppingCriterion(0)],
                 forget_exact_path=True,
             )
         elif self.field_type in ["boozer_saw_vacuum", "boozer_saw_nok"]:
@@ -641,7 +641,7 @@ class CATAPULTField:
                 mass=MASS,
                 charge=CHARGE,
                 tol=1e-9,
-                stopping_criteria=[IterationStoppingCriterion(1)],
+                stopping_criteria=[IterationStoppingCriterion(0)],
                 forget_exact_path=True,
             )
         elif self.field_type == "cartesian_vacuum":

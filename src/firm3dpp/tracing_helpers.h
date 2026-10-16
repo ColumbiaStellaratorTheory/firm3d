@@ -219,7 +219,6 @@ bool check_stopping_criteria(
 )
 {
     boost::math::tools::eps_tolerance<double> roottol(-int(std::log2(abstol)));
-    uintmax_t rootmaxit = 200;
     vector<double> y(state_size), stzvt(state_size), stzvt_current(state_size);
 
     bool stop = false;
@@ -257,6 +256,7 @@ bool check_stopping_criteria(
                     return (stzvt[3]-vpar)/vpar;
                 }
             };
+            uintmax_t rootmaxit = 200;
             auto root = toms748_solve(rootfun, tau_last, tau_current, vpar_last-vpar, vpar_current-vpar, roottol, rootmaxit);
             double f0 = rootfun(root.first);
             double f1 = rootfun(root.second);
@@ -305,6 +305,7 @@ bool check_stopping_criteria(
                 y_to_stzvt(y, stzvt, axis, vnorm, tnorm);
                 return nz * stzvt[2] + mt * stzvt[1] - omega*t - phase_shift;
             };
+            uintmax_t rootmaxit = 200;
             auto root = toms748_solve(rootfun, tau_last, tau_current, phase_last - phase_shift, phase_current - phase_shift, roottol, rootmaxit);
             double f0 = rootfun(root.first);
             double f1 = rootfun(root.second);
