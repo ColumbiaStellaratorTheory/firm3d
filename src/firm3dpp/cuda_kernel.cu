@@ -869,37 +869,6 @@ __global__ void setup_kernel(T* init_pos, const T* __restrict__ quadpts_arr, T* 
 
 }
 
-template<typename T>
-__device__ void check_has_left_cartesian(bool* has_left, const T* __restrict__ state, const T* __restrict__ derivs){
-    constexpr int n_deriv_outputs = map_rhs_to_n_deriv_outputs<RHS::GC_CartesianVacuum>();
-    has_left[threadIdx.x] = derivs[(6*n_deriv_outputs + 4)*PARTICLES_PER_BLOCK + threadIdx.x] < 0; // boundary dist fn at new location
-}
-
-template<typename T>
-__device__ void check_has_left_boozer(bool* has_left, const T* __restrict__ state, const T* __restrict__ derivs){
-    T x1 = state[0*PARTICLES_PER_BLOCK + threadIdx.x];
-    T x2 = state[1*PARTICLES_PER_BLOCK + threadIdx.x];
-    T s = hypot(x1, x2);
-
-    has_left[threadIdx.x] = s >= 1;
-}
-
-
-// determine whether a particle has been lost or not
-// in cartesian coordinates, we check the signed distance function
-// in boozer coordinates we check for s >= 1
-template<typename T, CoordSys coord>
-__device__ void check_has_left(bool* has_left, const T* __restrict__ state, const T* __restrict__ derivs){
-    if constexpr (coord == CoordSys::Cartesian){
-        check_has_left_cartesian(has_left, state, derivs);
-    } else if constexpr (coord == CoordSys::Boozer){
-        check_has_left_boozer(has_left, state, derivs);
-    } else{
-        printf("default check_has_left not implemented\n");
-    }
-};
-
-
 #include "cuda_events.h"
 
 template<typename T, RHS id>
@@ -933,17 +902,18 @@ struct EndpointSnapshot {
 
 template<typename T, RHS id, typename Time, bool SaveHistory = true, bool SaveEvents = false>
 __device__ void adjust_time(Time* t, T* dt, double* tmax, T* state, T* __restrict__ derivs, const T* __restrict__ x_temp,
-                            bool* has_left, const T* __restrict__ dtmax, const bool* __restrict__ is_valid,
+                            const T* __restrict__ dtmax, const bool* __restrict__ is_valid,
                             double* zeta_offsets,
                             T* out = nullptr, const double* save_times = nullptr, size_t nsave = 0,
                             const int* particle_ids = nullptr, size_t* saved_counts = nullptr,
                             const T* mu = nullptr, bool* finished = nullptr,
-                            EndpointSnapshot<T> terminal = {}, DeviceEvents events = {}){
+                            EndpointSnapshot<T> terminal = {}, DeviceEvents events = {},
+                            const T* quadpts = nullptr){
     // identify a particle and state index
     const int p = threadIdx.x % PARTICLES_PER_BLOCK;   // particle
     const int state_id = threadIdx.x / PARTICLES_PER_BLOCK; // state variable
 
-    const bool active = is_valid[p] && !(has_left[p] || t[p] >= tmax[p] ||
+    const bool active = is_valid[p] && !(t[p] >= tmax[p] ||
                                         (finished && finished[p]));
     const T dt_p = dt[p];
 
@@ -977,7 +947,7 @@ __device__ void adjust_time(Time* t, T* dt, double* tmax, T* state, T* __restric
     if constexpr(SaveEvents){
         if(accept && state_id == 0){
             record_step_events<T, id>(events, particle_ids[p], p, state, derivs,
-                x_temp, double(t[p]), dt_p, tmax[p], zeta_offsets[p]);
+                x_temp, double(t[p]), dt_p, tmax[p], zeta_offsets[p], quadpts);
         }
         __syncthreads();
     }
@@ -1093,9 +1063,6 @@ __device__ void adjust_time(Time* t, T* dt, double* tmax, T* state, T* __restric
         dt[p] = dt_new;
     }
     __syncthreads();
-    if(accept && state_id == 0){
-        check_has_left<T, map_rhs_to_coord<id>()>(has_left, state, derivs);
-    }
 }
 
 // helper function for a single DP5 evaluation
@@ -1139,7 +1106,6 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
     __shared__ T block_dtmax[PARTICLES_PER_BLOCK];
     __shared__ T state[4 * PARTICLES_PER_BLOCK];
     __shared__ double zeta_offsets[PARTICLES_PER_BLOCK];
-    __shared__ bool has_left[PARTICLES_PER_BLOCK];
     __shared__ int particle_ids[PARTICLES_PER_BLOCK];
     __shared__ size_t saved_counts[PARTICLES_PER_BLOCK];
     __shared__ bool active_arr[PARTICLES_PER_BLOCK];
@@ -1157,7 +1123,6 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
         zeta_offsets[threadIdx.x] = 0;
         if constexpr(SaveHistory){ saved_counts[threadIdx.x] = 0; }
         // block_t[threadIdx.x] = 0.0;
-        has_left[threadIdx.x] = false;
         for(int i=0; i<4; ++i){
             state[i*PARTICLES_PER_BLOCK + threadIdx.x] = init_pos[4*idx + i];
         }
@@ -1171,21 +1136,15 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
     }
     __syncthreads();
 
-    // if there exists a particle which is real and hasn't not reached tmax or left, keep tracing
+    // Keep tracing while persistent slots contain unfinished particles.
     while(__syncthreads_count(is_valid_arr[threadIdx.x % PARTICLES_PER_BLOCK]) > 0){
-
-        // adjust_time chooses the next step size after acceptance. Keep the
-        // attempted size for a saved loss endpoint in this iteration.
-        const int p = threadIdx.x % PARTICLES_PER_BLOCK;
-        const T step_dt = is_valid_arr[p] ? block_dt[p] : T(0);
 
         // create a mask similar to is_valid_arr for particles where mu needs to be computed
         __shared__ bool needs_stage0[PARTICLES_PER_BLOCK];
         if(threadIdx.x < PARTICLES_PER_BLOCK){
             active_arr[threadIdx.x] = is_valid_arr[threadIdx.x] &&
                 !(SaveHistory ? finished[threadIdx.x]
-                              : block_t[threadIdx.x] >= block_tmax[threadIdx.x]) &&
-                !has_left[threadIdx.x];
+                              : block_t[threadIdx.x] >= block_tmax[threadIdx.x]);
             needs_stage0[threadIdx.x] = active_arr[threadIdx.x] && (block_t[threadIdx.x] == 0.0);
         }
         __syncthreads();
@@ -1207,54 +1166,25 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
         dp5_one_step<T, id, 6>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
                             symmetry_exploited, state, block_mu, active_arr, args...);
         adjust_time<T, id, double, SaveHistory, SaveEvents>(block_t, block_dt, block_tmax, state, block_derivs, x_temp,
-                          has_left, block_dtmax, is_valid_arr, zeta_offsets, out, save_times, nsave,
+                          block_dtmax, is_valid_arr, zeta_offsets, out, save_times, nsave,
                           particle_ids, SaveHistory ? saved_counts : nullptr, block_mu,
-                          SaveHistory ? finished : nullptr, terminal, events);
+                          SaveHistory ? finished : nullptr, terminal, events, quadpts_arr);
         __syncthreads();
 
 
-        // if the particle has left, go get another one
+        // Refill a slot once its requested terminal state has been saved.
         if(threadIdx.x < PARTICLES_PER_BLOCK && is_valid_arr[threadIdx.x] && \
-            ((SaveHistory ? finished[threadIdx.x]
-                          : block_t[threadIdx.x] >= block_tmax[threadIdx.x]) ||
-             has_left[threadIdx.x])){
-            // Dense output already wrote tmax. For an earlier loss, retain
-            // the kernel's accepted endpoint and trim unused rows on the host.
-            size_t count = SaveHistory ? saved_counts[threadIdx.x] : 0;
-            const bool write_endpoint = SaveHistory
-                ? (!finished[threadIdx.x] || count == 0)
-                : (block_t[threadIdx.x] < block_tmax[threadIdx.x] || block_tmax[threadIdx.x] == 0.0);
-            if(write_endpoint){
-                if(count > 0 && out[(size_t(idx) * (nsave + 1) + count - 1) * 7] == block_t[threadIdx.x]){
-                    --count;
-                }
-                const size_t row = SaveHistory
-                    ? (size_t(idx) * (nsave + 1) + count) * 7
-                    : size_t(idx) * 7;
-                out[row] = block_t[threadIdx.x];
+            (SaveHistory ? finished[threadIdx.x]
+                         : block_t[threadIdx.x] >= block_tmax[threadIdx.x])){
+            // Positive-duration paths were written by dense output above.
+            if(block_tmax[threadIdx.x] == 0.0){
+                const size_t row = size_t(idx) * (SaveHistory ? nsave + 1 : 1) * 7;
+                out[row] = 0;
                 for(int i=0; i<4; ++i){
                     out[row + i + 1] = state[i*PARTICLES_PER_BLOCK + threadIdx.x];
                 }
-                if constexpr(map_rhs_to_coord<id>() == CoordSys::Boozer){
-                    out[row + 3] = T(double(state[2*PARTICLES_PER_BLOCK + threadIdx.x]) + zeta_offsets[threadIdx.x]);
-                }
-                out[row + 5] = step_dt;
+                out[row + 5] = block_dt[threadIdx.x];
                 out[row + 6] = block_mu[threadIdx.x];
-            }
-
-            if constexpr(SaveEvents){
-                if(has_left[threadIdx.x] && !finished[threadIdx.x]){
-                    double hit[4];
-                    for(int j=0; j<4; ++j) hit[j] = double(state[j*PARTICLES_PER_BLOCK+threadIdx.x]);
-                    if constexpr(map_rhs_to_coord<id>() == CoordSys::Boozer){
-                        double x = hit[0], y = hit[1];
-                        hit[0] = hypot(x, y);
-                        hit[1] = atan2(y, x) + events.theta_offsets[idx];
-                        hit[2] += zeta_offsets[threadIdx.x];
-                    }
-                    write_event(events, idx, block_t[threadIdx.x], -1-events.ncriteria, hit);
-                    events.end_times[idx] = block_t[threadIdx.x];
-                }
             }
 
             // load the next particle
@@ -1273,7 +1203,6 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
                 block_dtmax[threadIdx.x] = dtmax[idx];
                 block_tmax[threadIdx.x] = tmax[idx];
                 if constexpr(SaveHistory){ finished[threadIdx.x] = block_tmax[threadIdx.x] == 0.0; }
-                has_left[threadIdx.x] = false;
                 symmetry_exploited[threadIdx.x] = false;
             } else {
                 is_valid_arr[threadIdx.x] = false;
@@ -1349,7 +1278,7 @@ py::array_t<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range
         if constexpr(map_rhs_to_coord<id>() == CoordSys::Cartesian){
             if(!request.planes.empty()) throw std::invalid_argument("Boozer phase planes require a Boozer field");
             for(size_t j=0; j<request.criteria.size(); j+=2)
-                if(request.criteria[j] != 2 && request.criteria[j] != 4 && request.criteria[j] != 5)
+                if(request.criteria[j] != 2 && request.criteria[j] != 4 && request.criteria[j] != 5 && request.criteria[j] != 6)
                     throw std::invalid_argument("This stopping criterion requires Boozer coordinates");
         }
         if(size_t(request.capacity) > size_t(std::numeric_limits<py::ssize_t>::max()) / 6 / sizeof(double) / size_t(nparticles))
@@ -2336,7 +2265,6 @@ __global__ void test_gpu_timestep_kernel(double* out, double* init_pos, double* 
     __shared__ double block_dtmax[PARTICLES_PER_BLOCK];
     __shared__ double state[4 * PARTICLES_PER_BLOCK];
     __shared__ double zeta_offsets[PARTICLES_PER_BLOCK];
-    __shared__ bool has_left[PARTICLES_PER_BLOCK];
 
     bool is_valid = idx < nparticles && threadIdx.x < PARTICLES_PER_BLOCK;
     __shared__ bool is_valid_arr[PARTICLES_PER_BLOCK];
@@ -2345,7 +2273,6 @@ __global__ void test_gpu_timestep_kernel(double* out, double* init_pos, double* 
     }
     // if thread is responsible for a valid particle id, load that particle's data
     if(is_valid){
-        has_left[threadIdx.x] = false;
         zeta_offsets[threadIdx.x] = 0;
         for(int i=0; i<4; ++i){
             state[i*PARTICLES_PER_BLOCK + threadIdx.x] = loc_arr[i];
@@ -2377,7 +2304,7 @@ __global__ void test_gpu_timestep_kernel(double* out, double* init_pos, double* 
                             symmetry_exploited, state, block_mu, is_valid_arr, args...);
         dp5_one_step<double, id, 6>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
                             symmetry_exploited, state, block_mu, is_valid_arr, args...);
-        adjust_time<double, id>(block_t, block_dt, block_tmax, state, block_derivs, x_temp, has_left, block_dtmax, is_valid_arr, zeta_offsets);
+        adjust_time<double, id>(block_t, block_dt, block_tmax, state, block_derivs, x_temp, block_dtmax, is_valid_arr, zeta_offsets);
         // if the particle moved, write output and load the next particle that is needed
         if(threadIdx.x < PARTICLES_PER_BLOCK && is_valid_arr[threadIdx.x] && block_t[threadIdx.x] != 0.0){
             // write output for current particle
@@ -2398,7 +2325,6 @@ __global__ void test_gpu_timestep_kernel(double* out, double* init_pos, double* 
                 block_mu[threadIdx.x] = mu[idx];
                 block_t[threadIdx.x] = t[idx];
                 block_dtmax[threadIdx.x] = dtmax[idx];
-                has_left[threadIdx.x] = false;
                 symmetry_exploited[threadIdx.x] = false;
             } else {
                 is_valid_arr[threadIdx.x] = false;

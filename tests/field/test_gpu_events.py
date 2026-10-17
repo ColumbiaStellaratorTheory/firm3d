@@ -44,6 +44,20 @@ def constant_field(iota=0.4):
 
 
 class TestGPUEventsHost(unittest.TestCase):
+    def test_cartesian_classifier_preserves_criterion_index(self):
+        classifier = object()
+        criteria = [None, classifier, IterationStoppingCriterion(0)]
+        options = _event_options(
+            np.array([[1, 0, 0]]),
+            stopping_criteria=criteria,
+            boozer=False,
+            surface_classifier=classifier,
+        )
+        self.assertEqual(options["levelset_indices"], [1])
+        self.assertEqual(options["stopping_criteria"][:2], [None, None])
+        self.assertEqual(options["max_hits"], 1)
+        self.assertIs(criteria[1], classifier)
+
     def test_polynomial_roots_and_winding(self):
         compiler = shlex.split(os.environ.get("CXX", "c++"))
         if not shutil.which(compiler[0]):
@@ -122,6 +136,165 @@ class TestGPUEventsHost(unittest.TestCase):
 
 @unittest.skipUnless(HAS_CUDA, "requires CUDA bindings and a GPU")
 class TestGPUEventsDevice(unittest.TestCase):
+    def test_flux_boundaries_are_explicit_like_cpu(self):
+        source = constant_field(0)
+        points = np.array([[0.3, 0, 0], [0.9, 0, 0], [1.01, 0, 0]])
+        speeds = np.full(3, 0.7 * SPEED)
+        for precision in ["double", "single"]:
+            field = CatapultBoozerField(source, 2, 2, 2, precision=precision)
+            for criteria in [
+                None,
+                [],
+                [MaxToroidalFluxStoppingCriterion(1.1)],
+                [None, MaxToroidalFluxStoppingCriterion(0.8)],
+            ]:
+                cpu, cpu_hits = trace_particles_boozer(
+                    source,
+                    points,
+                    speeds,
+                    Ekin=ENERGY,
+                    tmax=5e-9,
+                    stopping_criteria=criteria,
+                    forget_exact_path=True,
+                    axis=0,
+                )
+                for forget in [True, False]:
+                    with self.subTest(
+                        precision=precision, criteria=criteria, forget=forget
+                    ):
+                        paths, hits = trace_particles_boozer_gpu(
+                            field,
+                            points,
+                            speeds,
+                            Ekin=ENERGY,
+                            tmax=5e-9,
+                            dt=1e-10,
+                            dt_save=1e-10,
+                            stopping_criteria=criteria,
+                            forget_exact_path=forget,
+                        )
+                        for path, hit, reference, reference_hits in zip(
+                            paths, hits, cpu, cpu_hits
+                        ):
+                            np.testing.assert_array_equal(
+                                hit[:, 1] if len(hit) else [],
+                                reference_hits[:, 1] if len(reference_hits) else [],
+                            )
+                            if len(hit):
+                                self.assertEqual(path[-1, 0], hit[-1, 0])
+                                self.assertGreaterEqual(path[-1, 1], 0.8)
+                            else:
+                                self.assertAlmostEqual(
+                                    path[-1, 0], reference[-1, 0], delta=1e-23
+                                )
+                                self.assertEqual(path[-1, 0], 5e-9)
+
+    def test_endpoint_criteria_at_clipped_horizon_match_cpu(self):
+        source = constant_field(0)
+        point = np.array([[0.3, 0, 0]])
+        horizon = 1e-12
+        for precision in ["double", "single"]:
+            field = CatapultBoozerField(source, 2, 2, 2, precision=precision)
+            for criteria in [
+                [MaxToroidalFluxStoppingCriterion(0.2)],
+                [None, IterationStoppingCriterion(0)],
+            ]:
+                _, reference = trace_particles_boozer(
+                    source,
+                    point,
+                    [SPEED],
+                    Ekin=ENERGY,
+                    tmax=horizon,
+                    stopping_criteria=criteria,
+                    forget_exact_path=True,
+                    axis=0,
+                )
+                for forget in [True, False]:
+                    paths, hits = trace_particles_boozer_gpu(
+                        field,
+                        point,
+                        [SPEED],
+                        Ekin=ENERGY,
+                        tmax=horizon,
+                        dt=1e-9,
+                        dt_save=horizon / 10,
+                        stopping_criteria=criteria,
+                        forget_exact_path=forget,
+                    )
+                    self.assertEqual(hits[0].shape, (1, 6))
+                    self.assertEqual(hits[0][0, 1], reference[0][0, 1])
+                    self.assertEqual(hits[0][0, 0], horizon)
+                    self.assertEqual(paths[0][-1, 0], horizon)
+                    np.testing.assert_allclose(
+                        paths[0][-1], hits[0][0, [0, 2, 3, 4, 5]], rtol=3e-6, atol=1e-12
+                    )
+
+    def test_duplicate_velocity_stops_use_first_requested_index(self):
+        source = BoozerAnalytic(etabar=0.03, B0=5, N=0, G0=25, psi0=100, iota0=0.4)
+        field = CatapultBoozerField(source, 12, 12, 12)
+        point = np.array([[0.3, np.pi + 0.2, 0]])
+        for forget in [True, False]:
+            paths, hits = trace_particles_boozer_gpu(
+                field,
+                point,
+                [0.15 * SPEED],
+                Ekin=ENERGY,
+                tmax=1e-4,
+                vpars=[0, 0],
+                vpars_stop=True,
+                forget_exact_path=forget,
+                dt_save=1e-7,
+                tol=1e-10,
+            )
+            self.assertEqual(hits[0].shape, (1, 6))
+            self.assertEqual(hits[0][0, 1], 0)
+            self.assertEqual(paths[0][-1, 0], hits[0][0, 0])
+
+    def test_cartesian_surface_stop_is_explicit_and_horizon_clipped(self):
+        from firm3d.catapult.field import CatapultCartesianField
+        from firm3d.catapult.tracing import trace_particles_cartesian_gpu
+
+        for dtype in [np.float64, np.float32]:
+            field = CatapultCartesianField.__new__(CatapultCartesianField)
+            field.dtype = np.dtype(dtype)
+            field.surface_classifier = object()
+            field.rrange = (0.5, 1.5, 4)
+            field.phirange = (0, np.pi, 4)
+            field.zrange = (-0.1, 0.1, 4)
+            field.quad_info = np.zeros((1, 7, 64), dtype=dtype)
+            field.quad_info[0, 2, :] = 1
+            field.quad_info[0, 6, :] = np.tile(0.02 - np.linspace(-0.1, 0.1, 4), 16)
+            for horizon in [1e-10, 2e-10, 1e-8]:
+                for criteria in [None, [None, field.surface_classifier]]:
+                    for forget in [True, False]:
+                        paths, hits = trace_particles_cartesian_gpu(
+                            field,
+                            np.array([[1, 0, 0.019]]),
+                            [0.7 * SPEED],
+                            tmax=horizon,
+                            Ekin=ENERGY,
+                            dt=1e-9,
+                            dt_save=horizon / 4,
+                            stopping_criteria=criteria,
+                            forget_exact_path=forget,
+                        )
+                        stopped = criteria is not None and horizon >= 2e-10
+                        end = min(horizon, float(dtype(1e-9))) if stopped else horizon
+                        self.assertEqual(len(hits[0]), int(stopped))
+                        self.assertAlmostEqual(paths[0][-1, 0], end, delta=1e-24)
+                        np.testing.assert_allclose(
+                            paths[0][-1, 3], 0.019 + 0.7 * SPEED * end, rtol=2e-6
+                        )
+                        if stopped:
+                            self.assertEqual(hits[0][0, 1], -2)
+                            self.assertEqual(hits[0][0, 0], end)
+                            np.testing.assert_allclose(
+                                paths[0][-1],
+                                hits[0][0, [0, 2, 3, 4, 5]],
+                                rtol=3e-6,
+                                atol=1e-12,
+                            )
+
     def test_phase_interval_resets_and_stops_at_deadline(self):
         speed = 0.8 * SPEED
         interval = 0.3 / speed
@@ -509,6 +682,7 @@ class TestGPUEventsDevice(unittest.TestCase):
 
         field = CatapultCartesianField.__new__(CatapultCartesianField)
         field.dtype = np.dtype(np.float64)
+        field.surface_classifier = object()
         field.rrange = (0.5, 1.5, 4)
         field.phirange = (0, np.pi, 4)
         field.zrange = (-0.1, 0.1, 4)

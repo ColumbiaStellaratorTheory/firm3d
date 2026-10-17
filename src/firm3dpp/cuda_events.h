@@ -2,6 +2,7 @@
 #define FIRM3D_CUDA_EVENTS_H
 
 #include "dopri5_events.h"
+#include <algorithm>
 #include <pybind11/stl.h>
 
 // Only event-enabled kernel specializations use these buffers. The ordinary
@@ -43,9 +44,13 @@ struct EventRequest {
         }
         for(double x : planes) if(!std::isfinite(x)) throw std::invalid_argument("Nonfinite phase plane");
         for(double x : vpars) if(!std::isfinite(x)) throw std::invalid_argument("Nonfinite vpar plane");
+        vector<int> levelsets = options.contains("levelset_indices")
+            ? options["levelset_indices"].cast<vector<int>>() : vector<int>{};
+        int criterion_index = 0;
         for(auto criterion : options["stopping_criteria"].cast<vector<shared_ptr<StoppingCriterion>>>()){
             double kind, limit;
-            if(!criterion){ kind = 5; limit = 0; }
+            if(std::find(levelsets.begin(), levelsets.end(), criterion_index++) != levelsets.end()){ kind = 6; limit = 0; }
+            else if(!criterion){ kind = 5; limit = 0; }
             else if(auto c = std::dynamic_pointer_cast<MaxToroidalFluxStoppingCriterion>(criterion)){ kind = 0; limit = c->get_max_s(); }
             else if(auto c = std::dynamic_pointer_cast<MinToroidalFluxStoppingCriterion>(criterion)){ kind = 1; limit = c->get_min_s(); }
             else if(auto c = std::dynamic_pointer_cast<IterationStoppingCriterion>(criterion)){ kind = 2; limit = c->get_max_iter(); }
@@ -76,10 +81,43 @@ __device__ inline bool write_event(DeviceEvents events, int particle, double tim
     return true;
 }
 
+template<typename T>
+__device__ T classifier_at(const T* xyz, const T* quadpts) {
+    T phi = atan2(xyz[1], xyz[0]);
+    T period = T(grid_ranges_d[5]);
+    phi = fmod(phi, period);
+    phi += period * (phi < 0);
+    if(xyz[2] < 0){
+        phi = fmod(T(2*M_PI) - phi, period);
+        phi += period * (phi < 0);
+    }
+    T point[3] = {hypot(xyz[0], xyz[1]), phi, fabs(xyz[2])};
+    T shape[3][4];
+    int cell[3];
+    for(int d = 0; d < 3; ++d){
+        T offset = (point[d] - T(grid_ranges_d[4*d])) * T(grid_ranges_d[4*d+3]);
+        int index = max(0, min(3*(int(offset)/3), int(grid_ranges_d[4*d+2])-4));
+        T x = offset - T(index);
+        shape[d][0] = -T(1.0/6.0)*(x-1)*(x-2)*(x-3);
+        shape[d][1] = T(0.5)*x*(x-2)*(x-3);
+        shape[d][2] = -T(0.5)*x*(x-1)*(x-3);
+        shape[d][3] = T(1.0/6.0)*x*(x-1)*(x-2);
+        cell[d] = index/3;
+    }
+    const int base = 64*(7*(cell[0]*n_x2_d*n_x3_d + cell[1]*n_x3_d + cell[2]) + 6);
+    T value = 0;
+    for(int i = 0; i < 4; ++i)
+        for(int j = 0; j < 4; ++j)
+            for(int k = 0; k < 4; ++k)
+                value += shape[0][i]*shape[1][j]*shape[2][k]*quadpts[base+16*i+4*j+k];
+    return value;
+}
+
 template<typename T, RHS id>
 __device__ void record_step_events(DeviceEvents events, int particle, int p,
                                    T* state, const T* derivs, const T* x_temp,
-                                   double time, T h, double tmax, double zeta_offset) {
+                                   double time, T h, double tmax, double zeta_offset,
+                                   const T* quadpts) {
     using namespace firm3d_events;
     Step step;
     step.t = time; step.h = double(h);
@@ -97,22 +135,36 @@ __device__ void record_step_events(DeviceEvents events, int particle, int p,
     }
     double limit = fmin(1.0, (tmax - time) / step.h);
     const double step_limit = limit;
+    const double endpoint_time = fmin(tmax, time + step.h);
     int stop_index = 0;
     bool endpoint_stop = false;
     bool root_stop = false;
     bool interval_stop = false;
     const int iteration = ++events.iterations[particle];
-    const double zeta_end = double(x_temp[3*PARTICLES_PER_BLOCK+p]) + step.zeta_offset;
+    const double x_end = limit == 1 ? double(x_temp[PARTICLES_PER_BLOCK+p]) : value(step.state[0], limit);
+    const double y_end = limit == 1 ? double(x_temp[2*PARTICLES_PER_BLOCK+p]) : value(step.state[1], limit);
+    const double zeta_end = (limit == 1 ? double(x_temp[3*PARTICLES_PER_BLOCK+p])
+                                      : value(step.state[2], limit)) + step.zeta_offset;
     if(iteration == 1) events.transit_start[particle] = zeta_end;
-    for(int j = 0; limit == 1 && j < events.ncriteria; ++j){
+    for(int j = 0; j < events.ncriteria; ++j){
         int kind = int(events.criteria[2*j]);
         double bound = events.criteria[2*j+1];
-        double s = hypot(double(x_temp[PARTICLES_PER_BLOCK+p]),
-                         double(x_temp[2*PARTICLES_PER_BLOCK+p]));
+        double s = hypot(x_end, y_end);
         bool stop = kind == 0 ? s >= bound : kind == 1 ? s <= bound :
                     kind == 2 ? iteration > bound : kind == 3 ?
                     fabs(floor((zeta_end - events.transit_start[particle])/period)) >= bound :
                     kind == 4 ? step.h < bound : false;
+        if constexpr(map_rhs_to_coord<id>() == CoordSys::Cartesian){
+            // The Cartesian classifier is a requested endpoint criterion.
+            // Evaluate the same table at a clipped final point when necessary.
+            if(kind == 6){
+                if(limit == 1){ stop = derivs[(nd*6 + 4)*PARTICLES_PER_BLOCK+p] < 0; }
+                else {
+                    T point[3] = {T(x_end), T(y_end), T(zeta_end)};
+                    stop = classifier_at(point, quadpts) < 0;
+                }
+            }
+        }
         if(stop){ stop_index = -1-j; endpoint_stop = true; break; }
     }
     // A cursor per event label preserves simultaneous hits: advancing a global
@@ -142,14 +194,16 @@ __device__ void record_step_events(DeviceEvents events, int particle, int p,
             double after = cursors[events.nplanes+j];
             int count = roots(velocity, after, limit, zeros);
             for(int k = 0; k < count; ++k){
-                if(zeros[k] > after && zeros[k] <= next && crossing_direction(velocity, zeros[k])){
+                if(zeros[k] > after &&
+                   (zeros[k] < next || (zeros[k] == next && index < events.nplanes)) &&
+                   crossing_direction(velocity, zeros[k])){
                     next = zeros[k]; index = events.nplanes + j; break;
                 }
             }
         }
         if(index < 0 || next > limit){
             interval_stop = events.max_phase_interval > 0 &&
-                events.last_phase_time[particle] + events.max_phase_interval <= time + step_limit*step.h;
+                events.last_phase_time[particle] + events.max_phase_interval <= endpoint_time;
             if(interval_stop) endpoint_stop = false;
             break;
         }
@@ -173,19 +227,20 @@ __device__ void record_step_events(DeviceEvents events, int particle, int p,
     }
     if(endpoint_stop){
         double hit[4];
-        for(int j = 0; j < 4; ++j) hit[j] = double(x_temp[(j+1)*PARTICLES_PER_BLOCK+p]);
+        for(int j = 0; j < 4; ++j) hit[j] = step_limit == 1
+            ? double(x_temp[(j+1)*PARTICLES_PER_BLOCK+p]) : double(T(value(step.state[j], step_limit)));
         if constexpr(map_rhs_to_coord<id>() == CoordSys::Boozer){
             hit[0] = hypot(hit[0], hit[1]); hit[1] = step.theta(limit);
             hit[2] += step.zeta_offset;
         }
-        write_event(events, particle, time + limit*step.h, stop_index, hit);
+        write_event(events, particle, endpoint_time, stop_index, hit);
     }
     if(endpoint_stop || root_stop || interval_stop || limit < fmin(1.0, (tmax-time)/step.h) ||
        (events.phases_stop && events.phase_counts[particle]) ||
        (events.max_phase_hits && events.phase_counts[particle] >= events.max_phase_hits)){
         events.end_times[particle] = interval_stop
             ? events.last_phase_time[particle] + events.max_phase_interval
-            : time + limit*step.h;
+            : (endpoint_stop ? endpoint_time : time + limit*step.h);
     }
     // Preserve poloidal winding across atan2's branch cut. Toroidal winding
     // is maintained by the tracer for both event and ordinary output paths.

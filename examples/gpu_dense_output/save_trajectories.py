@@ -84,7 +84,7 @@ for start in range(first, last, batch_size):
         max_hits=max_hits,
     )
     for iParticle, (res_ty, res_hit) in enumerate(zip(res_tys, res_hits), start=start):
-        if not np.any(res_hit[:, 1] == -1):
+        if not len(res_hit) or not np.any(res_hit[:, 1] == -1):
             continue  # Particle was not lost to the wall, skip
         np.savetxt(f"particle_{iParticle}_traj.txt", res_ty)
         np.savetxt(f"particle_{iParticle}_hits.txt", res_hit)

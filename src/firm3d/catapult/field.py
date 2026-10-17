@@ -188,8 +188,9 @@ class CatapultCartesianField:
         field: A simsopt :class:`InterpolatedField` in cylindrical coordinates,
             with ``r_range``, ``phi_range`` and ``z_range`` attributes.
         surface_classifier: A simsopt :class:`SurfaceClassifier`. Its signed
-            distance to the plasma boundary is tabulated alongside the field
-            and is what the kernel tests to decide that a particle is lost.
+            distance to the plasma boundary is tabulated alongside the field.
+            Include this object in the tracer's stopping_criteria to stop
+            outside that surface.
         precision: ``"double"`` (the default) or ``"single"``: the precision
             the table is stored in and the kernel runs in. Single precision
             is faster and halves the memory, and reproduces double

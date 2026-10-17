@@ -56,6 +56,7 @@ def _event_options(
     max_phase_hits=0,
     max_phase_interval=None,
     boozer=True,
+    surface_classifier=None,
 ):
     """Validate CPU-style event requests before launching any GPU work."""
     if (
@@ -91,6 +92,11 @@ def _event_options(
     phases = array("phases", phases)
     vpars = array("vpars", vpars)
     criteria = [] if stopping_criteria is None else list(stopping_criteria)
+    levelset_indices = []
+    for i, criterion in enumerate(criteria):
+        if surface_classifier is not None and criterion is surface_classifier:
+            levelset_indices.append(i)
+            criteria[i] = None
     count = len(phases)
     modes = [
         np.full(count, default) if values is None else array(name, values)
@@ -136,6 +142,7 @@ def _event_options(
         "planes": np.column_stack((phases, *modes)).ravel(),
         "vpars": vpars,
         "stopping_criteria": criteria,
+        "levelset_indices": levelset_indices,
         "phases_stop": phases_stop,
         "vpars_stop": vpars_stop,
         "max_hits": max_hits if count or len(vpars) else 1,
@@ -164,7 +171,10 @@ def _unpack_events(output, nparticles, dtype, save_times, options):
     rows = np.asarray(hits, dtype=np.float64).reshape(
         nparticles, options["max_hits"], 6
     )
-    events = [particle[np.isfinite(particle[:, 0])] for particle in rows]
+    events = []
+    for particle in rows:
+        hits = particle[np.isfinite(particle[:, 0])]
+        events.append(hits if len(hits) else np.asarray([]))
     nplanes = len(options["planes"]) // 4
     for body, particle, end in zip(bodies, events, end_times):
         if len(particle) and particle[-1, 0] == end and particle[-1, 1] >= nplanes:
@@ -394,20 +404,18 @@ def _vtotal(Ekin, mass):
     return float(np.sqrt(2 * Ekin / mass))
 
 
-def _cpu_format(inits, parallel_speeds, bodies, tmax, infer_losses=True):
+def _cpu_format(inits, parallel_speeds, bodies, terminal_times=None):
     """
     Assemble the CPU tracers' (res_tys, res_hits) from GPU results.
 
     inits, parallel_speeds: the initial conditions, for the t = 0 row.
     bodies: per particle, the rows (t, x1, x2, x3, vpar, ...) after t = 0:
         the saved trajectory, or just the final state.
-    tmax: per particle, to decide who was lost.
-
     res_tys[i] has rows (t, x1, x2, x3, vpar): the initial state, then the
-    rows of bodies[i]. res_hits[i] is a single row (t, -1, x1, x2, x3, vpar)
-    at the final state of a lost particle, as the CPU tracer records a hit on
-    its first stopping criterion, and an empty array otherwise. Everything is
-    returned in float64.
+    rows of bodies[i]. Hits are returned by the kernel when criteria or hit
+    planes are requested; this function supplies empty arrays otherwise.
+    Everything is returned in float64. For traces without events, pass the
+    requested horizons as terminal_times to preserve their double precision.
     """
     nparticles = inits.shape[0]
     first = np.column_stack(
@@ -417,13 +425,10 @@ def _cpu_format(inits, parallel_speeds, bodies, tmax, infer_losses=True):
     res_hits = []
     for i in range(nparticles):
         body = np.asarray(bodies[i], dtype=np.float64)[:, :5]
+        if terminal_times is not None:
+            body[-1, 0] = terminal_times[i]
         res_tys.append(np.vstack((first[i], body[1:] if body[0, 0] == 0 else body)))
-        # the kernel stops at t >= tmax in the field's precision, so allow
-        # for tmax's own rounding to float32 before calling a particle lost
-        if infer_losses and body[-1, 0] < tmax[i] * (1 - 1e-6):
-            res_hits.append(np.array([[body[-1, 0], -1.0, *body[-1, 1:5]]]))
-        else:
-            res_hits.append(np.asarray([]))
+        res_hits.append(np.asarray([]))
     return res_tys, res_hits
 
 
@@ -483,8 +488,8 @@ def trace_particles_boozer_gpu(
     vpars: parallel-velocity levels to record, including zero for mirror hits.
     phases_stop, vpars_stop: stop at the earliest requested crossing.
     stopping_criteria: CPU Max/MinToroidalFlux, Iteration, ToroidalTransit or
-        StepSize criteria, checked at accepted endpoints. The field boundary
-        remains enforced. Custom CPU callbacks cannot run on the GPU.
+        StepSize criteria, checked at accepted endpoints. As on the CPU,
+        no boundary stop is added when criteria are omitted.
     max_hits: per-particle event capacity (default 1024); overflow raises.
     max_phase_hits: stop after this many phase hits; zero disables the limit.
     max_phase_interval: optional maximum time from launch or the last phase
@@ -498,9 +503,7 @@ def trace_particles_boozer_gpu(
     precede velocity indices; stopping criteria use -1-i. Event theta retains
     winding, and event zeta retains accumulated turns. Dense event roots are
     independent of dt_save and work with forget_exact_path=True. A launch on a plane is
-    excluded; a crossing at the right endpoint is included once. Without
-    explicit criteria, the enforced field-boundary hit has index -1; otherwise
-    it follows the requested criteria with index -1-len(stopping_criteria).
+    excluded; a crossing at the right endpoint is included once.
     All public rows use float64; field precision controls state accuracy.
     """
     if not isinstance(field, CatapultBoozerField):
@@ -547,10 +550,10 @@ def trace_particles_boozer_gpu(
         bodies = _to_boozer(output)[:, None, :]
     else:
         bodies = [_to_boozer(traj) for traj in output]
-    paths, losses = _cpu_format(
-        stz_inits, parallel_speeds, bodies, tmax, infer_losses=events is None
+    paths, empty_hits = _cpu_format(
+        stz_inits, parallel_speeds, bodies, tmax if events is None else None
     )
-    return paths, hits if events is not None else losses
+    return paths, hits if events is not None else empty_hits
 
 
 def trace_particles_boozer_perturbed_gpu(
@@ -674,10 +677,10 @@ def trace_particles_boozer_perturbed_gpu(
         bodies = _to_boozer(output)[:, None, :]
     else:
         bodies = [_to_boozer(traj) for traj in output]
-    paths, losses = _cpu_format(
-        stz_inits, parallel_speeds, bodies, tmax, infer_losses=events is None
+    paths, empty_hits = _cpu_format(
+        stz_inits, parallel_speeds, bodies, tmax if events is None else None
     )
-    return paths, hits if events is not None else losses
+    return paths, hits if events is not None else empty_hits
 
 
 def trace_particles_cartesian_gpu(
@@ -704,8 +707,7 @@ def trace_particles_cartesian_gpu(
     same option.
 
     field: a CatapultCartesianField, holding the field and the surface
-        classifier tabulated at the precision to trace in; particles are
-        stopped when they cross that surface
+        classifier tabulated at the precision to trace in
     xyz_inits: initial positions, shape (nparticles, 3), in (x, y, z)
     parallel_speeds: initial parallel speeds of the particles
     tmax: maximum time to trace particles, either a scalar applied to every
@@ -720,7 +722,8 @@ def trace_particles_cartesian_gpu(
     vpars, vpars_stop, max_hits and dt have the same meaning as in
     trace_particles_boozer_gpu. Cartesian tracing supports Iteration and
     StepSize stopping criteria; Boozer flux/transit criteria require a Boozer
-    field. The surface classifier remains enforced.
+    field. Include field.surface_classifier in stopping_criteria to stop
+    outside that surface. No boundary stop is added automatically.
 
     Returns (res_tys, res_hits) in CPU format, with velocity hit indices
     starting at zero and criterion indices -1-i.
@@ -740,6 +743,7 @@ def trace_particles_cartesian_gpu(
         vpars_stop=vpars_stop,
         max_hits=max_hits,
         boozer=False,
+        surface_classifier=field.surface_classifier,
     )
     output = _launch_cartesian(
         field,
@@ -758,7 +762,7 @@ def trace_particles_cartesian_gpu(
     if events is not None:
         output, hits = output
     bodies = output[:, None, :] if forget_exact_path else output
-    paths, losses = _cpu_format(
-        xyz_inits, parallel_speeds, bodies, tmax, infer_losses=events is None
+    paths, empty_hits = _cpu_format(
+        xyz_inits, parallel_speeds, bodies, tmax if events is None else None
     )
-    return paths, hits if events is not None else losses
+    return paths, hits if events is not None else empty_hits

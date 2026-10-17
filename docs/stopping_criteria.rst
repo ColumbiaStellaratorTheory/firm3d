@@ -10,8 +10,9 @@ Available Stopping Criteria
 
 These criteria are checked at accepted step endpoints. CATAPULT Boozer
 tracing accepts all five criteria below. Cartesian GPU tracing supports
-iteration and step-size criteria, as well as velocity hits. Field boundaries
-remain enforced on the GPU; custom Python stopping callbacks cannot run there.
+iteration and step-size criteria, as well as velocity hits. To stop at a
+Cartesian surface, include the GPU field's ``surface_classifier`` in
+``stopping_criteria``. No boundary criterion is added automatically.
 
 MaxToroidalFluxStoppingCriterion
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

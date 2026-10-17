@@ -73,8 +73,7 @@ The hits are returned in ``res_hits``, which is a list (length = number of parti
 
 The state vector is ``[s, theta, zeta, v_par]``.
 
-On the GPU, the enforced boundary follows requested criteria in the index
-sequence. Trajectory zeta and both hit angles retain accumulated turns.
+On the GPU, trajectory zeta and both hit angles retain accumulated turns.
 ``max_hits`` bounds hit storage per particle (default 1024); overflow raises
 an error. Increase the capacity or shorten the trace if needed.
 

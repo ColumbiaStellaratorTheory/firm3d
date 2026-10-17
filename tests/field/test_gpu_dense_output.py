@@ -18,6 +18,7 @@ from firm3d.catapult.field import (
     CatapultPerturbedBoozerField,
 )
 from firm3d.catapult.tracing import (
+    _event_options,
     _cpu_format,
     _save_times,
     _to_boozer,
@@ -27,7 +28,10 @@ from firm3d.catapult.tracing import (
     trace_particles_cartesian_gpu,
 )
 from firm3d.field.boozermagneticfield import BoozerAnalytic
-from firm3d.field.tracing import trace_particles_boozer
+from firm3d.field.tracing import (
+    MaxToroidalFluxStoppingCriterion,
+    trace_particles_boozer,
+)
 from firm3d.util.constants import (
     ALPHA_PARTICLE_CHARGE as CHARGE,
     ALPHA_PARTICLE_MASS as MASS,
@@ -52,11 +56,10 @@ class TestDenseOutputHost(unittest.TestCase):
             np.testing.assert_allclose(converted[:, 1], [0.3, 0.4])
 
     def test_endpoint_result_format(self):
-        # Both routes must preserve particle order, initial states, losses,
+        # Both routes preserve particle order and initial states without inferring hits,
         # float64 public output, and a single row for zero-duration paths.
         inits = np.array([[0.3, 0.1, 0.2], [0.4, 0.2, 0.3], [0.5, 0.3, 0.4]])
         speeds = np.array([1e6, 2e6, 3e6])
-        tmax = np.array([2, 2, 0])
         for dtype in [np.float32, np.float64]:
             with self.subTest(dtype=dtype):
                 endpoints = np.array(
@@ -67,20 +70,19 @@ class TestDenseOutputHost(unittest.TestCase):
                     ],
                     dtype=dtype,
                 )[:, None, :]
-                paths, hits = _cpu_format(inits, speeds, endpoints, tmax)
+                paths, hits = _cpu_format(inits, speeds, endpoints)
                 sampled_paths, sampled_hits = _cpu_format(
-                    inits, speeds, list(endpoints), tmax
+                    inits, speeds, list(endpoints)
                 )
                 self.assertEqual([len(path) for path in paths], [2, 2, 1])
-                self.assertEqual([len(hit) for hit in hits], [0, 1, 0])
+                self.assertEqual([len(hit) for hit in hits], [0, 0, 0])
                 for i, (path, hit) in enumerate(zip(paths, hits)):
                     self.assertEqual(path.dtype, np.float64)
                     np.testing.assert_array_equal(path[0], [0, *inits[i], speeds[i]])
                     np.testing.assert_array_equal(path, sampled_paths[i])
                     np.testing.assert_array_equal(hit, sampled_hits[i])
-                np.testing.assert_array_equal(hits[1], [[1, -1, *endpoints[1, 0, 1:5]]])
         self.assertEqual(
-            _cpu_format(np.empty((0, 3)), [], np.empty((0, 1, 7)), np.array([])),
+            _cpu_format(np.empty((0, 3)), [], np.empty((0, 1, 7))),
             ([], []),
         )
 
@@ -421,6 +423,7 @@ class TestDenseOutputGPU(unittest.TestCase):
                 points,
                 speeds,
                 tmax=ends,
+                stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
                 dt_save=1e-7,
                 forget_exact_path=forget,
                 tol=1e-10,
@@ -505,6 +508,7 @@ class TestDenseOutputGPU(unittest.TestCase):
         # resident blocks can hold forces the persistent kernel to refill slots.
         gpu = CatapultCartesianField.__new__(CatapultCartesianField)
         gpu.dtype = np.dtype(np.float64)
+        gpu.surface_classifier = object()
         gpu.rrange = (0.5, 1.5, 4)
         gpu.phirange = (0, np.pi, 4)
         gpu.zrange = (-0.1, 0.1, 4)
@@ -526,9 +530,15 @@ class TestDenseOutputGPU(unittest.TestCase):
             vpar,
             tmax=tmax,
             dt_save=2e-10,
+            stopping_criteria=[gpu.surface_classifier],
         )
         endpoints, endpoint_hits = trace_particles_cartesian_gpu(
-            gpu, stz, vpar, tmax=tmax, forget_exact_path=True
+            gpu,
+            stz,
+            vpar,
+            tmax=tmax,
+            forget_exact_path=True,
+            stopping_criteria=[gpu.surface_classifier],
         )
         np.testing.assert_array_equal(
             [path[-1] for path in endpoints], [path[-1] for path in tys]
@@ -555,7 +565,7 @@ class TestDenseOutputGPU(unittest.TestCase):
 
         # The accepted loss step is h=1e-9; the next proposed step is larger.
         # Seven-column output reports the enclosing step, including at a loss.
-        loss = _launch_cartesian(
+        loss, _ = _launch_cartesian(
             gpu,
             stz[1:2],
             vpar[1:2],
@@ -567,7 +577,14 @@ class TestDenseOutputGPU(unittest.TestCase):
             SPEED,
             1e-9,
             save_times=_save_times([1e-8], 1e-10),
-        )[0]
+            event_options=_event_options(
+                stz[1:2],
+                stopping_criteria=[gpu.surface_classifier],
+                boozer=False,
+                surface_classifier=gpu.surface_classifier,
+            ),
+        )
+        loss = loss[0]
         self.assertAlmostEqual(loss[-1, 0], 1e-9, delta=1e-23)
         self.assertAlmostEqual(loss[-1, 5], 1e-9, delta=1e-23)
 
