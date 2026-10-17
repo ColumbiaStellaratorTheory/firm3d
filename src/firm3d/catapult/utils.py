@@ -6,22 +6,24 @@ import numpy as np
 __all__ = ["boozer_interpolant", "cartesian_interpolant"]
 
 
-def boozer_interpolant(field, nfp, ns, ntheta, nzeta, vacuum=False, dtype=np.float64):
+def boozer_interpolant(
+    field, nfp, ns, ntheta, nzeta, vacuum=False, dtype=np.float64, regular_axis=False
+):
     r"""
     Set up a Boozer vacuum interpolant for tracing.
 
     Args:
         field: BoozerMagneticField object
         nfp: Integer, number of field periods in the device
-        n_meta_grid_pts: Integer, number of cells in s, theta, zeta
-            to use for interpolation
+        ns, ntheta, nzeta: Number of interpolation cells per coordinate.
 
     Returns:
-        srange : (s_start, s_end, number of grid points in s for interpolation)
+        srange : Radial grid range; indexes r = sqrt(s) with regular_axis.
         trange : same as srange, but for theta
         zrange : same as srange, but for zeta
-        cell_quad_pts : The interpolant data. Each row is a point in the grid,
-            data is stored in columns modB, dmodBds, dmodBdtheta, dmodBdzeta, G, iota
+        cell_quad_pts : Interpolant values at grid points. With regular_axis,
+            the radial grid is uniform in r = sqrt(s) and holds B, Bx, By,
+            Bzeta, G, and iota.
         maximum observed J at grid points, useful for rejection sampling
     """
     srange = (0, 1.0, 3 * ns + 1)
@@ -29,6 +31,8 @@ def boozer_interpolant(field, nfp, ns, ntheta, nzeta, vacuum=False, dtype=np.flo
     zrange = (0, 2 * np.pi / nfp, 3 * nzeta + 1)
 
     s_grid = np.linspace(srange[0], srange[1], srange[2])
+    if regular_axis:
+        s_grid = s_grid**2
     theta_grid = np.linspace(trange[0], trange[1], trange[2])
     zeta_grid = np.linspace(zrange[0], zrange[1], zrange[2])
 
@@ -49,7 +53,13 @@ def boozer_interpolant(field, nfp, ns, ntheta, nzeta, vacuum=False, dtype=np.flo
     I = field.I()
     iota = field.iota()
     modB = field.modB()
-    modB_derivs = field.modB_derivs()
+    if regular_axis:
+        if not vacuum:
+            raise ValueError("regular_axis requires a vacuum field")
+        Bx, By = field.modB_cartesian_derivs()
+        modB_derivs = np.hstack((Bx, By, field.dmodBdzeta()))
+    else:
+        modB_derivs = field.modB_derivs()
 
     if vacuum:
         # Vacuum approximation: G=const, I=0, K=0

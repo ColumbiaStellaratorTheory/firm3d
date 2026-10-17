@@ -224,6 +224,8 @@ def trace_particles_boozer_perturbed(
     else:
         speed_total = float(np.sqrt(2 * Ekin / m))
 
+    if getattr(perturbed_field.B0, "regular_axis", False):
+        raise NotImplementedError("regular_axis is not supported for perturbed tracing")
     if mode is not None:
         mode = mode.lower()
         assert mode in ["gc", "gc_vac", "gc_nok"]
@@ -406,7 +408,8 @@ def trace_particles_boozer(
             ODE_solver. If 1, tracing is performed in coordinates
             (sqrt(s)*cos(theta), sqrt(s)*sin(theta), zeta). If 2, tracing is
             performed in coordinates (s*cos(theta),s*sin(theta),zeta).
-            Option 2 (default) is recommended.
+            The default is 2, or 1 for ``regular_axis=True`` fields; those
+            fields require option 1.
         dt: time step for the symplectic solver. Only used if `ODE_solver` is
             "symplectic".
         ODE_solver: Choice of ODE_solver: "boost", "dormand_prince" or "symplectic"
@@ -457,6 +460,8 @@ def trace_particles_boozer(
     if vpars_stop and (not len(vpars)):
         raise ValueError("No vpars provided for the vpar stopping criterion")
 
+    if getattr(field, "regular_axis", False) and ODE_solver == "symplectic":
+        raise ValueError("regular_axis requires an adaptive ODE solver")
     if ODE_solver == "symplectic":
         if abstol is not None or reltol is not None:
             warn(
@@ -482,7 +487,9 @@ def trace_particles_boozer(
             )
     # Set default values for parameters
     if axis is None:
-        axis = 2
+        axis = 1 if getattr(field, "regular_axis", False) else 2
+    if getattr(field, "regular_axis", False) and axis != 1:
+        raise ValueError("regular_axis vacuum tracing requires axis=1")
     if reltol is None:
         reltol = tol
     if abstol is None:
@@ -519,6 +526,9 @@ def trace_particles_boozer(
             )
     else:
         mode = "gc_" + field.field_type
+
+    if getattr(field, "regular_axis", False) and mode != "gc_vac":
+        raise ValueError("regular_axis currently supports gc_vac only")
 
     res_tys = []
     res_hits = []

@@ -134,7 +134,8 @@ void init_tracing(py::module_ &m){
         py::arg("mu_in").noconvert(),
         py::arg("psi0"),
         py::arg("nparticles"),
-        py::arg("vacuum") = false
+        py::arg("vacuum") = false,
+        py::arg("regular_axis") = false
         );
 
     m.def("boozer_gpu_tracing", &boozer_gpu_tracing<float>,
@@ -153,7 +154,8 @@ void init_tracing(py::module_ &m){
         py::arg("mu_in").noconvert(),
         py::arg("psi0"),
         py::arg("nparticles"),
-        py::arg("vacuum") = false
+        py::arg("vacuum") = false,
+        py::arg("regular_axis") = false
         );
 
 
