@@ -38,16 +38,23 @@ defaults, and return the same ``(res_tys, res_hits)``:
 .. code-block:: python
 
     from firm3d.catapult.tracing import trace_particles_boozer_gpu
+    from firm3d.field.tracing import MaxToroidalFluxStoppingCriterion
     res_tys, res_hits = trace_particles_boozer_gpu(
         field_gpu, stz_inits, vpar_inits, tmax=1e-2, Ekin=Ekin, mass=mass,
         charge=charge, forget_exact_path=True,
+        stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
     )
     times, loss_fraction = compute_loss_fraction(res_tys)
 
-The kernels stop a particle at :math:`s = 1` (or at the surface of the
-classifier). This is equivalent to the CPU tracer's
-``MaxToroidalFluxStoppingCriterion(1.0)``, and ``res_hits`` records it with
-index ``-1`` as the CPU does for its first criterion.
+As on the CPU, stopping criteria are explicit. The example stops at
+:math:`s \ge 1` and records criterion index ``-1``. Without criteria, tracing
+continues to ``tmax``. For Cartesian tracing, include
+``field_gpu.surface_classifier`` in ``stopping_criteria`` to stop outside
+the tabulated classifier surface.
+
+Trajectory saving and section hits follow :ref:`trajectory_saving`; stopping
+options are described in :ref:`stopping_criteria`. See
+:ref:`gpu_dense_output_examples` for saving, reloading, and Poincaré plotting.
 
 Single precision
 ----------------

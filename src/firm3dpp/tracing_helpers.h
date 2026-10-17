@@ -30,6 +30,7 @@ class ToroidalTransitStoppingCriterion : public StoppingCriterion {
     public:
         ToroidalTransitStoppingCriterion(int max_transits) : max_transits(max_transits) {
         };
+        int get_max_transits() const { return max_transits; }
         bool operator()(int iter, double dt, double t, double s, double theta, double zeta, double vpar=0) override {
             if (iter == 1) {
               zeta_last = M_PI;
@@ -49,6 +50,7 @@ class MaxToroidalFluxStoppingCriterion : public StoppingCriterion {
         double max_s;
     public:
         MaxToroidalFluxStoppingCriterion(double max_s) : max_s(max_s) {};
+        double get_max_s() const { return max_s; }
         bool operator()(int iter, double dt, double t, double s, double theta, double zeta, double vpar=0) override {
             return s>=max_s;
         };
@@ -59,6 +61,7 @@ class MinToroidalFluxStoppingCriterion : public StoppingCriterion {
         double min_s;
     public:
         MinToroidalFluxStoppingCriterion(double min_s) : min_s(min_s) {};
+        double get_min_s() const { return min_s; }
         bool operator()(int iter, double dt, double t, double s, double theta, double zeta, double vpar=0) override {
             return s<=min_s;
         };
@@ -69,6 +72,7 @@ class IterationStoppingCriterion : public StoppingCriterion {
         int max_iter;
     public:
         IterationStoppingCriterion(int max_iter) : max_iter(max_iter) {};
+        int get_max_iter() const { return max_iter; }
         bool operator()(int iter, double dt, double t, double s, double theta, double zeta, double vpar=0) override {
             return iter>max_iter;
         };
@@ -79,6 +83,7 @@ class StepSizeStoppingCriterion : public StoppingCriterion {
         double min_dt;
     public:
         StepSizeStoppingCriterion(double min_dt) : min_dt(min_dt) {};
+        double get_min_dt() const { return min_dt; }
         bool operator()(int iter, double dt, double t, double s, double theta, double zeta, double vpar=0) override {
             return dt<min_dt;
         };
@@ -214,7 +219,6 @@ bool check_stopping_criteria(
 )
 {
     boost::math::tools::eps_tolerance<double> roottol(-int(std::log2(abstol)));
-    uintmax_t rootmaxit = 200;
     vector<double> y(state_size), stzvt(state_size), stzvt_current(state_size);
 
     bool stop = false;
@@ -240,7 +244,8 @@ bool check_stopping_criteria(
     // Now check whether we have hit any of the vpar planes
     for (int i = 0; i < vpars.size(); ++i) {
         double vpar = vpars[i];
-        if((vpar_last-vpar != 0) && (vpar_current-vpar != 0) && (((vpar_last-vpar > 0) ? 1 : ((vpar_last-vpar < 0) ? -1 : 0)) != ((vpar_current-vpar > 0) ? 1 : ((vpar_current-vpar < 0) ? -1 : 0)))){ // check whether vpar = vpars[i] was crossed
+        // Exclude the left endpoint and include the right to count a boundary hit once.
+        if((vpar_last-vpar != 0) && (((vpar_last-vpar > 0) ? 1 : ((vpar_last-vpar < 0) ? -1 : 0)) != ((vpar_current-vpar > 0) ? 1 : ((vpar_current-vpar < 0) ? -1 : 0)))){ // check whether vpar = vpars[i] was crossed
             std::function<double(double)> rootfun = [&dense, &y, &vpar_last, &vpar, &stzvt, &axis, &vnorm, &tnorm](double tau){
                 dense.calc_state(tau, y);
                 y_to_stzvt(y, stzvt, axis, vnorm, tnorm);
@@ -251,6 +256,7 @@ bool check_stopping_criteria(
                     return (stzvt[3]-vpar)/vpar;
                 }
             };
+            uintmax_t rootmaxit = 200;
             auto root = toms748_solve(rootfun, tau_last, tau_current, vpar_last-vpar, vpar_current-vpar, roottol, rootmaxit);
             double f0 = rootfun(root.first);
             double f1 = rootfun(root.second);
@@ -282,8 +288,14 @@ bool check_stopping_criteria(
         double phase_last = nz * zeta_last + mt * theta_last - omega*t_last;
         double phase_current = nz * zeta_current + mt * theta_current - omega*t_current;
         
-        if((std::floor((phase_last-phase)/(2*M_PI)) != std::floor((phase_current-phase)/(2*M_PI))) && (phase_current != phase) && (phase_last != phase)) { // check whether phase+k*2pi for some k was crossed
-            int fak = std::round(((phase_last+phase_current)/2-phase)/(2*M_PI));
+        double winding = phase_current > phase_last
+            ? std::floor((phase_last-phase)/(2*M_PI)) + 1
+            : std::ceil((phase_last-phase)/(2*M_PI)) - 1;
+        double next_phase = winding*2*M_PI + phase;
+        bool crossed = (phase_last < next_phase && next_phase <= phase_current) ||
+                       (phase_current <= next_phase && next_phase < phase_last);
+        if (crossed) {
+            int fak = int(winding);
             double phase_shift = fak*2*M_PI + phase;
             assert((phase_last <= phase_shift && phase_shift <= phase_current) || (phase_current <= phase_shift && phase_shift <= phase_last));
             
@@ -293,6 +305,7 @@ bool check_stopping_criteria(
                 y_to_stzvt(y, stzvt, axis, vnorm, tnorm);
                 return nz * stzvt[2] + mt * stzvt[1] - omega*t - phase_shift;
             };
+            uintmax_t rootmaxit = 200;
             auto root = toms748_solve(rootfun, tau_last, tau_current, phase_last - phase_shift, phase_current - phase_shift, roottol, rootmaxit);
             double f0 = rootfun(root.first);
             double f1 = rootfun(root.second);

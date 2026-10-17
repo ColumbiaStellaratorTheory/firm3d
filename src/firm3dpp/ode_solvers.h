@@ -12,7 +12,17 @@
 #include <sstream>
 #include <iomanip>
 #include <boost/numeric/odeint.hpp>
-# include "tracing.h" // For BaseRHS
+#include "dopri5_dense_output.h"
+
+using std::vector;
+
+// Base class for RHS functions
+class BaseRHS {
+public:
+    virtual ~BaseRHS() = default;
+    virtual void operator()(const vector<double>& y, vector<double>& dydt, double t) = 0;
+    virtual int get_state_size() const = 0;
+};
 
 /**
  * ODESolver Base Class
@@ -293,14 +303,6 @@ public:
         e5_ = -2187.0/6784.0 - (-92097.0/339200.0);
         e6_ = 11.0/84.0 - 187.0/2100.0;
         e7_ = 0.0 - 1.0/40.0;
-        
-        // Dense output coefficients
-        d1_ = -12715105075.0/11282082432.0;
-        d3_ = 87487479700.0/32700410799.0;
-        d4_ = -10690763975.0/1880347072.0;
-        d5_ = 701980252875.0/199316789632.0;
-        d6_ = -1453857185.0/822651844.0;
-        d7_ = 69997945.0/29380423.0;
     }
     
     void initialize(const vector<double>& y0, double t0, double h0, BaseRHS& rhs) override {
@@ -521,8 +523,7 @@ public:
     }
     
     void calc_state(double t, vector<double>& y_out) override {
-        // Dense output interpolation using 5th order polynomial
-        // This allows evaluation at any point within the last step
+        // Match Boost dense output using the CPU/GPU shared scalar helper.
         
         if (t < t_old_ - 1e-13 || t > this->current_time_ + 1e-13) {
             std::ostringstream oss;
@@ -536,27 +537,11 @@ public:
             return;
         }
         
-        double theta = (t - t_old_) / h_old_;
-        double theta1 = 1.0 - theta;
-        
-        // Compute dense output coefficients
-        vector<double> rcont1 = y_out, rcont2 = y_out, rcont3 = y_out, rcont4 = y_out, rcont5 = y_out;
-        
+        const double fraction = (t - t_old_) / h_old_;
         for (size_t i = 0; i < y_out.size(); ++i) {
-            rcont1[i] = y_old_[i];
-            double ydiff = this->current_state_[i] - y_old_[i];
-            rcont2[i] = ydiff;
-            double bspl = h_old_ * k1_for_dense_[i] - ydiff;
-            rcont3[i] = bspl;
-            rcont4[i] = ydiff - h_old_ * k7_stored_[i] - bspl;
-            rcont5[i] = h_old_ * (d1_ * k1_for_dense_[i] + d3_ * k3_stored_[i] + d4_ * k4_stored_[i] +
-                                  d5_ * k5_stored_[i] + d6_ * k6_stored_[i] + d7_ * k7_stored_[i]);
-        }
-        
-        // Evaluate interpolation polynomial
-        for (size_t i = 0; i < y_out.size(); ++i) {
-            y_out[i] = rcont1[i] + theta * (rcont2[i] + theta1 * (rcont3[i] + 
-                      theta * (rcont4[i] + theta1 * rcont5[i])));
+            y_out[i] = dopri5_dense_state(y_old_[i], h_old_, fraction,
+                k1_for_dense_[i], k3_stored_[i], k4_stored_[i],
+                k5_stored_[i], k6_stored_[i], k7_stored_[i]);
         }
     }
     
@@ -588,7 +573,6 @@ private:
     double a61_, a62_, a63_, a64_, a65_;
     double a71_, a72_, a73_, a74_, a75_, a76_;
     double e1_, e2_, e3_, e4_, e5_, e6_, e7_;
-    double d1_, d3_, d4_, d5_, d6_, d7_;
     
     // Work arrays for Runge-Kutta stages
     vector<double> k1_, k2_, k3_, k4_, k5_, k6_, k7_;

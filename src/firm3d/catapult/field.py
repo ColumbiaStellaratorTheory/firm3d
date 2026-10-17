@@ -62,12 +62,14 @@ class CatapultBoozerField(_CatapultBoozerTable):
     :math:`(s, \theta, \zeta)`. This class builds that table once, at a chosen
     resolution and precision, so that it can be reused across tracing calls;
     it is the GPU counterpart of :class:`InterpolatedBoozerField`. Pass it as
-    the ``field`` argument of :func:`trace_particles_boozer_gpu` or
-    :func:`save_trajectories_boozer_gpu`. For a perturbed field use
+    the ``field`` argument of :func:`trace_particles_boozer_gpu`.
+    For a perturbed field use
     :class:`CatapultPerturbedBoozerField`.
 
     Args:
-        field: A :class:`BoozerMagneticField` of type ``"vac"`` or ``""``.
+        field: A :class:`BoozerMagneticField` of type ``"vac"``, ``"nok"``,
+            or ``""``. No-K fields retain ``I`` and ``G`` and their radial
+            derivatives, with ``K`` and its derivatives set to zero.
         ns, ntheta, nzeta: The number of interpolation cells in each
             coordinate.
         precision: ``"double"`` (the default) or ``"single"``: the precision
@@ -95,7 +97,7 @@ class CatapultBoozerField(_CatapultBoozerTable):
                 "CatapultBoozerField tabulates equilibrium fields; use "
                 "CatapultPerturbedBoozerField for a ShearAlfvenWavesSuperposition"
             )
-        super().__init__(field, ns, ntheta, nzeta, precision, ("vac", ""))
+        super().__init__(field, ns, ntheta, nzeta, precision, ("vac", "nok", ""))
         self.field = field
         self.srange, self.trange, self.zrange, self.quad_info, self.maxJ = (
             boozer_interpolant(
@@ -180,15 +182,15 @@ class CatapultCartesianField:
 
     Builds the table the Cartesian GPU kernel reads, once, so that it can be
     reused across tracing calls. Pass it as the ``field`` argument of
-    :func:`trace_particles_cartesian_gpu` or
-    :func:`save_trajectories_cartesian_gpu`, with ``surface_classifier=None``.
+    :func:`trace_particles_cartesian_gpu`.
 
     Args:
         field: A simsopt :class:`InterpolatedField` in cylindrical coordinates,
             with ``r_range``, ``phi_range`` and ``z_range`` attributes.
         surface_classifier: A simsopt :class:`SurfaceClassifier`. Its signed
-            distance to the plasma boundary is tabulated alongside the field
-            and is what the kernel tests to decide that a particle is lost.
+            distance to the plasma boundary is tabulated alongside the field.
+            Include this object in the tracer's stopping_criteria to stop
+            outside that surface.
         precision: ``"double"`` (the default) or ``"single"``: the precision
             the table is stored in and the kernel runs in. Single precision
             is faster and halves the memory, and reproduces double

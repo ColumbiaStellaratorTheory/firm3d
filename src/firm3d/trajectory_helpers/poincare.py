@@ -26,6 +26,37 @@ from ._utils import (
 )
 
 
+def _catapult_tolerance(options):
+    """Translate supported CPU options without silently ignoring differences."""
+    unsupported = set(options) - {
+        "tol",
+        "abstol",
+        "reltol",
+        "axis",
+        "ODE_solver",
+        "dt_save",
+    }
+    if unsupported:
+        raise ValueError(f"Unsupported CATAPULT solver options: {sorted(unsupported)}")
+    if options.get("axis") not in (None, 0):
+        raise ValueError("CATAPULT passing maps integrate in time (axis=0)")
+    if options.get("ODE_solver", "boost") != "boost":
+        raise ValueError("CATAPULT uses the Dormand-Prince solver")
+    tol = options.get("tol", 1e-9)
+    absolute = options.get("abstol")
+    relative = options.get("reltol")
+    absolute = tol if absolute is None else absolute
+    relative = tol if relative is None else relative
+    if absolute != relative:
+        raise ValueError("CATAPULT requires equal abstol and reltol")
+    if not np.isfinite(absolute) or absolute <= 0:
+        raise ValueError("CATAPULT tolerance must be finite and positive")
+    dt_save = options.get("dt_save", 1e-6)
+    if not np.isfinite(dt_save) or dt_save <= 0:
+        raise ValueError("dt_save must be finite and positive")
+    return absolute
+
+
 class PassingPoincare:
     def __init__(
         self,
@@ -58,7 +89,8 @@ class PassingPoincare:
         not change sign.
 
         Args:
-            field : The :class:`BoozerMagneticField` instance.
+            field : A :class:`BoozerMagneticField` for CPU event roots, or
+                    :class:`CatapultBoozerField` for GPU dense trajectories.
             lam : Pitch-angle variable :math:`\lambda = v_\perp^2/(v^2 B)`.
             sign_vpar : Sign of the parallel velocity (+1 or -1).
             mass : Particle mass.
@@ -75,10 +107,12 @@ class PassingPoincare:
             Nmaps : Number of Poincare return maps to compute for each initial
                     condition (default: 500).
             comm : MPI communicator for parallel execution (default: None).
-            tmax : Maximum integration time for each segment of the Poincare
-                   map (default: 1e-2 s).
-            solver_options : Dictionary of options to pass to the ODE solver
-                             (default: {}).
+            tmax : Maximum integration time for each return, with either
+                   backend (default: 1e-2 s). Both trace continuously with a
+                   total upper bound of Nmaps * tmax, stopping at Nmaps returns.
+            solver_options : Dictionary of options to pass to the adaptive ODE
+                             solver (default: {}). Set "dt_save" here to control
+                             WBA history spacing (default: 1e-6 s).
             helicity_M : Poloidal helicity of the field-strength contours.
                          Required when computing the canonical momentum
                          :math:`p_{\eta}` or performing chaos detection.
@@ -98,10 +132,26 @@ class PassingPoincare:
                                   chaos_detection=True, a single evaluation
                                   at the end of the trajectory is used.
         """
+        from ..catapult.field import CatapultBoozerField
+
         if solver_options is None:
             solver_options = {}
         if sign_vpar not in [-1, 1]:
             raise ValueError("sign_vpar should be either -1 or +1")
+
+        self.catapult_field = field if isinstance(field, CatapultBoozerField) else None
+        self.backend = "catapult" if self.catapult_field is not None else "cpu"
+        if self.catapult_field is not None:
+            field = self.catapult_field.field
+            self._gpu_tol = _catapult_tolerance(solver_options)
+        if not np.isfinite(tmax) or tmax < 0:
+            raise ValueError("tmax must be finite and nonnegative")
+        if (
+            isinstance(Nmaps, (bool, np.bool_))
+            or not isinstance(Nmaps, (int, np.integer))
+            or not 0 <= Nmaps <= np.iinfo(np.int32).max
+        ):
+            raise ValueError("Nmaps must be a nonnegative 32-bit integer")
 
         self.helicity_N = helicity_N
         self.helicity_M = helicity_M
@@ -251,48 +301,24 @@ class PassingPoincare:
                 helicity_M and helicity_N; otherwise an empty list.
         """
 
-        points = np.zeros((1, 3))
-        points[:, 0] = point[0]
-        points[:, 1] = point[1]
-        points[:, 2] = 0
-        # Set solver options needed for passing map
-        res_tys, res_hits = trace_particles_boozer(
-            self.field,
-            points,
-            [point[2]],
-            tmax=self.tmax,
-            mass=self.mass,
-            charge=self.charge,
-            Ekin=self.Ekin,
-            vpars=[0.0],
-            phases=[0.0],
-            n_zetas=[1.0],
-            m_thetas=[0.0],
-            omegas=[0.0],
-            stopping_criteria=[
-                MaxToroidalFluxStoppingCriterion(0.99),
-            ],
-            forget_exact_path=False,
-            vpars_stop=True,
-            phases_stop=True,
-            **self.solver_options,
+        paths, hits = self._trace_returns(
+            np.array([[point[0], point[1], 0]]),
+            np.array([point[2]]),
+            self.tmax,
+            False,
+            1,
         )
-        if len(res_hits[0]) == 0:
-            raise RuntimeError("No stopping criterion reached in passing_map.")
-
-        res_hit = res_hits[0][0, :]  # Only check the first hit or stopping criterion
-        time_momentum = res_tys[0][:, 0]
-
-        points_traj = np.zeros((res_tys[0].shape[0], 3))
-        points_traj[:, 0] = res_tys[0][:, 1]
-        points_traj[:, 1] = res_tys[0][:, 2]
-        points_traj[:, 2] = res_tys[0][:, 3]
-        vpar_path = res_tys[0][:, 4]
+        particle_hits = np.asarray(hits[0]).reshape(-1, 6)
+        if not len(particle_hits) or particle_hits[0, 1] != 0:
+            raise RuntimeError("No return reached before stopping in passing_map.")
+        hit = particle_hits[0]
+        point[:] = hit[[2, 3, 5]]
+        peta = []
         if self.peta_profile:
             peta = compute_peta(
                 self.field,
-                points_traj,
-                vpar_path,
+                paths[0][:, 1:4],
+                paths[0][:, 4],
                 self.mass,
                 self.charge,
                 self.helicity_M,
@@ -300,19 +326,8 @@ class PassingPoincare:
                 helicity_Mp=self.helicity_Mp,
                 helicity_Np=self.helicity_Np,
             )
-            peta = np.column_stack((time_momentum, peta))
-
-        if res_hit[1] == 0:  # Check that the zetas=[0] plane was hit
-            point[0] = res_hit[2]
-            point[1] = res_hit[3]
-            point[2] = res_hit[5]
-            time = res_hit[0]
-            if self.peta_profile:
-                return point, time, peta
-            else:
-                return point, time, []
-        else:
-            raise RuntimeError("Alternative stopping criterion reached in passing_map.")
+            peta = np.column_stack((paths[0][:, 0], peta))
+        return point, hit[0], peta
 
     def compute_passing_map(self):
         r"""
@@ -323,14 +338,15 @@ class PassingPoincare:
             s_all : List of s coordinate lists, one per trajectory.
             thetas_all : List of theta coordinate lists, one per trajectory.
             vpars_all : List of parallel velocity lists, one per trajectory.
-            t_all : List of cumulative transit time lists, one per trajectory.
+            t_all : Lists starting with zero followed by individual transit
+                    times, one per trajectory.
             peta_all : List of canonical momentum lists (empty if peta_profile
                 is False).
             DA_all : List of WBA digit-accuracy lists, one per trajectory.
             DA_times : List of transit indices at which DA was evaluated.
         """
-        Ntrj = len(self.s_init)
-
+        first, last = parallel_loop_bounds(self.comm, len(self.s_init))
+        trajectories = self._passing_maps(first, last)
         s_all = []
         peta_all = []
         thetas_all = []
@@ -338,69 +354,15 @@ class PassingPoincare:
         DA_all = []
         DA_times = []
         t_all = []
-        first, last = parallel_loop_bounds(self.comm, Ntrj)
-        for itrj in range(first, last):
-            tr = [self.s_init[itrj], self.thetas_init[itrj], self.vpars_init[itrj]]
-            s_traj = [tr[0]]
-            points_traj = np.zeros((1, 3))
-            points_traj[:, 0] = self.s_init[itrj]
-            points_traj[:, 1] = self.thetas_init[itrj]
-            points_traj[:, 2] = 0
-
+        for points, times, momentum, accuracies, steps in trajectories:
+            s_all.append(points[:, 0].tolist())
+            thetas_all.append(points[:, 1].tolist())
+            vpars_all.append(points[:, 2].tolist())
+            t_all.append(times)
             if self.peta_profile:
-                peta = compute_peta(
-                    self.field,
-                    points_traj,
-                    self.vpars_init[itrj],
-                    self.mass,
-                    self.charge,
-                    self.helicity_M,
-                    self.helicity_N,
-                    helicity_Mp=self.helicity_Mp,
-                    helicity_Np=self.helicity_Np,
-                )
-                peta_traj = [peta[0]]
-                Peta = np.array([[0, peta[0]]])
-            else:
-                peta_traj = []
-
-            thetas_traj = [tr[1]]
-            vpars_traj = [tr[2]]
-            particle_DAs = []
-            particle_DA_times = []
-            t_traj = [0]
-            for _jj in range(self.Nmaps):
-                try:
-                    tr, time, Peta_iter = self.passing_map(tr)
-
-                    if self.peta_profile:
-                        peta_traj.append(Peta_iter[-1, 1])
-                        # shift time column by orbit time
-                        Peta_iter[:, 0] += Peta[-1, 0]
-                        Peta = np.vstack((Peta, Peta_iter[1:, :]))
-                    else:
-                        peta_traj.append(np.nan)
-
-                    t_traj.append(time)
-                    s_traj.append(tr[0])
-
-                    thetas_traj.append(tr[1])
-                    vpars_traj.append(tr[2])
-                    if self.DA_poinc and _jj in self.WBA_transit_steps:
-                        time_at_evaluation, DA_at_evaluation = return_DA(Peta)
-                        particle_DAs.append(DA_at_evaluation)
-                        particle_DA_times.append(_jj)
-                except RuntimeError:
-                    break
-            if self.peta_profile:
-                peta_all.append(peta_traj)
-            s_all.append(s_traj)
-            thetas_all.append(thetas_traj)
-            vpars_all.append(vpars_traj)
-            t_all.append(t_traj)
-            DA_all.append(particle_DAs)
-            DA_times.append(particle_DA_times)
-
+                peta_all.append(momentum)
+            DA_all.append(accuracies)
+            DA_times.append(steps)
         if self.comm is not None:
             peta_all = [i for o in self.comm.allgather(peta_all) for i in o]
             s_all = [i for o in self.comm.allgather(s_all) for i in o]
@@ -411,6 +373,151 @@ class PassingPoincare:
             DA_times = [i for o in self.comm.allgather(DA_times) for i in o]
 
         return s_all, thetas_all, vpars_all, t_all, peta_all, DA_all, DA_times
+
+    def _trace_returns(self, initial, speeds, tmax, forget_exact_path, count):
+        """Select the backend; both stop at dense roots on one continuous clock."""
+        options = {
+            "mass": self.mass,
+            "charge": self.charge,
+            "Ekin": self.Ekin,
+            "phases": [0],
+            "n_zetas": [1],
+            "m_thetas": [0],
+            "omegas": [0],
+            "vpars": [0],
+            "vpars_stop": True,
+            "stopping_criteria": [MaxToroidalFluxStoppingCriterion(0.99)],
+            "max_phase_hits": count,
+            "max_phase_interval": self.tmax if self.tmax else None,
+            "tmax": tmax,
+            "forget_exact_path": forget_exact_path,
+        }
+        if self.catapult_field is None:
+            return trace_particles_boozer(
+                self.field, initial, speeds, **options, **self.solver_options
+            )
+        from ..catapult.tracing import trace_particles_boozer_gpu
+
+        return trace_particles_boozer_gpu(
+            self.catapult_field,
+            initial,
+            speeds,
+            tol=self._gpu_tol,
+            dt_save=self.solver_options.get("dt_save", 1e-6),
+            max_hits=count + 1,
+            **options,
+        )
+
+    def _passing_maps(self, first, last):
+        """Trace each orbit continuously and process native section roots."""
+        initial = np.column_stack(
+            (
+                self.s_init[first:last],
+                self.thetas_init[first:last],
+                np.zeros(last - first),
+            )
+        )
+        speeds = np.asarray(self.vpars_init[first:last])
+        if len(initial) and self.Nmaps:
+            total_time = self.Nmaps * self.tmax
+            if not np.isfinite(total_time):
+                raise ValueError("Nmaps * tmax must be finite")
+            gpu_history = self.DA_poinc and self.catapult_field is not None
+            paths, hits = self._trace_returns(
+                initial,
+                speeds,
+                total_time,
+                not self.DA_poinc or gpu_history,
+                self.Nmaps,
+            )
+            hits = [np.asarray(particle).reshape(-1, 6) for particle in hits]
+            if gpu_history:
+                # Discover actual return times without allocating history for
+                # the conservative Nmaps*tmax bound. WBA needs only the prefix
+                # through the last completed return, including for lost paths.
+                horizons = np.array(
+                    [
+                        sections[-1, 0] if len(sections) else 0.0
+                        for particle in hits
+                        for sections in [particle[particle[:, 1] == 0]]
+                    ]
+                )
+                if np.any(horizons):
+                    paths, _ = self._trace_returns(
+                        initial, speeds, horizons, False, self.Nmaps
+                    )
+        else:
+            paths = [
+                np.array([[0, *point, speed]]) for point, speed in zip(initial, speeds)
+            ]
+            hits = [np.empty((0, 6)) for _ in paths]
+
+        incomplete = 0
+        for path, particle_hits in zip(paths, hits):
+            launch = path[:1]
+            particle_hits = np.asarray(particle_hits).reshape(-1, 6)
+            returns = particle_hits[particle_hits[:, 1] == 0][: self.Nmaps]
+            returns = returns[:, [0, 2, 3, 4, 5]]
+            stopped = np.any(particle_hits[:, 1] != 0)
+            if not stopped and len(returns) < self.Nmaps:
+                incomplete += 1
+            samples = np.vstack((launch, returns))
+            # Zero followed by individual transit times on both backends.
+            times = np.r_[0, np.diff(samples[:, 0])].tolist()
+            particle_DAs, particle_DA_times = [], []
+            momentum = []
+            if self.peta_profile:
+                momentum = compute_peta(
+                    self.field,
+                    samples[:, 1:4],
+                    samples[:, 4],
+                    self.mass,
+                    self.charge,
+                    self.helicity_M,
+                    self.helicity_N,
+                    helicity_Mp=self.helicity_Mp,
+                    helicity_Np=self.helicity_Np,
+                )
+                if self.DA_poinc and len(returns):
+                    history = path[path[:, 0] < returns[-1, 0]]
+                    time_momentum = compute_peta(
+                        self.field,
+                        history[:, 1:4],
+                        history[:, 4],
+                        self.mass,
+                        self.charge,
+                        self.helicity_M,
+                        self.helicity_N,
+                        helicity_Mp=self.helicity_Mp,
+                        helicity_Np=self.helicity_Np,
+                    )
+                    time_momentum = np.column_stack((history[:, 0], time_momentum))
+                    for step in self.WBA_transit_steps:
+                        if step >= len(returns):
+                            continue
+                        time = returns[step, 0]
+                        count = np.searchsorted(history[:, 0], time)
+                        values = np.vstack(
+                            (time_momentum[:count], [time, momentum[step + 1]])
+                        )
+                        _, accuracy = return_DA(values)
+                        particle_DAs.append(accuracy)
+                        particle_DA_times.append(step)
+                momentum = momentum.tolist()
+            yield (
+                samples[:, [1, 2, 4]],
+                times,
+                momentum,
+                particle_DAs,
+                particle_DA_times,
+            )
+
+        if incomplete:
+            warn(
+                f"{incomplete} {self.backend.upper()} trajectories did not return "
+                "within tmax for one section; increase tmax.",
+                stacklevel=3,
+            )
 
     def compute_frequencies(self, s_profile=True):
         """
@@ -2295,7 +2402,7 @@ def compute_rotational_profile(
     passing-particle Poincare map at a fixed pitch angle.
 
     Args:
-        field : The (unperturbed) BoozerMagneticField instance to trace in.
+        field : An unperturbed BoozerMagneticField or CatapultBoozerField.
         pitch : Pitch angle variable, lambda = vperp^2 / (v^2 B).
         sgn : Desired sign of the parallel velocity (+1 or -1).
         mass : Particle mass.

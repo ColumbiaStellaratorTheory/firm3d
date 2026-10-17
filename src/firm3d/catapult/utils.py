@@ -42,6 +42,10 @@ def boozer_interpolant(field, nfp, ns, ntheta, nzeta, vacuum=False, dtype=np.flo
                     zeta_grid[k],
                 ]
 
+    if field.field_type == "nok":
+        # Match the CPU interpolant's derivative at its upper toroidal node,
+        # rather than wrapping that node to the lower endpoint.
+        quad_pts[quad_pts[:, 2] == zrange[1], 2] = np.nextafter(zrange[1], 0.0)
     field.set_points(quad_pts)
 
     # Quantities to interpolate
@@ -59,8 +63,12 @@ def boozer_interpolant(field, nfp, ns, ntheta, nzeta, vacuum=False, dtype=np.flo
         # Full guiding center equations: include I and K
         dGds = field.dGds()
         dIds = field.dIds()
-        K = field.K()
-        K_derivs = field.K_derivs()
+        if field.field_type == "nok":
+            K = np.zeros((len(quad_pts), 1))
+            K_derivs = np.zeros((len(quad_pts), 2))
+        else:
+            K = field.K()
+            K_derivs = field.K_derivs()
         quad_info = np.hstack((modB, modB_derivs, G, dGds, I, dIds, iota, K, K_derivs))
 
     # calculate max J for sampling

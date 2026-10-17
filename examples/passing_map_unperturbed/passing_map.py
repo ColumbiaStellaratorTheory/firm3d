@@ -18,6 +18,7 @@ charge = ALPHA_PARTICLE_CHARGE
 mass = ALPHA_PARTICLE_MASS
 Ekin = FUSION_ALPHA_PARTICLE_ENERGY
 
+use_catapult = False  # Set True to trace on the GPU
 resolution = 10 if in_github_actions else 48  # Resolution for field interpolation
 sign_vpar = 1.0  # sign(vpar). should be +/- 1.
 lam = 0.0  # lambda = v_perp^2/(v^2 B) = const. along trajectory
@@ -44,6 +45,11 @@ field = InterpolatedBoozerField.from_booz_xform(
     nzeta=nzeta_interp,
     comm=comm_world,
 )
+
+if use_catapult:
+    from firm3d.catapult.field import CatapultBoozerField
+
+    field = CatapultBoozerField(field, ns_interp, ntheta_interp, nzeta_interp)
 
 poinc = PassingPoincare(
     field,

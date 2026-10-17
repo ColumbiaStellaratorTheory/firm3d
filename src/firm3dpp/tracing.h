@@ -14,14 +14,7 @@ using std::function;
 
 namespace py = pybind11;
 
-
-// Base class for RHS functions
-class BaseRHS {
-public:
-    virtual ~BaseRHS() = default;
-    virtual void operator()(const vector<double>& y, vector<double>& dydt, double t) = 0;
-    virtual int get_state_size() const = 0;
-};
+class BaseRHS;
 
 // Overloaded solve() function that accepts a BaseRHS object
 tuple<vector<vector<double>>, vector<vector<double>>>
@@ -47,7 +40,9 @@ solve(
     double vnorm=1,
     double tnorm=1,
     string ode_solver="boost",
-    double DP_hmin=0.0
+    double DP_hmin=0.0,
+    int max_phase_hits=0,
+    double max_phase_interval=0.0
 );
 
 tuple<vector<vector<double>>, vector<vector<double>>>
@@ -108,7 +103,9 @@ particle_guiding_center_boozer_tracing(
         bool predictor_step=true,
         double roottol=1e-9,
         double dt=1e-7,
-        double DP_hmin=0.0
+        double DP_hmin=0.0,
+        int max_phase_hits=0,
+        double max_phase_interval=0.0
 );
 
 vector<double> simsopt_derivs_boozer(shared_ptr<BoozerMagneticField> field, vector<double> loc, double m, double q, double vtotal, double vtang, bool vacuum);
@@ -116,24 +113,24 @@ vector<double> simsopt_derivs_saw(shared_ptr<ShearAlfvenWave> perturbed_field, v
 
 #ifdef USE_CUDA
 template<typename T>
-vector<T> cartesian_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> rrange,
+py::object cartesian_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> rrange,
         py::array_t<double> phirange, py::array_t<double> zrange, py::array_t<T> xyz_init, double m, double q, double vtotal, py::array_t<T> vtang, 
-        py::array_t<double> tmax, double tol, py::array_t<T> dt_in, py::array_t<T> mu_in, int nparticles);
+        py::array_t<double> tmax, double tol, py::array_t<T> dt_in, py::array_t<T> mu_in, int nparticles, vector<double> save_times = {}, py::dict event_options = {});
 
 template<typename T>
-vector<T> boozer_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> srange,
+py::object boozer_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> srange,
         py::array_t<double> trange, py::array_t<double> zrange, py::array_t<T> stz_init, double m, double q, double vtotal, py::array_t<T> vtang, 
-        py::array_t<double> tmax, double tol, py::array_t<T> dt_in, py::array_t<T> mu_in, double psi0, int nparticles, bool vacuum);
+        py::array_t<double> tmax, double tol, py::array_t<T> dt_in, py::array_t<T> mu_in, double psi0, int nparticles, bool vacuum, vector<double> save_times = {}, py::dict event_options = {});
         
 template<typename T>
-vector<T> boozer_saw_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, 
+py::object boozer_saw_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange,
         double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<T> saw_phihats, int saw_nharmonics,
-        py::array_t<T> stz_init, double m, double q, double vtotal, py::array_t<T> vtang, py::array_t<double> tmax, double tol, py::array_t<T> dt_in, py::array_t<T> mu_in, double psi0, int nparticles);
+        py::array_t<T> stz_init, double m, double q, double vtotal, py::array_t<T> vtang, py::array_t<double> tmax, double tol, py::array_t<T> dt_in, py::array_t<T> mu_in, double psi0, int nparticles, vector<double> save_times = {}, py::dict event_options = {});
 
 template<typename T>
-vector<T> boozer_saw_nok_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, 
+py::object boozer_saw_nok_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange,
         double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<T> saw_phihats, int saw_nharmonics,
-        py::array_t<T> stz_init, double m, double q, double vtotal, py::array_t<T> vtang, py::array_t<double> tmax, double tol, py::array_t<T> dt_in, py::array_t<T> mu_in, double psi0, int nparticles);
+        py::array_t<T> stz_init, double m, double q, double vtotal, py::array_t<T> vtang, py::array_t<double> tmax, double tol, py::array_t<T> dt_in, py::array_t<T> mu_in, double psi0, int nparticles, vector<double> save_times = {}, py::dict event_options = {});
 
 template<typename T>
 py::array_t<T> test_gpu_interpolation(py::array_t<T> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, py::array_t<T> loc, std::string coordinates, int n_points);

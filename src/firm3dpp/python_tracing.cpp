@@ -52,7 +52,9 @@ void init_tracing(py::module_ &m){
         py::arg("predictor_step")=true,
         py::arg("roottol")=1e-9,
         py::arg("dt")=1e-7,
-        py::arg("DP_hmin")=0.0
+        py::arg("DP_hmin")=0.0,
+        py::arg("max_phase_hits")=0,
+        py::arg("max_phase_interval")=0.0
         );
 
     m.def("particle_guiding_center_boozer_perturbed_tracing", &particle_guiding_center_boozer_perturbed_tracing,
@@ -98,7 +100,9 @@ void init_tracing(py::module_ &m){
         py::arg("tol"),
         py::arg("dt_in").noconvert(),
         py::arg("mu_in").noconvert(),
-        py::arg("nparticles")
+        py::arg("nparticles"),
+        py::arg("save_times") = vector<double>{},
+        py::arg("event_options") = py::dict()
         );
 
     m.def("cartesian_gpu_tracing", &cartesian_gpu_tracing<float>,
@@ -115,7 +119,9 @@ void init_tracing(py::module_ &m){
         py::arg("tol"),
         py::arg("dt_in").noconvert(),
         py::arg("mu_in").noconvert(),
-        py::arg("nparticles")
+        py::arg("nparticles"),
+        py::arg("save_times") = vector<double>{},
+        py::arg("event_options") = py::dict()
         );
 
     m.def("boozer_gpu_tracing", &boozer_gpu_tracing<double>,
@@ -134,7 +140,9 @@ void init_tracing(py::module_ &m){
         py::arg("mu_in").noconvert(),
         py::arg("psi0"),
         py::arg("nparticles"),
-        py::arg("vacuum") = false
+        py::arg("vacuum") = false,
+        py::arg("save_times") = vector<double>{},
+        py::arg("event_options") = py::dict()
         );
 
     m.def("boozer_gpu_tracing", &boozer_gpu_tracing<float>,
@@ -153,7 +161,9 @@ void init_tracing(py::module_ &m){
         py::arg("mu_in").noconvert(),
         py::arg("psi0"),
         py::arg("nparticles"),
-        py::arg("vacuum") = false
+        py::arg("vacuum") = false,
+        py::arg("save_times") = vector<double>{},
+        py::arg("event_options") = py::dict()
         );
 
 
@@ -178,7 +188,9 @@ void init_tracing(py::module_ &m){
         py::arg("dt_in").noconvert(),
         py::arg("mu_in").noconvert(),
         py::arg("psi0"),
-        py::arg("nparticles")
+        py::arg("nparticles"),
+        py::arg("save_times") = vector<double>{},
+        py::arg("event_options") = py::dict()
         );
 
     m.def("boozer_saw_gpu_tracing", &boozer_saw_gpu_tracing<float>,
@@ -202,7 +214,9 @@ void init_tracing(py::module_ &m){
         py::arg("dt_in").noconvert(),
         py::arg("mu_in").noconvert(),
         py::arg("psi0"),
-        py::arg("nparticles")
+        py::arg("nparticles"),
+        py::arg("save_times") = vector<double>{},
+        py::arg("event_options") = py::dict()
         );
 
     m.def("boozer_saw_nok_gpu_tracing", &boozer_saw_nok_gpu_tracing<double>,
@@ -226,7 +240,9 @@ void init_tracing(py::module_ &m){
         py::arg("dt_in").noconvert(),
         py::arg("mu_in").noconvert(),
         py::arg("psi0"),
-        py::arg("nparticles")
+        py::arg("nparticles"),
+        py::arg("save_times") = vector<double>{},
+        py::arg("event_options") = py::dict()
         );
 
     m.def("boozer_saw_nok_gpu_tracing", &boozer_saw_nok_gpu_tracing<float>,
@@ -250,7 +266,9 @@ void init_tracing(py::module_ &m){
         py::arg("dt_in").noconvert(),
         py::arg("mu_in").noconvert(),
         py::arg("psi0"),
-        py::arg("nparticles")
+        py::arg("nparticles"),
+        py::arg("save_times") = vector<double>{},
+        py::arg("event_options") = py::dict()
         );
 
     m.def("test_gpu_interpolation", &test_gpu_interpolation<double>,

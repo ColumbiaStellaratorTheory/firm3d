@@ -12,6 +12,10 @@ The three main classes are:
 2. **PassingPoincare**: For passing particles in unperturbed fields
 3. **PassingPerturbedPoincare**: For passing particles in fields with shear Alfvén wave perturbations
 
+``PassingPoincare`` also accepts a ``CatapultBoozerField`` for GPU tracing.
+Both backends locate sections with dense-output event roots. See the
+:ref:`trajectory and kinetic examples <gpu_dense_output_examples>`.
+
 Trapped Poincaré Maps
 ---------------------
 
@@ -115,6 +119,40 @@ The ``PassingPoincare`` class computes Poincaré maps for passing particles in u
 - **lam**: Pitch-angle variable :math:`\lambda = v_\perp^2/(v^2 B)`
 - **sign_vpar**: Sign of parallel velocity (+1 or -1)
 - **ns_poinc, ntheta_poinc**: Grid resolution for initial conditions
+
+To use CATAPULT, pass a ``CatapultBoozerField`` to the same helper:
+
+.. code-block:: python
+
+    from firm3d.catapult.field import CatapultBoozerField
+
+    field_gpu = CatapultBoozerField(field, 48, 48, 48)
+    poinc = PassingPoincare(
+        field_gpu, lam=0.0, sign_vpar=1, mass=ALPHA_PARTICLE_MASS,
+        charge=ALPHA_PARTICLE_CHARGE, Ekin=FUSION_ALPHA_PARTICLE_ENERGY,
+        ns_poinc=120, ntheta_poinc=1, Nmaps=1000, tmax=1e-2,
+        solver_options={"abstol": 1e-8, "reltol": 1e-8},
+    )
+    poinc.plot_poincare(filename="passing_poincare_gpu.png")
+
+Both backends limit each return by ``tmax`` and integrate continuously
+with a total upper bound of ``Nmaps * tmax`` and stop if a section takes longer
+than ``tmax``. Both record dense-output section roots, stop at a
+parallel-velocity reversal, and check ``s >= 0.99`` at accepted endpoints.
+Section roots are independent of ``dt_save``. WBA still uses saved history: converge its saving interval
+separately from the integration tolerance. Equal absolute and relative
+tolerances are required for CATAPULT. The same data, frequency, momentum,
+WBA, and plotting methods remain available.
+
+For WBA, CPU saves history during its continuous trace. CATAPULT first finds
+returns without saving history, then saves through the completed returns to
+bound its preallocated GPU buffer. CPU passing maps use an adaptive solver
+(``boost`` or ``dormand_prince``). Set ``solver_options["dt_save"]`` to control
+WBA history on either backend; its default remains ``1e-6`` s. Momentum at
+returns is evaluated at the dense roots.
+Continuous integration can change long trajectories compared with restarting
+the solver at every return, so check tolerance convergence for the observable.
+GPU section angles retain accumulated turns; plotting wraps them periodically.
 
 Perturbed Passing Poincaré Maps
 -------------------------------

@@ -5,10 +5,18 @@ Trajectory Saving
 
 There are two ways the trajectory information can be saved: by recording "hits" of user-defined coordinate planes (e.g., Poincaré sections), or by recording uniform time intervals of the trajectory. The routines ``trace_particles_boozer`` or ``trace_particles_boozer_perturbed`` return this information in the tuple ``(res_tys,res_hits)``.
 
+The CATAPULT ``trace_particles_*_gpu`` functions use the same saving options
+and return format. See :doc:`gpu_tracing` for GPU field setup.
+
 Trajectory Data (res_tys)
 -------------------------
 
 If ``forget_exact_path=False``, the parameter ``dt_save`` determines the time interval for trajectory saving. (Note that if this parameter is made too small, one may run into memory issues.) This trajectory information is returned in ``res_tys``, which is a list (length = number of particles) of numpy arrays with shape ``(nsave,5)``. Here ``nsave`` is the number of timesteps saved. Each row contains the time and the state, ``[t, s, theta, zeta, v_par]``. If ``forget_exact_path=True``, only the state at the initial and final time will be returned.
+
+GPU tracing uses the same Dormand–Prince continuous extension as the CPU's
+default Boost solver. Public GPU paths are returned in ``float64``. Native
+``firm3dpp.*_gpu_tracing`` arrays use the field's precision and append the
+enclosing step size and magnetic moment to their seven-column rows.
 
 .. code-block:: python
 
@@ -44,6 +52,16 @@ The "hits" are defined through the input lists ``phases``, ``n_zetas``, ``m_thet
 
 - **phases**, **n_zetas**, **m_thetas** and **omegas**: If ``phases`` is specified, the trajectory will be recorded when :math:`n_\zeta \zeta + m_\theta \theta - \omega t` hits the values given in the ``phases`` array, with :math:`n_\zeta`, :math:`m_\theta`, and :math:`\omega` given elementwise by the ``n_zetas``, ``m_thetas``, and ``omegas`` arrays. All four lists must have the same length.
 
+Phase and velocity crossings use the accepted step's dense output and are
+independent of ``dt_save``. They are recorded even with
+``forget_exact_path=True``. The launch is excluded; a crossing at a step's
+right endpoint is included once. To stop at these crossings, see
+:ref:`stopping_criteria`.
+
+The Boozer GPU tracers also accept ``zetas=[0.0]`` as a shortcut for a
+toroidal section, equivalent to ``phases=[0.0]``, ``n_zetas=[1.0]``,
+``m_thetas=[0.0]`` and ``omegas=[0.0]``.
+
 
 **Hit Data Structure:**
 
@@ -54,6 +72,10 @@ The hits are returned in ``res_hits``, which is a list (length = number of parti
 - If ``idx < 0``: ``stopping_criteria[int(-idx)-1]`` was hit
 
 The state vector is ``[s, theta, zeta, v_par]``.
+
+On the GPU, trajectory zeta and both hit angles retain accumulated turns.
+``max_hits`` bounds hit storage per particle (default 1024); overflow raises
+an error. Increase the capacity or shorten the trace if needed.
 
 Multiple Hit Planes
 -------------------
@@ -115,3 +137,8 @@ For long integrations, memory usage can become an issue. Use ``forget_exact_path
    # res_tys will contain only 2 points per particle
    trajectory = res_tys[0]
    print(f"Saved {len(trajectory)} points (initial and final only)")
+
+Trajectory storage grows with particles times requested samples. On the GPU,
+allow for both GPU buffers and host copies; use smaller batches for large
+histories. See :ref:`gpu_dense_output_examples` for GPU saving, reloading,
+and Poincaré plotting examples.

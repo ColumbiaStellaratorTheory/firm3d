@@ -1,3 +1,5 @@
+.. _stopping_criteria:
+
 Stopping Criteria
 =================
 
@@ -5,6 +7,12 @@ Guiding center integration is continued until the maximum integration time, ``tm
 
 Available Stopping Criteria
 ---------------------------
+
+These criteria are checked at accepted step endpoints. CATAPULT Boozer
+tracing accepts all five criteria below. Cartesian GPU tracing supports
+iteration and step-size criteria, as well as velocity hits. To stop at a
+Cartesian surface, include the GPU field's ``surface_classifier`` in
+``stopping_criteria``. No boundary criterion is added automatically.
 
 MaxToroidalFluxStoppingCriterion
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -72,6 +80,20 @@ Stop when the step size gets too small. When using adaptive timestepping, can av
    ``int``, so any fractional value (e.g. ``1e-10``) is silently truncated to
    ``0`` and the criterion never triggers. This is a known bug, tracked
    separately from this documentation.
+
+Stopping at Sections
+--------------------
+
+The hit planes described in :ref:`trajectory_saving` can also stop a trace.
+Set ``vpars=[0.0], vpars_stop=True`` to stop at a mirror point, or
+``phases_stop=True`` to stop at the first phase crossing. These stops use
+dense-output roots and are independent of ``dt_save``.
+
+For ``trace_particles_boozer`` with an adaptive CPU solver and the Boozer GPU
+tracers, ``max_phase_hits`` optionally stops after a chosen number of phase
+hits (0 disables the limit). ``max_phase_interval`` limits the time to the
+next phase hit, measured from launch or the preceding phase hit
+(``None`` disables the limit).
 
 Usage Examples
 --------------

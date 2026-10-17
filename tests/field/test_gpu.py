@@ -34,6 +34,7 @@ from firm3d.field.boozermagneticfield import (
 )
 from firm3d.field.tracing import (
     IterationStoppingCriterion,
+    MaxToroidalFluxStoppingCriterion,
     trace_particles_boozer,
     trace_particles_boozer_perturbed,
 )
@@ -53,7 +54,10 @@ from firm3d.catapult.field import (
     CatapultPerturbedBoozerField,
 )
 from firm3d.catapult.tracing import (
-    save_trajectories_boozer_gpu,
+    _event_options,
+    _launch_boozer,
+    _to_boozer,
+    _to_pseudo_cartesian,
     trace_particles_boozer_gpu,
     trace_particles_boozer_perturbed_gpu,
     trace_particles_cartesian_gpu,
@@ -623,7 +627,7 @@ class CATAPULTField:
                 charge=CHARGE,
                 Ekin=ENERGY,
                 tol=1e-9,
-                stopping_criteria=[IterationStoppingCriterion(1)],
+                stopping_criteria=[IterationStoppingCriterion(0)],
                 forget_exact_path=True,
             )
         elif self.field_type in ["boozer_saw_vacuum", "boozer_saw_nok"]:
@@ -639,7 +643,7 @@ class CATAPULTField:
                 mass=MASS,
                 charge=CHARGE,
                 tol=1e-9,
-                stopping_criteria=[IterationStoppingCriterion(1)],
+                stopping_criteria=[IterationStoppingCriterion(0)],
                 forget_exact_path=True,
             )
         elif self.field_type == "cartesian_vacuum":
@@ -709,7 +713,7 @@ class CATAPULTField:
     def compute_gpu_trajectories(self, stz, vpar, vtotal, tmax, dt_save, psi0):
 
         if self.field_type == "boozer_vacuum":
-            trajectories = save_trajectories_boozer_gpu(
+            trajectories, _ = trace_particles_boozer_gpu(
                 field=CatapultBoozerField(self.field, self.ns, self.ntheta, self.nzeta),
                 stz_inits=stz.copy(),
                 parallel_speeds=vpar.copy(),
@@ -717,7 +721,7 @@ class CATAPULTField:
                 dt_save=dt_save,
                 mass=MASS,
                 charge=CHARGE,
-                vtotal=vtotal,
+                Ekin=0.5 * MASS * vtotal**2,
                 tol=1e-9,
             )
         else:
@@ -769,7 +773,7 @@ class CATAPULTField:
         final_pos_traj = np.array([trajectory[-1] for trajectory in gpu_trajectories])
 
         gpu_final_pos = self.compute_gpu_final_pos(stz, vpar, vtotal, tmax, psi0)
-        # save_trajectories_boozer_gpu returns Boozer coordinates, while
+        # trace_particles_boozer_gpu returns Boozer coordinates, while
         # boozer_gpu_tracing returns pseudo-Cartesian (x1, x2): compare in Boozer
         x1, x2 = gpu_final_pos[:, 1].copy(), gpu_final_pos[:, 2].copy()
         gpu_final_pos[:, 1] = np.hypot(x1, x2)
@@ -861,6 +865,7 @@ class TestGPUTracingBoozerVacuum(unittest.TestCase):
                 stz,
                 vpar,
                 tmax=1e-6,
+                stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
                 mass=MASS,
                 charge=CHARGE,
                 Ekin=ENERGY,
@@ -888,15 +893,24 @@ class TestGPUTracingBoozerVacuum(unittest.TestCase):
         }
         cfield = CatapultBoozerField(field, res, res, res)
         # the kernel's own state, one row per particle, to check the rows against
-        state = np.array(
-            [
-                traj[-1]
-                for traj in save_trajectories_boozer_gpu(
-                    cfield, stz, vpar, tmax, tmax, MASS, CHARGE, self.VELOCITY, 1e-8
-                )
-            ]
+        kwargs["stopping_criteria"] = [MaxToroidalFluxStoppingCriterion(1.0)]
+        native, native_hits = _launch_boozer(
+            cfield,
+            _to_pseudo_cartesian(stz, cfield.dtype),
+            vpar,
+            np.full(len(stz), tmax),
+            -np.ones(len(stz)),
+            -np.ones(len(stz)),
+            MASS,
+            CHARGE,
+            self.VELOCITY,
+            1e-8,
+            event_options=_event_options(
+                stz, stopping_criteria=kwargs["stopping_criteria"]
+            ),
         )
-        lost = state[:, 0] < tmax
+        state = _to_boozer(native)
+        lost = np.array([len(hit) > 0 for hit in native_hits])
 
         res_tys, res_hits = trace_particles_boozer_gpu(
             cfield, stz, vpar, tmax, forget_exact_path=True, **kwargs
@@ -910,7 +924,7 @@ class TestGPUTracingBoozerVacuum(unittest.TestCase):
             if lost[i]:
                 self.assertEqual(res_hits[i].shape, (1, 6))
                 self.assertEqual(res_hits[i][0, 1], -1)
-                np.testing.assert_array_equal(res_hits[i][0, 2:], state[i, 1:5])
+                np.testing.assert_array_equal(res_hits[i], native_hits[i])
             else:
                 self.assertEqual(res_hits[i].shape, (0,))
         self.assertTrue(lost.any() and not lost.all())
@@ -921,6 +935,9 @@ class TestGPUTracingBoozerVacuum(unittest.TestCase):
         # with trajectories: the same initial row, rows at successive save
         # times, and the same final state
         dt_save = 2e-6
+        # The fifth grid time rounds just below tmax, so retain both times.
+        expected_times = np.r_[0, np.arange(1, 6) * dt_save, tmax]
+        self.assertLess(expected_times[-2], tmax)
         res_tys, res_hits = trace_particles_boozer_gpu(
             cfield, stz, vpar, tmax, dt_save=dt_save, **kwargs
         )
@@ -930,8 +947,7 @@ class TestGPUTracingBoozerVacuum(unittest.TestCase):
             self.assertTrue(np.all(np.diff(t) > 0))
             self.assertEqual(res_hits[i].shape, (1, 6) if lost[i] else (0,))
             if not lost[i]:
-                self.assertGreaterEqual(t[-1], tmax)
-                self.assertEqual(len(t), 1 + round(tmax / dt_save))
+                np.testing.assert_array_equal(t, expected_times)
 
 
 @unittest.skipUnless(HAS_CUDA, "CUDA support not available")
@@ -995,6 +1011,7 @@ class TestGPUTracingBoozerFiniteBeta(unittest.TestCase):
                 stz,
                 vpar,
                 tmax=1e-6,
+                stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
                 mass=MASS,
                 charge=CHARGE,
                 Ekin=ENERGY,
@@ -1075,7 +1092,15 @@ class TestGPUTracingBoozerVacuumSAW(unittest.TestCase):
         mus = (self.VELOCITY**2 - vpar**2) / (2 * self.saw.B0.modB()[:, 0])
         cfield = CatapultPerturbedBoozerField(self.saw, res, res, res)
         res_tys, _ = trace_particles_boozer_perturbed_gpu(
-            cfield, stz, vpar, mus, tmax=1e-6, mass=MASS, charge=CHARGE, tol=1e-8
+            cfield,
+            stz,
+            vpar,
+            mus,
+            tmax=1e-6,
+            stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
+            mass=MASS,
+            charge=CHARGE,
+            tol=1e-8,
         )
         # a conserved mu: the energy at the end is the energy at the start
         self.saw.B0.set_points(stz)
@@ -1099,6 +1124,7 @@ class TestGPUTracingBoozerVacuumSAW(unittest.TestCase):
                 vpar_in,
                 mus_in,
                 tmax=1e-6,
+                stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
                 mass=MASS,
                 charge=CHARGE,
                 tol=tol,
@@ -1196,7 +1222,15 @@ class TestGPUTracingBoozerNoKSAW(unittest.TestCase):
             )
             self.assertEqual(cfield.field_type, "nok")
             res_tys, _ = trace_particles_boozer_perturbed_gpu(
-                cfield, stz, vpar, mus, tmax=1e-6, mass=MASS, charge=CHARGE, tol=tol
+                cfield,
+                stz,
+                vpar,
+                mus,
+                tmax=1e-6,
+                stopping_criteria=[MaxToroidalFluxStoppingCriterion(1.0)],
+                mass=MASS,
+                charge=CHARGE,
+                tol=tol,
             )
             return final_states(res_tys)
 
@@ -1314,6 +1348,7 @@ class TestGPUTracingCartesian(unittest.TestCase):
                 xyz,
                 vpar,
                 tmax=1e-6,
+                stopping_criteria=[cfield.surface_classifier],
                 mass=MASS,
                 charge=CHARGE,
                 Ekin=ENERGY,
@@ -1322,7 +1357,21 @@ class TestGPUTracingCartesian(unittest.TestCase):
             )
             return final_states(res_tys, boozer=False)
 
-        check_single_precision(self, run, 1e-6, [1, 2, 3, 4])
+        # With dense output both runs end at a common physical time. The
+        # difference between two double tolerances can then be below the
+        # float32 field/initial-condition roundoff floor; endpoint timing
+        # differences are no longer an appropriate precision-error budget.
+        double = run("double", 1e-8)
+        single = run("single", 1e-8)
+        np.testing.assert_array_equal(double[:, 0], np.full(len(xyz), 1e-6))
+        np.testing.assert_array_equal(single[:, 0], np.full(len(xyz), 1e-6))
+        error = np.abs(single[:, 1:5] - double[:, 1:5])
+        self.assertTrue(np.any(error != 0), "single precision matched double exactly")
+        # One metre and the launch speed set the units where a component is
+        # near zero. The 1e-5 relative budget matches the field precision
+        # checked separately above; retain the ensemble's 90th-percentile test.
+        scales = np.maximum(np.abs(double[:, 1:5]), [1, 1, 1, VELOCITY])
+        self.assertTrue(np.all(np.percentile(error / scales, 90, axis=0) < 1e-5))
 
 
 if __name__ == "__main__":
