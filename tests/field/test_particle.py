@@ -28,6 +28,23 @@ logging.basicConfig()
 
 
 class BoozerGuidingCenterTracingTesting(unittest.TestCase):
+    def test_default_alpha_particle_mass_and_speed(self):
+        from unittest.mock import patch
+
+        import firm3d.field.tracing as tracing
+
+        field = BoozerAnalytic(0, 1, 0, 1, 1, 0.4)
+        path = [[0, 0.5, 0, 0, 0], [1e-4, 0.5, 0, 0, 0]]
+        with patch.object(
+            tracing.sopp,
+            "particle_guiding_center_boozer_tracing",
+            return_value=(path, []),
+        ) as solver:
+            trace_particles_boozer(field, np.array([[0.5, 0, 0]]), [0.0])
+        args = solver.call_args.args
+        self.assertEqual(args[2], 6.6446573450e-27)
+        self.assertAlmostEqual(args[4], 13028824.42052182, delta=1e-6)
+
     def test_field_type(self):
         etabar = 1.2 / 1.2
         B0 = 1.0
