@@ -212,7 +212,7 @@ template <typename T, int n> __device__ void interpolate(T*  out, const T* __res
 // id selects the collisionless or the collisional instantiation, which differ
 // only in the deriv stride and in the two extra columns the kick reads.
 template <typename T, RHS id, bool coll, int deriv_id>
-__device__ void rhs_GC_CartesianVacuum(T* derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu){
+__device__ void rhs_GC_CartesianVacuum(T* __restrict__ derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu){
     constexpr int nout = map_rhs_to_n_deriv_outputs<id, coll>();
 
     T x = x_temp[1*PARTICLES_PER_BLOCK];
@@ -265,7 +265,7 @@ __device__ void rhs_GC_CartesianVacuum(T* derivs, const T* __restrict__ x_temp, 
 
 // calc_derivs implementation for guiding center boozer vacuum tracing
 template <typename T, RHS id, bool coll, int deriv_id>
-__device__ void rhs_GC_BoozerVacuum(T* derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu){
+__device__ void rhs_GC_BoozerVacuum(T* __restrict__ derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu){
     constexpr int nout = map_rhs_to_n_deriv_outputs<id, coll>();
 
     T x1 = x_temp[1*PARTICLES_PER_BLOCK];
@@ -311,7 +311,7 @@ __device__ void rhs_GC_BoozerVacuum(T* derivs, const T* __restrict__ x_temp, con
 // The equations in this function match those for the CPU tracing at
 // tracing.cpp::GuidingCenterBoozerRHS
 template<typename T, RHS id, bool coll, int deriv_id>
-__device__ void rhs_GC_Boozer(T* derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu){
+__device__ void rhs_GC_Boozer(T* __restrict__ derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu){
     constexpr int nout = map_rhs_to_n_deriv_outputs<id, coll>();
 
     T x1 = x_temp[1*PARTICLES_PER_BLOCK];
@@ -380,7 +380,7 @@ __device__ void rhs_GC_Boozer(T* derivs, const T* __restrict__ x_temp, const T* 
 
 // calc_derivs implementation for guiding center boozer vacuum tracing with Shear Alfven Waves
 template <typename T, RHS id, bool coll, int deriv_id>
-__device__ void rhs_GC_BoozerVacuumSAW(T* derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu,
+__device__ void rhs_GC_BoozerVacuumSAW(T* __restrict__ derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu,
                                          T saw_omega, int* saw_m, int* saw_n, T* saw_phihats, int saw_nharmonics, const bool* __restrict__ is_valid){
     constexpr int nout = map_rhs_to_n_deriv_outputs<id, coll>();
     const int tid = threadIdx.x % 4; // [0,3]
@@ -508,7 +508,7 @@ __device__ void rhs_GC_BoozerVacuumSAW(T* derivs, const T* __restrict__ x_temp, 
 
 // calc_derivs implementation for guiding center boozer NoK tracing with Shear Alfven Waves
 template <typename T, RHS id, bool coll, int deriv_id>
-__device__ void rhs_GC_BoozerNoKSAW(T* derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu,
+__device__ void rhs_GC_BoozerNoKSAW(T* __restrict__ derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu,
                                      T saw_omega, int* saw_m, int* saw_n, T* saw_phihats, int saw_nharmonics, const bool* __restrict__ is_valid){
     constexpr int nout = map_rhs_to_n_deriv_outputs<id, coll>();
     const int tid = threadIdx.x % 4; // [0,3]
@@ -665,7 +665,7 @@ __device__ void rhs_GC_BoozerNoKSAW(T* derivs, const T* __restrict__ x_temp, con
 //
 // this function is templated across rhs options
 template<typename T, RHS id, bool coll, int deriv_id, typename... Args>
-__device__ void calc_derivs(T* derivs, const T* __restrict__ quadpts_arr, const T* __restrict__ x_temp, const bool* __restrict__ symmetry_exploited,
+__device__ void calc_derivs(T* __restrict__ derivs, const T* __restrict__ quadpts_arr, const T* __restrict__ x_temp, const bool* __restrict__ symmetry_exploited,
                                 const int* __restrict__ cell_index_start, const T* __restrict__ shape_fun_vals, const T* __restrict__ mu, const bool* __restrict__ is_valid,
                                 // optional parameters for SAW cases
                                 T saw_omega = 0, int* saw_m = nullptr, int* saw_n = nullptr,
@@ -806,12 +806,13 @@ __device__ void build_state(T* x_temp, bool* symmetry_exploited, int* cell_index
         int particle_id = idx % PARTICLES_PER_BLOCK;
         int state_var = idx / PARTICLES_PER_BLOCK;
 
-        x_temp[(state_var+1)*PARTICLES_PER_BLOCK + particle_id] = state[state_var*PARTICLES_PER_BLOCK + particle_id];
+        T acc = state[state_var*PARTICLES_PER_BLOCK + particle_id];
         T dt_particle = dt[particle_id];
+        constexpr int n_deriv_entries = map_rhs_to_n_deriv_outputs<id, coll>();
         for(int j=0; j<deriv_id; ++j){
-            constexpr int n_deriv_entries = map_rhs_to_n_deriv_outputs<id, coll>();
-            x_temp[(state_var+1)*PARTICLES_PER_BLOCK + particle_id] += dt_particle * T(dp5_wgts[deriv_id][j]) * derivs[(n_deriv_entries*j+state_var)*PARTICLES_PER_BLOCK + particle_id];
+            acc += dt_particle * T(dp5_wgts[deriv_id][j]) * derivs[(n_deriv_entries*j+state_var)*PARTICLES_PER_BLOCK + particle_id];
         }
+        x_temp[(state_var+1)*PARTICLES_PER_BLOCK + particle_id] = acc;
     }
     __syncthreads();
 
@@ -1091,8 +1092,8 @@ __device__ void collision_kick(T* state, T* mu, const T* __restrict__ derivs,
 // this function estimates error, accepts/rejects the proposed step
 // and adjust the step size
 template<typename T, RHS id, bool coll>
-__device__ void adjust_time(T* t, T* dt, double* tmax, T* state, T* __restrict__ derivs, const T* __restrict__ x_temp,
-                            bool* has_left, const T* __restrict__ dtmax, const bool* __restrict__ is_valid,
+__device__ void adjust_time(T* __restrict__ t, T* __restrict__ dt, double* __restrict__ tmax, T* __restrict__ state, T* __restrict__ derivs, const T* __restrict__ x_temp,
+                            bool* __restrict__ has_left, const T* __restrict__ dtmax, const bool* __restrict__ is_valid,
                             T* mu = nullptr, curandStatePhilox4_32_10_t* rng = nullptr, T* v_out = nullptr){
     // identify a particle and state index
     const int p = threadIdx.x % PARTICLES_PER_BLOCK;   // particle
