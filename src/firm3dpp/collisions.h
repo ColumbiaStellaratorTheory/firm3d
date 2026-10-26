@@ -69,14 +69,13 @@ struct ThermalBackground {
 //
 // --------------------------------------------------------------------------
 struct ThermalBackgroundView {
-    const double* n_grid;    // number density m^-3, n_points samples
-    const double* T_grid;    // temperature eV, n_points samples
+    const double* nT_grid;    // number density m^-3, temperature eV, n_points samples
     int    n_points;         // >= 2
     double s_min, s_max;
     double mass;             // kg
     double charge;           // C (signed)
 
-    FIRM3D_HD double interp(const double* vals, double s) const {
+    FIRM3D_HD void interp(double s, double& n, double&T) const {
         double lo = s_min, hi = s_max;
         if (s < lo) {
             s = lo;
@@ -92,11 +91,9 @@ struct ThermalBackgroundView {
             i = n_points - 2;
         }
         double t = (s - (lo + i * ds)) / ds;
-        return vals[i] * (1.0 - t) + vals[i + 1] * t;
+        n = nT_grid[2*i] * (1.0 - t) + nT_grid[2*i + 2] * t;
+        T = nT_grid[2*i+1] * (1.0 - t) + nT_grid[2*i + 3] * t;
     }
-
-    FIRM3D_HD double n(double s) const { return interp(n_grid, s); }
-    FIRM3D_HD double T_eV(double s) const { return interp(T_grid, s); }
 };
 
 // --------------------------------------------------------------------------
@@ -109,30 +106,10 @@ FIRM3D_HD inline double debye_length(
     double inv_lD_sq = 0.0;
     for (int ib = 0; ib < n_backgrounds; ++ib) {
         const ThermalBackgroundView& bg = backgrounds[ib];
-        // for each background we perform 2 linear interpolations for n_b and T_b
-        // on the same grid
-        // compute these indices once
-        const double lo = bg.s_min;
-        const double hi = bg.s_max;
-        double s_interp = s;
-        if (s < lo) {
-            s_interp = lo;
-        } else if (s > hi) {
-            s_interp = hi;
-        }
 
-        double grid_size = (bg.s_max - bg.s_min) / (bg.n_points - 1);
-        int i = (int)((s_interp - lo) / grid_size);
-        if (i < 0) {
-            i = 0;
-        } else if (i > bg.n_points - 2) {
-            i = bg.n_points - 2;
-        }
-
-        double t = (s_interp - (bg.s_min + i*grid_size)) / grid_size;
-
-        double n_b = bg.n_grid[i]*(1.0 - t) + bg.n_grid[i+1]*t;
-        double T_b = (bg.T_grid[i]*(1.0 - t) + bg.T_grid[i+1]*t)* COLL_EV_TO_J;
+        double n_b, T_b;
+        bg.interp(s, n_b, T_b);
+        T_b *= COLL_EV_TO_J;
 
         if (n_b > 0.0 && T_b > 0.0) {
             inv_lD_sq += n_b * bg.charge * bg.charge / (COLL_EPSILON0 * T_b);
@@ -230,28 +207,8 @@ FIRM3D_HD inline int compute_collision_coefficients_core(
     for (int ib = 0; ib < n_backgrounds; ++ib) {
         const ThermalBackgroundView& bg = backgrounds[ib];
 
-        // compute n_b and T_b reusing interpolant grid computation
-        const double lo = bg.s_min;
-        const double hi = bg.s_max;
-        double s_interp = s;
-        if (s < lo) {
-            s_interp = lo;
-        } else if (s > hi) {
-            s_interp = hi;
-        }
-
-        double grid_size = (bg.s_max - bg.s_min) / (bg.n_points - 1);
-        int i = (int)((s_interp - lo) / grid_size);
-        if (i < 0) {
-            i = 0;
-        } else if (i > bg.n_points - 2) {
-            i = bg.n_points - 2;
-        }
-
-        double t = (s_interp - (bg.s_min + i*grid_size)) / grid_size;
-
-        n_b[ib] = bg.n_grid[i]*(1.0 - t) + bg.n_grid[i+1]*t;
-        T_b[ib] = (bg.T_grid[i]*(1.0 - t) + bg.T_grid[i+1]*t)* COLL_EV_TO_J;
+        bg.interp(s, n_b[ib], T_b[ib]);
+        T_b[ib] *= COLL_EV_TO_J;
         
         if (n_b[ib] > 0.0 && T_b[ib] > 0.0){
             inv_lD_sq += n_b[ib] * bg.charge * bg.charge / (COLL_EPSILON0 * T_b[ib]);
@@ -344,10 +301,22 @@ inline int make_thermal_views(
     ThermalBackgroundView views[COLL_MAX_SPECIES])
 {
     const int n_bg = (int)backgrounds.size();
+
+    vector<double> all_backgrounds;
+    int offset[COLL_MAX_SPECIES];
+    for (int i = 0; i < n_bg; ++i) {
+        const ThermalBackground& bg = backgrounds[i];
+        offset[i] = all_backgrounds.size();
+        for (int j = 0; j < bg.s_grid.size(); ++j){
+            all_backgrounds.push_back(bg.n_grid[j]);
+            all_backgrounds.push_back(bg.T_grid[j]);
+        }
+    }
+
     for (int ib = 0; ib < n_bg; ++ib) {
         const ThermalBackground& bg = backgrounds[ib];
-        views[ib].n_grid   = bg.n_grid.data();
-        views[ib].T_grid   = bg.T_grid.data();
+        views[ib].nT_grid = all_backgrounds.data() + offset[ib];
+
         views[ib].n_points = (int)bg.s_grid.size();
         views[ib].s_min    = bg.s_grid.front();
         views[ib].s_max    = bg.s_grid.back();
@@ -375,7 +344,9 @@ inline std::pair<double, int> min_coulomb_log(
     int ib_min = -1;
     if (lambda_D > 0.0) {
         for (int ib = 0; ib < n_bg; ++ib) {
-            double n_b = views[ib].n(s), T_b = views[ib].T_eV(s) * COLL_EV_TO_J;
+            double n_b, T_b;
+            views[ib].interp(s, n_b, T_b);
+            T_b *= COLL_EV_TO_J;
             if (n_b <= 0.0 || T_b <= 0.0) continue;
             double lnL = coulomb_log(
                 v, m_a, q_a, views[ib].mass, views[ib].charge, T_b, lambda_D);

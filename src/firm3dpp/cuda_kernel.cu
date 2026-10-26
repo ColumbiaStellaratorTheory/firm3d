@@ -138,6 +138,12 @@ __constant__ ThermalBackgroundView coll_backgrounds_d[COLL_MAX_SPECIES];
 __constant__ int coll_n_backgrounds_d = 0;
 __constant__ unsigned long long coll_seed_d = 0;
 
+__constant__ int coll_n_pts_d[COLL_MAX_SPECIES];
+__constant__ double coll_s_min_d[COLL_MAX_SPECIES];
+__constant__ double coll_s_max_d[COLL_MAX_SPECIES];
+__constant__ double coll_mass_d[COLL_MAX_SPECIES];
+__constant__ double coll_charge_d[COLL_MAX_SPECIES];
+
 // global counter for workstealing
 __device__ int next_particle_d;
 
@@ -1383,10 +1389,10 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
 // make_thermal_views (collisions.h), which does the same job for the CPU.
 // The returned pointers are the caller's to free once the launch is done.
 // ---------------------------------------------------------------------------
-static vector<double*> upload_collision_backgrounds(
+static double* upload_collision_backgrounds(
     const vector<ThermalBackground>& backgrounds, unsigned long long rng_seed)
 {
-    vector<double*> owned;
+    double* owned;
     int n = (int)backgrounds.size();
     gpuErrchk(cudaMemcpyToSymbol(coll_seed_d, &rng_seed, sizeof(unsigned long long)));
 
@@ -1396,20 +1402,30 @@ static vector<double*> upload_collision_backgrounds(
         return owned;
     }
 
+    vector<double> all_backgrounds;
+    int offset[COLL_MAX_SPECIES];
+    for (int i = 0; i < n; ++i) {
+        const ThermalBackground& bg = backgrounds[i];
+        offset[i] = all_backgrounds.size();
+        for (int j = 0; j < bg.s_grid.size(); ++j){
+            all_backgrounds.push_back(bg.n_grid[j]);
+            all_backgrounds.push_back(bg.T_grid[j]);
+        }
+    }
+
+    double* nT_d; // stores n and T in device memory
+    gpuErrchk(cudaMalloc(&nT_d, all_backgrounds.size() * sizeof(double)));
+    gpuErrchk(cudaMemcpy(nT_d, all_backgrounds.data(),
+                         all_backgrounds.size() * sizeof(double),
+                         cudaMemcpyHostToDevice));
+
+
     ThermalBackgroundView views[COLL_MAX_SPECIES];
     for (int i = 0; i < n; ++i) {
         const ThermalBackground& bg = backgrounds[i];
         int np = (int)bg.s_grid.size();
-        double *n_d = nullptr, *T_d = nullptr;
-        gpuErrchk(cudaMalloc(&n_d, np * sizeof(double)));
-        gpuErrchk(cudaMalloc(&T_d, np * sizeof(double)));
-        gpuErrchk(cudaMemcpy(n_d, bg.n_grid.data(), np * sizeof(double), cudaMemcpyHostToDevice));
-        gpuErrchk(cudaMemcpy(T_d, bg.T_grid.data(), np * sizeof(double), cudaMemcpyHostToDevice));
-        owned.push_back(n_d);
-        owned.push_back(T_d);
 
-        views[i].n_grid   = n_d;
-        views[i].T_grid   = T_d;
+        views[i].nT_grid = nT_d + offset[i];
         views[i].n_points = np;
         views[i].s_min    = bg.s_grid.front();
         views[i].s_max    = bg.s_grid.back();
@@ -1418,17 +1434,16 @@ static vector<double*> upload_collision_backgrounds(
     }
     gpuErrchk(cudaMemcpyToSymbol(coll_backgrounds_d, views, n * sizeof(ThermalBackgroundView)));
     gpuErrchk(cudaMemcpyToSymbol(coll_n_backgrounds_d, &n, sizeof(int)));
-    return owned;
+    return nT_d;
 }
 
 // Switch the kick back off and release the profile buffers, so a later
 // collisionless launch does not see stale pointers in constant memory.
-static void release_collision_backgrounds(vector<double*>& owned)
+static void release_collision_backgrounds(double* owned)
 {
     int zero = 0;
     gpuErrchk(cudaMemcpyToSymbol(coll_n_backgrounds_d, &zero, sizeof(int)));
-    for (double* ptr : owned) gpuErrchk(cudaFree(ptr));
-    owned.clear();
+    gpuErrchk(cudaFree(owned));
 }
 
 template<typename T, RHS id, bool coll, typename... Args>
@@ -1656,7 +1671,7 @@ vector<double> cartesian_collision_gpu_tracing(py::array_t<double> quad_pts, py:
     py::array_t<double> mu_in = py::array_t<double>(nparticles);
     std::fill_n(mu_in.mutable_data(), nparticles, -1.0);
 
-    vector<double*> owned = upload_collision_backgrounds(backgrounds, rng_seed);
+    double* owned = upload_collision_backgrounds(backgrounds, rng_seed);
     vector<double> results = gpu_tracing<double, RHS::GC_CartesianVacuum, true>(
         quad_pts, rrange, phirange, zrange, xyz_init, m, q, vtotal, vtang, tmax, tol, dt_in, mu_in, nparticles);
     release_collision_backgrounds(owned);
@@ -1681,7 +1696,7 @@ vector<double> boozer_collision_gpu_tracing(py::array_t<double> quad_pts, py::ar
     py::array_t<double> mu_in = py::array_t<double>(nparticles);
     std::fill_n(mu_in.mutable_data(), nparticles, -1.0);
 
-    vector<double*> owned = upload_collision_backgrounds(backgrounds, rng_seed);
+    double* owned = upload_collision_backgrounds(backgrounds, rng_seed);
     vector<double> results;
     if (vacuum) {
         results = gpu_tracing<double, RHS::GC_BoozerVacuum, true>(
