@@ -37,9 +37,15 @@ def compute_loss_fraction(res_tys, tmin=1e-7, tmax=1e-2, ntime=1000):
 
     times = np.logspace(np.log10(tmin), np.log10(tmax), ntime)
 
+    # Classify with the same relative margin the GPU tracer uses to decide
+    # who was lost (catapult.tracing._cpu_format): a single-precision run
+    # records a survivor's final time as float32(tmax), about one float32 ulp
+    # (1e-9 at tmax = 1e-2) below the float64 tmax, which an absolute margin
+    # of 1e-15 counts as a loss.
     loss_frac = np.zeros_like(times)
     for it in range(ntime):
-        loss_frac[it] = np.count_nonzero(timelost < times[it] - 1e-15) / nparticles
+        lost = timelost < times[it] * (1 - 1e-6)
+        loss_frac[it] = np.count_nonzero(lost) / nparticles
 
     return times, loss_frac
 
