@@ -39,3 +39,19 @@ class ComputeLossFractionTests(unittest.TestCase):
         self.assertEqual(loss_frac[-1], 0.5)
         np.testing.assert_array_equal(loss_frac[times < time_lost], 0.0)
         np.testing.assert_array_equal(loss_frac[times > 3.4e-4], 0.5)
+
+    def test_loss_just_under_a_sample_time_counts_at_that_sample(self):
+        # the float32 tolerance applies to the lost/survived decision at
+        # tmax only, never to when along the curve a loss is counted
+        tmax = 1e-2
+        times, _ = compute_loss_fraction([trajectory(tmax)], tmax=tmax)
+        sample = times[500]
+        res_tys = [trajectory(sample * (1 - 1e-7)), trajectory(tmax)]
+        _, loss_frac = compute_loss_fraction(res_tys, tmax=tmax)
+        self.assertEqual(loss_frac[500], 0.5)
+
+    def test_loss_just_before_tmax_counts(self):
+        tmax = 1e-2
+        res_tys = [trajectory(tmax * (1 - 1e-5)), trajectory(tmax)]
+        _, loss_frac = compute_loss_fraction(res_tys, tmax=tmax)
+        self.assertEqual(loss_frac[-1], 0.5)
