@@ -354,7 +354,7 @@ __device__ void rhs_GC_Boozer(T* __restrict__ derivs, const T* __restrict__ x_te
 
     T mass_vpar_modB = T(mass_d) * v_par / modB;
 
-    T C = mass_vpar_modB * (-dKdzeta  + dGdpsi) - T(charge_d) * iota; 
+    T C = mass_vpar_modB * (-dKdzeta  + dGdpsi) - T(charge_d) * iota;
     T F = mass_vpar_modB * (-dKdtheta + dIdpsi) + T(charge_d) ;
     T inv_D_iota = 1 / (F * G - C * I);
 
@@ -506,6 +506,11 @@ __device__ void rhs_GC_BoozerVacuumSAW(T* __restrict__ derivs, const T* __restri
                         + dmodBdtheta*iota_minus_dalphadpsi_G) + T(charge_d)*(alphadot_G \
                         + dalphadtheta_G*dphidpsi + iota_minus_dalphadpsi_G*dphidtheta + dphidzeta)) \
                         + vpar_over_modB * (dmodBdtheta*dphidpsi - dmodBdpsi*dphidtheta);
+
+            // if collisions are turned on, write out the magnitude of the magnetic field
+            if constexpr (coll){
+                derivs[(nout*deriv_id + 4)*PARTICLES_PER_BLOCK + p] = modB;
+            }
         }
 
     }
@@ -602,7 +607,7 @@ __device__ void rhs_GC_BoozerNoKSAW(T* __restrict__ derivs, const T* __restrict_
                 T alpha_i = -phihat_sin*alpha_fac;
                 T alphadot_i = -phihat_cos * iota_mn;
                 T dalphadpsi_i = -dphidpsi_i * alpha_fac - phihat_sin*dalpha_fac_dpsi;
-                
+
                 T dalphadtheta_i = -dphidtheta_i * alpha_fac;
                 T dalphadzeta_i = -dphidzeta_i * alpha_fac;
 
@@ -661,8 +666,13 @@ __device__ void rhs_GC_BoozerNoKSAW(T* __restrict__ derivs, const T* __restrict_
                             + dmodBdpsi*(I*dphidzeta - G*dphidtheta)) \
                             + v_par*(T(mass_d)*mu_val*(dmodBdtheta*dGdpsi - dmodBdzeta*dIdpsi) \
                             + T(charge_d)*(alphadot*(dGdpsi*I-G*dIdpsi) + dGdpsi*dphidtheta - dIdpsi*dphidzeta)))*denom;
+
+            // if collisions are turned on, write out the magnitude of the magnetic field
+            if constexpr (coll){
+                derivs[(nout*deriv_id + 4)*PARTICLES_PER_BLOCK+p] = modB;
+            }
         }
-    }   
+    }
 };
 
 // calc_derivs computes the derivatives at points for which the corresponding
@@ -690,7 +700,7 @@ __device__ void calc_derivs(T* __restrict__ derivs, const T* __restrict__ quadpt
             rhs_GC_BoozerVacuum<T, id, coll, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
         } else if constexpr(id == RHS::GC_Boozer){
             rhs_GC_Boozer<T, id, coll, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
-        } 
+        }
     }
 
     // if a SAW is present, there is more to cooperate on
@@ -1392,7 +1402,7 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
 static double* upload_collision_backgrounds(
     const vector<ThermalBackground>& backgrounds, unsigned long long rng_seed)
 {
-    double* owned;
+    double* owned = nullptr;
     int n = (int)backgrounds.size();
     gpuErrchk(cudaMemcpyToSymbol(coll_seed_d, &rng_seed, sizeof(unsigned long long)));
 
