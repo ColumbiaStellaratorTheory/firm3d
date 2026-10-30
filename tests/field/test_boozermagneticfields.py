@@ -145,6 +145,72 @@ class TestingAnalytic(unittest.TestCase):
         ba.set_K1(3.7)
         assert ba.K1 == 3.7
 
+    def test_boozeranalytic_B0z_multipoint(self):
+        """
+        Evaluating the B0z perturbation on many points at once must match
+        evaluating it one point at a time, and the closed form.
+        """
+        ba = BoozerAnalytic(
+            etabar=0.12,
+            B0=5.7,
+            N=4,
+            G0=45.6,
+            psi0=8.2,
+            iota0=0.42,
+            Bbar=5.7,
+            B0z=[0.57, -0.2],
+            n=[1, 0],
+            m=[0, 1],
+        )
+        rng = np.random.default_rng(0)
+        npts = 7
+        points = np.column_stack(
+            [
+                rng.uniform(0.05, 0.95, npts),
+                rng.uniform(0.0, 2 * np.pi, npts),
+                rng.uniform(0.0, 2 * np.pi, npts),
+            ]
+        )
+
+        quantities = ["modB", "dmodBds", "dmodBdtheta", "dmodBdzeta"]
+        ba.set_points(points)
+        multi = {q: getattr(ba, q)()[:, 0].copy() for q in quantities}
+        single = {q: np.zeros(npts) for q in quantities}
+        for i in range(npts):
+            ba.set_points(points[i : i + 1])
+            for q in quantities:
+                single[q][i] = getattr(ba, q)()[0, 0]
+        for q in quantities:
+            np.testing.assert_allclose(multi[q], single[q], rtol=1e-14, err_msg=q)
+
+        s, theta, zeta = points.T
+        r = np.sqrt(2 * s * ba.psi0 / ba.Bbar)
+        chi = theta - ba.N * zeta
+        modB = (
+            ba.B0 * (1 + ba.etabar * r * np.cos(chi))
+            + 0.57 * np.cos(-ba.N * zeta)
+            - 0.2 * np.cos(theta)
+        )
+        dmodBdtheta = -ba.B0 * ba.etabar * r * np.sin(chi) + 0.2 * np.sin(theta)
+        dmodBdzeta = ba.N * ba.B0 * ba.etabar * r * np.sin(chi) + 0.57 * ba.N * np.sin(
+            -ba.N * zeta
+        )
+        np.testing.assert_allclose(multi["modB"], modB, rtol=1e-14)
+        np.testing.assert_allclose(multi["dmodBdtheta"], dmodBdtheta, rtol=1e-13)
+        np.testing.assert_allclose(multi["dmodBdzeta"], dmodBdzeta, rtol=1e-13)
+
+        # Repeated identical points must each see only their own perturbation.
+        ba.set_B0z([0.57, 0.0])
+        ba.set_points(np.tile([[0.5, 0.0, 0.0]], (4, 1)))
+        np.testing.assert_allclose(
+            ba.modB()[:, 0], 5.7 * (1 + 0.12 * np.sqrt(2 * 0.5 * 8.2 / 5.7)) + 0.57
+        )
+
+        for bad in ([0.57], [0.57, 0.0, 0.1]):
+            with self.assertRaises(ValueError):
+                ba.set_B0z(bad)
+        np.testing.assert_array_equal(ba.B0z, [0.57, 0.0])
+
 
 class TestingFiniteBeta(unittest.TestCase):
     def test_boozerradialinterpolant_finite_beta(self):

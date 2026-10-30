@@ -15,7 +15,9 @@ using std::shared_ptr;
 using std::vector;
 
 namespace py = pybind11;
+#ifdef USE_MPI
 using firm3dpp::mpi::get_mpi_comm_from_fortran;
+#endif
 
 void init_boozermagneticfields(py::module_ &m){
   auto mf = py::class_<
