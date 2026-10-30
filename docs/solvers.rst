@@ -45,9 +45,11 @@ Dormand-Prince Solver
 ---------------------
 
 A third option, ``ODE_solver="dormand_prince"``, uses an alternative adaptive
-Dormand-Prince implementation. It accepts a ``DP_hmin`` parameter (default
-``0.0``): if the adaptive step size drops below ``DP_hmin``, the stepper
-completes the step using ``DP_hmin`` instead.
+Dormand-Prince implementation. It accepts a ``DP_hmin`` parameter in seconds
+(default ``0.0``): if the adaptive step size drops below ``DP_hmin``, the
+stepper completes the step using ``DP_hmin`` instead. A ``DP_hmin`` larger
+than the maximum step, a quarter of a toroidal transit, raises a
+``ValueError``.
 
 Solver Options Reference
 ------------------------

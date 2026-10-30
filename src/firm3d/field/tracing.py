@@ -179,6 +179,8 @@ def trace_particles_boozer_perturbed(
             (s*cos(theta),s*sin(theta),zeta). Option 2 is recommended.
         ODE_solver: Which ODE solver to use, can be "boost" or "dormand prince".
             Defaults to "boost".
+        DP_hmin: Minimal timestep, in seconds, as for
+            :func:`trace_particles_boozer`.
     Returns: 2 element tuple containing
         - ``res_tys``:
             A list of numpy arrays (one for each particle) describing the
@@ -419,7 +421,9 @@ def trace_particles_boozer(
         DP_hmin: Minimal timestep, in seconds, to enforce during numerical
             integration with adaptive timestep. If the adaptive time step gets
             below DP_hmin, the stepper completes the step with DP_hmin anyway.
-            Default is 0.0. Only used if `ODE_solver` is "dormand_prince".
+            It must not exceed the maximum step, a quarter of a toroidal
+            transit. Default is 0.0. Only used if `ODE_solver` is
+            "dormand_prince".
     Returns: 2 element tuple containing
         - ``res_tys``:
             A list of numpy arrays (one for each particle) describing the

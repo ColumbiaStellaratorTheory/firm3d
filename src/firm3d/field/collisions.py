@@ -294,7 +294,9 @@ def trace_particles_boozer_with_collisions(
             seconds.  When the adaptive step falls below this value the
             step is accepted anyway.  Prevents the solver from grinding
             when a particle diffuses deep below the background thermal
-            speed, where the pitch-scattering rate diverges as 1/v^3.
+            speed, where the pitch-scattering rate diverges as 1/v^3.  It
+            must not exceed the maximum step, a quarter of a toroidal
+            transit.
         rng_seed: Seed for the per-particle Wiener process.  Each particle
             uses ``rng_seed + particle_index`` so that MPI runs are
             reproducible.

@@ -14,6 +14,7 @@
 #include <functional>
 #include <cassert>
 #include <stdexcept>
+#include <sstream>
 #include <iomanip>
 #include <boost/math/tools/roots.hpp>
 #include <boost/math/tools/toms748_solve.hpp>
@@ -463,6 +464,12 @@ static std::unique_ptr<ODESolver> make_ode_solver(
     double DP_hmin,
     double tnorm) {
     if (ode_solver == "dormand_prince") {
+        if (DP_hmin > dtau_max * tnorm) {
+            std::ostringstream msg;
+            msg << "DP_hmin = " << DP_hmin << " s exceeds the maximum step of "
+                << dtau_max * tnorm << " s; DP_hmin is in seconds";
+            throw std::invalid_argument(msg.str());
+        }
         return create_dormand_prince_solver(
             abstol,
             reltol,
