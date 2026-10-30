@@ -124,6 +124,13 @@ def _launch_cartesian(
     One CATAPULT launch in a CatapultCartesianField. Returns the
     (nparticles, 7) array (t, x, y, z, vpar, dt, mu) in the field's dtype.
     """
+    if getattr(cfield, "has_flux_label", False):
+        raise ValueError(
+            "the collisionless kernel reads the table without the flux label "
+            "column, so the field must be built without a flux_label; use "
+            "trace_particles_cartesian_with_collisions_gpu for a collisional "
+            "trace"
+        )
     dtype = cfield.dtype
     xyz_inits = np.ascontiguousarray(xyz_inits, dtype=dtype)
     if xyz_inits.ndim != 2 or xyz_inits.shape[1] != 3:
@@ -648,9 +655,9 @@ def trace_particles_cartesian_gpu(
     and the result follow simsopt's trace_particles, where CATAPULT has the
     same option.
 
-    field: a CatapultCartesianField, holding the field and the surface
-        classifier tabulated at the precision to trace in; particles are
-        stopped when they cross that surface
+    field: a CatapultCartesianField, built without a flux_label, holding the
+        field and the surface classifier tabulated at the precision to trace
+        in; particles are stopped when they cross that surface
     xyz_inits: initial positions, shape (nparticles, 3), in (x, y, z)
     parallel_speeds: initial parallel speeds of the particles
     tmax: maximum time to trace particles, either a scalar applied to every

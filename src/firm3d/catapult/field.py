@@ -202,7 +202,8 @@ class CatapultCartesianField:
             tabulated as an extra column and is what the collisional kernel
             reads to evaluate the thermal profiles, so
             :func:`trace_particles_cartesian_with_collisions_gpu` requires a
-            field built with one. Collisions are traced in double precision.
+            field built with one, and the collisionless entry points refuse
+            one. Collisions are traced in double precision.
 
     Attributes:
         dtype: The numpy dtype matching ``precision``.
