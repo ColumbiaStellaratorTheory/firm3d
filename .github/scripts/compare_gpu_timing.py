@@ -59,7 +59,7 @@ def format_timing_table(base, pr):
     pr_times = pr.get("times", {})
     all_keys = sorted(set(base_times) | set(pr_times))
 
-    no_base = not base  
+    no_base = not base
     no_pr = not pr
 
     lines = [

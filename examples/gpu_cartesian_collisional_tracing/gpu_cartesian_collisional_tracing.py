@@ -80,7 +80,9 @@ if_time = time.perf_counter() - start_if
 
 # Build the normalized toroidal flux s(r, phi, z) for evaluation of profiles.
 bri = BoozerRadialInterpolant(wout_filename, 3, enforce_vacuum=True)
-bfield = InterpolatedBoozerField(bri, 3, ns_interp=resolution, ntheta_interp=resolution, nzeta_interp=resolution)
+bfield = InterpolatedBoozerField(
+    bri, 3, ns_interp=resolution, ntheta_interp=resolution, nzeta_interp=resolution
+)
 
 n_s, n_ang = 48, 48
 s_grid = np.linspace(0.02, 1.0, n_s)
