@@ -8,6 +8,7 @@
     #include "symplectic.h"
 #endif
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 #include <functional>
@@ -761,6 +762,7 @@ particle_guiding_center_boozer_tracing(
     Array2 stz({{stz_init[0], stz_init[1], stz_init[2]}});
     field->set_points(stz);
     double modB = field->modB()(0);
+    vtang = std::clamp(vtang, -vtotal, vtotal);
     double vperp2 = vtotal*vtotal - vtang*vtang;
     double mu = vperp2/(2*modB);
     vector<double> stzv(4);
@@ -1253,6 +1255,7 @@ particle_guiding_center_boozer_collision_tracing(
 
     double tau_max = tmax / tnorm;
 
+    vtang = std::clamp(vtang, -vtotal, vtotal);
     double vperp2  = vtotal * vtotal - vtang * vtang;
     double mu_init = vperp2 / (2.0 * modB);
 

@@ -941,7 +941,7 @@ __device__ void setup_particle(T* mu, T* t, T* dt, T* dtmax, T* x_temp, bool* sy
 
     if(threadIdx.x < PARTICLES_PER_BLOCK && is_valid[threadIdx.x]){
         T v_par = state[3*PARTICLES_PER_BLOCK + threadIdx.x];
-        T v_perp2 = T(v_total_d)*T(v_total_d) - v_par*v_par;
+        T v_perp2 = fmax(T(v_total_d)*T(v_total_d) - v_par*v_par, T(0));
 
         T modB;
         constexpr CoordSys coord = map_rhs_to_coord<id>();

@@ -796,9 +796,15 @@ class TestParallelSpeedExceedingTotal(unittest.TestCase):
                     )
                 self.assertIn("must not exceed", str(cm.exception))
 
-        # |v_par| == vtotal exactly is a purely passing particle, and legal.
-        traj = _coll_trace(_field(), _hot_background(), vpar_fraction=1.0, tmax=1e-8)
-        self.assertEqual(traj.shape[1], 6)
+        # |v_par| == vtotal, or above it only by rounding, is a purely passing
+        # particle, and legal.
+        for fraction in (1.0, 1.0 + np.finfo(float).eps):
+            with self.subTest(vpar_fraction=fraction):
+                traj = _coll_trace(
+                    _field(), _hot_background(), vpar_fraction=fraction, tmax=1e-6
+                )
+                self.assertEqual(traj.shape[1], 6)
+                self.assertTrue(np.all(np.isfinite(traj)))
 
 
 class TestUnphysicalCoulombLog(unittest.TestCase):
