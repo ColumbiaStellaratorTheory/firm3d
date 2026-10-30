@@ -72,4 +72,5 @@ src/firm3d/_version.py
 
 # outputs written by the GPU examples
 examples/**/particle_data.csv
+examples/**/*_results.json
 examples/**/trajectories.h5

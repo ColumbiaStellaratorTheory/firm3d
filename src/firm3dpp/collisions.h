@@ -15,7 +15,7 @@ using std::vector;
   #define FIRM3D_HD
 #endif
 
-// Physical constants (SI).  
+// Physical constants (SI).
 static constexpr double COLL_EPSILON0    = 8.8541878188e-12;   // F/m
 static constexpr double COLL_SQRT_PI     = 1.7724538509055159; // sqrt(pi)
 static constexpr double COLL_HBAR        = 1.054571817e-34;    // J·s (reduced Planck)
@@ -32,17 +32,38 @@ static constexpr double COLL_CUTOFF      = 0.1;
 // --------------------------------------------------------------------------
 // Chandrasekhar G function: G(x) = [erf(x) - (2x/sqrt(pi)) exp(-x^2)] / (2x^2)
 // Satisfies G'(x) = (2/sqrt(pi)) exp(-x^2) - 2 G(x)/x
+//
+// chandrasekhar_G_and_deriv gives erf(x), G(x) and G'(x) from one erf and
+// one exp.
 // --------------------------------------------------------------------------
+FIRM3D_HD inline void chandrasekhar_G_and_deriv(
+    double x, double& erf_x, double& G, double& Gp)
+{
+    erf_x = std::erf(x);
+    if (x == 0.0) {
+        G  = 0.0;
+        Gp = 2.0 / (3.0 * COLL_SQRT_PI);
+        return;
+    }
+    double twoexp_over_sqrtpi = (2.0 / COLL_SQRT_PI) * std::exp(-x * x);
+    G  = (erf_x - x * twoexp_over_sqrtpi) / (2.0 * x * x);
+    Gp = twoexp_over_sqrtpi - 2.0 * G / x;
+}
+
 FIRM3D_HD inline double chandrasekhar_G(double x) {
-    if (x == 0.0) return 0.0;
-    return (std::erf(x) - (2.0 * x / COLL_SQRT_PI) * std::exp(-x * x)) / (2.0 * x * x);
+    double erf_x, G, Gp;
+    chandrasekhar_G_and_deriv(x, erf_x, G, Gp);
+    return G;
 }
 
 // dG/dx = (2/sqrt(pi)) exp(-x^2) - 2 G(x)/x
 FIRM3D_HD inline double chandrasekhar_G_deriv(double x) {
-    if (x == 0.0) return 2.0 / (3.0 * COLL_SQRT_PI);
-    return (2.0 / COLL_SQRT_PI) * std::exp(-x * x) - 2.0 * chandrasekhar_G(x) / x;
+    double erf_x, G, Gp;
+    chandrasekhar_G_and_deriv(x, erf_x, G, Gp);
+    return Gp;
 }
+
+
 
 // --------------------------------------------------------------------------
 // Background species specification.
@@ -67,14 +88,13 @@ struct ThermalBackground {
 //
 // --------------------------------------------------------------------------
 struct ThermalBackgroundView {
-    const double* n_grid;    // number density m^-3, n_points samples
-    const double* T_grid;    // temperature eV, n_points samples
+    const double* nT_grid;    // number density m^-3, temperature eV, n_points samples
     int    n_points;         // >= 2
     double s_min, s_max;
     double mass;             // kg
     double charge;           // C (signed)
 
-    FIRM3D_HD double interp(const double* vals, double s) const {
+    FIRM3D_HD void interp(double s, double& n, double&T) const {
         double lo = s_min, hi = s_max;
         if (s < lo) {
             s = lo;
@@ -90,26 +110,29 @@ struct ThermalBackgroundView {
             i = n_points - 2;
         }
         double t = (s - (lo + i * ds)) / ds;
-        return vals[i] * (1.0 - t) + vals[i + 1] * t;
+        n = nT_grid[2*i] * (1.0 - t) + nT_grid[2*i + 2] * t;
+        T = nT_grid[2*i+1] * (1.0 - t) + nT_grid[2*i + 3] * t;
     }
-
-    FIRM3D_HD double n(double s) const { return interp(n_grid, s); }
-    FIRM3D_HD double T_eV(double s) const { return interp(T_grid, s); }
 };
 
 // --------------------------------------------------------------------------
-// Total Debye length at s: 1/lambda_D^2 = sum_b n_b q_b^2 / (eps0 T_b),
-// active (n > 0, T > 0) species only.  0 when none is active.
+// Density n_b (m^-3) and temperature T_b (J) of every species at s, and the
+// total Debye length there: 1/lambda_D^2 = sum_b n_b q_b^2 / (eps0 T_b),
+// active (n > 0, T > 0) species only.  lambda_D is 0 when none is active.
 // --------------------------------------------------------------------------
-FIRM3D_HD inline double debye_length(
-    const ThermalBackgroundView* backgrounds, int n_backgrounds, double s)
+FIRM3D_HD inline double sample_backgrounds(
+    const ThermalBackgroundView* backgrounds, int n_backgrounds, double s,
+    double n_b[COLL_MAX_SPECIES], double T_b[COLL_MAX_SPECIES])
 {
     double inv_lD_sq = 0.0;
     for (int ib = 0; ib < n_backgrounds; ++ib) {
         const ThermalBackgroundView& bg = backgrounds[ib];
-        double n_b = bg.n(s), T_b = bg.T_eV(s) * COLL_EV_TO_J;
-        if (n_b > 0.0 && T_b > 0.0) {
-            inv_lD_sq += n_b * bg.charge * bg.charge / (COLL_EPSILON0 * T_b);
+
+        bg.interp(s, n_b[ib], T_b[ib]);
+        T_b[ib] *= COLL_EV_TO_J;
+
+        if (n_b[ib] > 0.0 && T_b[ib] > 0.0) {
+            inv_lD_sq += n_b[ib] * bg.charge * bg.charge / (COLL_EPSILON0 * T_b[ib]);
         }
     }
     double lambda_D = 0.0;
@@ -117,6 +140,15 @@ FIRM3D_HD inline double debye_length(
         lambda_D = 1.0 / std::sqrt(inv_lD_sq);
     }
     return lambda_D;
+}
+
+// Total Debye length at s; see sample_backgrounds.
+FIRM3D_HD inline double debye_length(
+    const ThermalBackgroundView* backgrounds, int n_backgrounds, double s)
+{
+    double n_b[COLL_MAX_SPECIES];
+    double T_b[COLL_MAX_SPECIES];
+    return sample_backgrounds(backgrounds, n_backgrounds, s, n_b, T_b);
 }
 
 // --------------------------------------------------------------------------
@@ -136,15 +168,15 @@ FIRM3D_HD inline double debye_length(
 // See also: NRL Plasma Formulary (Huba), "Collision Parameters" section;
 // Spitzer, Physics of Fully Ionized Gases (1962), Ch. 5.
 //
-// T_b in J. 
+// T_b in J.
 // --------------------------------------------------------------------------
 FIRM3D_HD inline double coulomb_log(
     double v, double m_a, double q_a,
     double m_b, double q_b, double T_b, double lambda_D)
 {
-    double v_th     = std::sqrt(2.0 * T_b / m_b);
+    double v_th_sq     = 2.0 * T_b / m_b;
     double m_r      = m_a * m_b / (m_a + m_b);
-    double v_eff_sq = v * v + v_th * v_th;
+    double v_eff_sq = v * v + v_th_sq;
     double bcl      = std::abs(q_a * q_b)
                       / (4.0 * M_PI * COLL_EPSILON0 * m_r * v_eff_sq);
     double bqm      = COLL_HBAR / (2.0 * m_r * std::sqrt(v_eff_sq));
@@ -187,46 +219,48 @@ FIRM3D_HD inline int compute_collision_coefficients_core(
     int n_backgrounds,
     CollisionCoefficients* out)
 {
-    CollisionCoefficients c = {0.0, 0.0, 0.0, 0.0, 0.0};
+    // CollisionCoefficients c = {0.0, 0.0, 0.0, 0.0, 0.0};
+    double D_par = 0.0;
+    double dD_par_dv = 0.0;
+    double nu_D = 0.0;
+    double K = 0.0;
+    double v_cutoff = 0.0;
 
-    double lambda_D = debye_length(backgrounds, n_backgrounds, s);
+    double n_b[COLL_MAX_SPECIES];
+    double T_b[COLL_MAX_SPECIES];
+    double lambda_D = sample_backgrounds(backgrounds, n_backgrounds, s, n_b, T_b);
 
     // Coldest active species sets the reflecting boundary v_cutoff.
     double T_min = HUGE_VAL;
     for (int ib = 0; ib < n_backgrounds; ++ib) {
-        const ThermalBackgroundView& bg = backgrounds[ib];
-        double n_b = bg.n(s), T_b = bg.T_eV(s) * COLL_EV_TO_J;
-        if (n_b > 0.0 && T_b > 0.0 && T_b < T_min) {
-            T_min = T_b;
+        if (n_b[ib] > 0.0 && T_b[ib] > 0.0 && T_b[ib] < T_min) {
+            T_min = T_b[ib];
         }
     }
     if (T_min < HUGE_VAL)
-        c.v_cutoff = COLL_CUTOFF * std::sqrt(T_min / m_a);
+        v_cutoff = COLL_CUTOFF * std::sqrt(T_min / m_a);
 
     for (int ib = 0; ib < n_backgrounds; ++ib) {
         const ThermalBackgroundView& bg = backgrounds[ib];
-        double n_b = bg.n(s);
-        double T_b = bg.T_eV(s) * COLL_EV_TO_J;
-        if (n_b <= 0.0 || T_b <= 0.0) continue;
+        if (n_b[ib] <= 0.0 || T_b[ib] <= 0.0) continue;
 
         double m_b    = bg.mass;
         double q_b    = bg.charge;
 
         // Background thermal speed and normalized EP speed
-        double v_th   = std::sqrt(2.0 * T_b / m_b);
+        double v_th   = std::sqrt(2.0 * T_b[ib] / m_b);
         double x      = v / v_th;
 
-        double lnL = coulomb_log(v, m_a, q_a, m_b, q_b, T_b, lambda_D);
+        double lnL = coulomb_log(v, m_a, q_a, m_b, q_b, T_b[ib], lambda_D);
         if (lnL <= 0.0) {
             return COLL_LNLAMBDA_NONPOSITIVE;
         }
 
-        double G      = chandrasekhar_G(x);
-        double Gp     = chandrasekhar_G_deriv(x);   // dG/dx
-        double erf_x  = std::erf(x);
+        double erf_x, G, Gp;   // Gp = dG/dx
+        chandrasekhar_G_and_deriv(x, erf_x, G, Gp);
 
         // Prefactor: Gamma = n_b q_a^2 q_b^2 lnL / (4 pi eps0^2 m_a^2)  [m^3/s^4]
-        double Gamma  = n_b * q_a * q_a * q_b * q_b * lnL
+        double Gamma  = n_b[ib] * q_a * q_a * q_b * q_b * lnL
                         / (4.0 * M_PI * COLL_EPSILON0 * COLL_EPSILON0 * m_a * m_a);
 
         // Parallel diffusion and its v-derivative
@@ -241,37 +275,57 @@ FIRM3D_HD inline int compute_collision_coefficients_core(
         //                             = -Gamma * G * m_a / T_b.
         // Matches ASCOT5 mccc_coefs_Q and guarantees relaxation to the
         // background Maxwellian.
-        double Q_b = -Gamma * G * m_a / T_b;
+        double Q_b = -Gamma * G * m_a / T_b[ib];
 
         // Total deterministic drift in v: K = Q + d(D_par)/dv + 2*D_par/v
         double K_b = Q_b + dD_par_dv_b + 2.0 * D_par_b / v;
 
-        c.D_par     += D_par_b;
-        c.dD_par_dv += dD_par_dv_b;
-        c.nu_D      += nu_D_b;
-        c.K         += K_b;
+        D_par     += D_par_b;
+        dD_par_dv += dD_par_dv_b;
+        nu_D      += nu_D_b;
+        K         += K_b;
     }
-    *out = c;
+    out->D_par = D_par;
+    out->dD_par_dv = dD_par_dv;
+    out->nu_D = nu_D;
+    out->K = K;
+    out->v_cutoff = v_cutoff;
+
     return COLL_OK;
 }
 
 // --------------------------------------------------------------------------
 // Convert ThermalBackground structs into the plain-pointer form
-// (ThermalBackgroundView) that the collision routines take.  Fills
-// views[0..n) with pointers into each background's grids and returns n.
+// (ThermalBackgroundView) that the collision routines take.  Packs the
+// (n, T) samples of every background, interleaved, into nT_storage, fills
+// views[0..n) with pointers into it and returns n.  The views are valid only
+// while nT_storage is alive and unmodified.
 //
 // The pointer form exists because the collision routines also run in CUDA
-// kernels, where std::vector cannot be used. 
+// kernels, where std::vector cannot be used.
 // --------------------------------------------------------------------------
 inline int make_thermal_views(
     const vector<ThermalBackground>& backgrounds,
-    ThermalBackgroundView views[COLL_MAX_SPECIES])
+    ThermalBackgroundView views[COLL_MAX_SPECIES],
+    vector<double>& nT_storage)
 {
     const int n_bg = (int)backgrounds.size();
+
+    nT_storage.clear();
+    int offset[COLL_MAX_SPECIES];
+    for (int i = 0; i < n_bg; ++i) {
+        const ThermalBackground& bg = backgrounds[i];
+        offset[i] = (int)nT_storage.size();
+        for (size_t j = 0; j < bg.s_grid.size(); ++j){
+            nT_storage.push_back(bg.n_grid[j]);
+            nT_storage.push_back(bg.T_grid[j]);
+        }
+    }
+
     for (int ib = 0; ib < n_bg; ++ib) {
         const ThermalBackground& bg = backgrounds[ib];
-        views[ib].n_grid   = bg.n_grid.data();
-        views[ib].T_grid   = bg.T_grid.data();
+        views[ib].nT_grid = nT_storage.data() + offset[ib];
+
         views[ib].n_points = (int)bg.s_grid.size();
         views[ib].s_min    = bg.s_grid.front();
         views[ib].s_max    = bg.s_grid.back();
@@ -293,13 +347,16 @@ inline std::pair<double, int> min_coulomb_log(
     const vector<ThermalBackground>& backgrounds)
 {
     ThermalBackgroundView views[COLL_MAX_SPECIES];
-    const int n_bg = make_thermal_views(backgrounds, views);
+    vector<double> nT_storage;
+    const int n_bg = make_thermal_views(backgrounds, views, nT_storage);
     double lambda_D = debye_length(views, n_bg, s);
     double lnL_min = HUGE_VAL;
     int ib_min = -1;
     if (lambda_D > 0.0) {
         for (int ib = 0; ib < n_bg; ++ib) {
-            double n_b = views[ib].n(s), T_b = views[ib].T_eV(s) * COLL_EV_TO_J;
+            double n_b, T_b;
+            views[ib].interp(s, n_b, T_b);
+            T_b *= COLL_EV_TO_J;
             if (n_b <= 0.0 || T_b <= 0.0) continue;
             double lnL = coulomb_log(
                 v, m_a, q_a, views[ib].mass, views[ib].charge, T_b, lambda_D);
@@ -316,18 +373,17 @@ inline std::pair<double, int> min_coulomb_log(
 // Host wrapper: keeps the vector-of-ThermalBackground interface and restores
 // the exception, so every existing caller and the whole test suite are
 // unaffected by the split.  The physics is entirely in the core above, which
-// is what a device build compiles.
+// is what a device build compiles.  compute_collision_coefficients_from_views
+// lets a caller that evaluates many coefficients build the views once.
 // --------------------------------------------------------------------------
-inline CollisionCoefficients compute_collision_coefficients(
+inline CollisionCoefficients compute_collision_coefficients_from_views(
     double v,
     double s,
     double m_a,
     double q_a,
-    const vector<ThermalBackground>& backgrounds)
+    const ThermalBackgroundView* views,
+    int n_bg)
 {
-    ThermalBackgroundView views[COLL_MAX_SPECIES];
-    const int n_bg = make_thermal_views(backgrounds, views);
-
     CollisionCoefficients c = {0.0, 0.0, 0.0, 0.0, 0.0};
     int status = compute_collision_coefficients_core(
         v, s, m_a, q_a, views, n_bg, &c);
@@ -340,12 +396,25 @@ inline CollisionCoefficients compute_collision_coefficients(
     return c;
 }
 
+inline CollisionCoefficients compute_collision_coefficients(
+    double v,
+    double s,
+    double m_a,
+    double q_a,
+    const vector<ThermalBackground>& backgrounds)
+{
+    ThermalBackgroundView views[COLL_MAX_SPECIES];
+    vector<double> nT_storage;
+    const int n_bg = make_thermal_views(backgrounds, views, nT_storage);
+    return compute_collision_coefficients_from_views(v, s, m_a, q_a, views, n_bg);
+}
+
 // --------------------------------------------------------------------------
 // Apply one collision step to (v, xi) after an accepted orbit step of size h:
 // deterministic drift by explicit Euler, plus the Milstein noise term.
 // Modifies v and xi in-place.
 //
-// This matches the (v, xi) half of ASCOT5's mccc_gc_milstein.c. 
+// This matches the (v, xi) half of ASCOT5's mccc_gc_milstein.c.
 //
 // --------------------------------------------------------------------------
 FIRM3D_HD inline void milstein_collision_step(
@@ -356,7 +425,7 @@ FIRM3D_HD inline void milstein_collision_step(
     double dW_v,                 // N(0,h) increment for v
     double dW_xi)                // N(0,h) increment for xi
 {
-    // Noise amplitudes. 
+    // Noise amplitudes.
     double g_v  = std::sqrt(2.0 * coef.D_par);
     double g_xi = std::sqrt(coef.nu_D * (1.0 - xi) * (1.0 + xi));
 
@@ -395,19 +464,19 @@ FIRM3D_HD inline void milstein_collision_step(
 // --------------------------------------------------------------------------
 // Sub-stepping control for the collision kick.
 //
-// The orbit integrator chooses its step from orbit dynamics alone.  
-// Applying them as one explicit-Euler kick over that whole step is inaccurate 
+// The orbit integrator chooses its step from orbit dynamics alone.
+// Applying them as one explicit-Euler kick over that whole step is inaccurate
 // whenever the collision rates are fast, e.g. in the thermal regime.
 //
 // Sub-cycling fixes this. The particle position is frozen
 // during a kick, so a sub-step needs no field evaluation, only a coefficient
-// re-evaluation at the updated speed.  
+// re-evaluation at the updated speed.
 //
 // --------------------------------------------------------------------------
 
 // Fraction of a collision timescale a single sub-step may cover.
 static constexpr double COLL_SUBSTEP_SAFETY = 0.05;
-// Runaway guard. 
+// Runaway guard.
 static constexpr int COLL_MAX_SUBSTEPS = 10000;
 
 FIRM3D_HD inline int collision_substeps(

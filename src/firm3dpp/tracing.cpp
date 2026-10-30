@@ -991,6 +991,10 @@ solve_sde(
     std::mt19937_64 rng(rng_seed);
     std::normal_distribution<double> normal_dist(0.0, 1.0);
 
+    ThermalBackgroundView bg_views[COLL_MAX_SPECIES];
+    vector<double> bg_nT;
+    const int n_bg = make_thermal_views(backgrounds, bg_views, bg_nT);
+
     vector<vector<double>> res;
     vector<vector<double>> res_hits;
     vector<double> y(state_size), stzv(state_size);
@@ -1064,8 +1068,8 @@ solve_sde(
             if (v_now > 0.0 && B > 0.0) {
                 double xi_now = stzv[3] / v_now;
 
-                auto coef = compute_collision_coefficients(
-                    v_now, stzv[0], m_a, q_a, backgrounds);
+                auto coef = compute_collision_coefficients_from_views(
+                    v_now, stzv[0], m_a, q_a, bg_views, n_bg);
                 double h_phys = h_taken * tnorm;
 
                 // Sub-cycle the kick over the accepted step: size one
@@ -1082,8 +1086,8 @@ solve_sde(
                     milstein_collision_step(v_now, xi_now, c, h_sub, dW_v, dW_xi);
                     t_left -= h_sub;
                     if (t_left <= 0.0) break;
-                    c = compute_collision_coefficients(
-                            v_now, stzv[0], m_a, q_a, backgrounds);
+                    c = compute_collision_coefficients_from_views(
+                            v_now, stzv[0], m_a, q_a, bg_views, n_bg);
                 }
 
                 stzv[3] = v_now * xi_now;
