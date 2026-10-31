@@ -47,7 +47,9 @@ for _i, coil in enumerate(coils):
     curves.append(coil.curve)
     currents.append(coil.current)
 
-coils_full = coils_via_symmetries(curves, currents, surf.nfp, True)
+# coils.curves_22_7_21 holds the stellarator-symmetric half of a full-torus
+# 40-coil set, so only stellsym is applied here.
+coils_full = coils_via_symmetries(curves, currents, 1, True)
 
 start_field = time.perf_counter()
 bs = BiotSavart(coils_full)
@@ -73,8 +75,8 @@ if_time = time.perf_counter() - start_if
 # sample particles from surface
 xyz, _ = draw_uniform_on_surface(surf_launch, nparticles, safetyfactor=10)
 
-vpar0 = np.sqrt(2 * FUSION_ALPHA_PARTICLE_ENERGY / ALPHA_PARTICLE_MASS)
-vpar_inits = initialize_velocity_uniform(vpar0, nparticles)
+v0 = np.sqrt(2 * FUSION_ALPHA_PARTICLE_ENERGY / ALPHA_PARTICLE_MASS)
+vpar_inits = initialize_velocity_uniform(v0, nparticles)
 
 # tabulate the field and the boundary distance for the GPU once
 start_setup = time.perf_counter()

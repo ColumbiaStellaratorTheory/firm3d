@@ -171,8 +171,8 @@ Unperturbed Tracing
    points = initialize_position_profile(field, nParticles, lambda s: 1-s, comm=None)
 
    Ekin = FUSION_ALPHA_PARTICLE_ENERGY
-   vpar0 = np.sqrt(2 * Ekin / ALPHA_PARTICLE_MASS)
-   vpar_init = initialize_velocity_uniform(vpar0, nParticles, comm=None)
+   v0 = np.sqrt(2 * Ekin / ALPHA_PARTICLE_MASS)
+   vpar_init = initialize_velocity_uniform(v0, nParticles, comm=None)
 
    # Trace particles
    res_tys, res_hits = trace_particles_boozer(
@@ -232,12 +232,12 @@ Perturbed Tracing
    points = initialize_position_profile(field, nParticles, lambda s: 1-s, comm=None)
 
    Ekin = FUSION_ALPHA_PARTICLE_ENERGY
-   vpar0 = np.sqrt(2 * Ekin / ALPHA_PARTICLE_MASS)
-   vpar_init = initialize_velocity_uniform(vpar0, nParticles, comm=None)
+   v0 = np.sqrt(2 * Ekin / ALPHA_PARTICLE_MASS)
+   vpar_init = initialize_velocity_uniform(v0, nParticles, comm=None)
 
    # Calculate magnetic moment
    field.set_points(points)
-   mu_init = (vpar0**2 - vpar_init**2)/(2*field.modB()[:,0])
+   mu_init = (v0**2 - vpar_init**2)/(2*field.modB()[:,0])
 
    # Trace particles with perturbation
    res_tys, res_hits = trace_particles_boozer_perturbed(

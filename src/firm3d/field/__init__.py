@@ -1,5 +1,6 @@
 from . import (
     boozermagneticfield,
+    collisions,
     coordinates,
     tracing,
     tracing_helpers,
@@ -7,6 +8,7 @@ from . import (
 
 __all__ = (
     boozermagneticfield.__all__
+    + collisions.__all__
     + tracing.__all__
     + tracing_helpers.__all__
     + coordinates.__all__
