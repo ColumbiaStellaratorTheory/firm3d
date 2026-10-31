@@ -55,8 +55,10 @@ The "hits" are defined through the input lists ``phases``, ``n_zetas``, ``m_thet
 Phase and velocity crossings use the accepted step's dense output and are
 independent of ``dt_save``. They are recorded even with
 ``forget_exact_path=True``. The launch is excluded; a crossing at a step's
-right endpoint is included once. To stop at these crossings, see
-:ref:`stopping_criteria`.
+right endpoint is included once. CPU and GPU tracers select at most one
+crossing per requested level per accepted step, using the step endpoints
+to bracket it. Additional crossings inside a step can be missed. To stop
+at these crossings, see :ref:`stopping_criteria`.
 
 The Boozer GPU tracers also accept ``zetas=[0.0]`` as a shortcut for a
 toroidal section, equivalent to ``phases=[0.0]``, ``n_zetas=[1.0]``,

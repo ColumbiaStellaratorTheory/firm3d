@@ -13,8 +13,8 @@
 
 namespace firm3d_events {
 
-// A phase derivative can have degree 14 after clearing the atan2 denominator.
-constexpr int max_degree = 14;
+// The Boost dense-output polynomial has degree five.
+constexpr int max_degree = 5;
 constexpr double period = 6.283185307179586476925286766559;
 struct Polynomial {
     double c[max_degree + 1]{};
@@ -119,14 +119,6 @@ FIRM3D_EVENT_HD Polynomial dense_polynomial(T y0, T h, const T* k) {
     return p;
 }
 
-FIRM3D_EVENT_HD inline Polynomial multiply(const Polynomial& a, const Polynomial& b) {
-    Polynomial result;
-    result.degree = a.degree + b.degree;
-    for(int i = 0; i <= a.degree; ++i)
-        for(int j = 0; j <= b.degree; ++j) result.c[i+j] += a.c[i] * b.c[j];
-    return result;
-}
-
 struct Step {
     Polynomial state[4];
     double t, h, theta_offset, zeta_offset;
@@ -164,64 +156,36 @@ struct Step {
     }
 };
 
-FIRM3D_EVENT_HD inline Polynomial phase_derivative(const Step& step, const double* plane) {
-    Polynomial rate = derivative(step.state[2]);
-    for(int i = 0; i <= rate.degree; ++i) rate.c[i] *= plane[1];
-    rate.c[0] -= plane[3] * step.h;
-    if(plane[2] == 0) return rate;
-    Polynomial r2 = multiply(step.state[0], step.state[0]);
-    Polynomial y2 = multiply(step.state[1], step.state[1]);
-    for(int i = 0; i <= y2.degree; ++i) r2.c[i] += y2.c[i];
-    Polynomial result = multiply(rate, r2);
-    Polynomial xyprime = multiply(step.state[0], derivative(step.state[1]));
-    Polynomial yxprime = multiply(step.state[1], derivative(step.state[0]));
-    for(int i = 0; i <= xyprime.degree; ++i)
-        result.c[i] += plane[2] * (xyprime.c[i] - yxprime.c[i]);
-    return result;
+// Select one endpoint-bracketed crossing per requested level, as on the CPU.
+// Exclude the left endpoint and include the right endpoint.
+FIRM3D_EVENT_HD inline double velocity_crossing(Polynomial velocity, double target,
+                                               double limit) {
+    velocity.c[0] -= target;
+    double left = value(velocity, 0), right = value(velocity, limit);
+    if(left != 0 && (right == 0 || (left > 0) != (right > 0)))
+        return bisect(velocity, 0, limit);
+    return limit + 1;
 }
 
-FIRM3D_EVENT_HD inline double next_phase(const Step& step, const double* plane,
-                                        double after, double limit) {
-    Polynomial rate = phase_derivative(step, plane);
-    double turning[max_degree + 1];
-    int count = roots(rate, 0, limit, turning);
-    double a = after;
-    for(int interval = 0; interval <= count; ++interval){
-        double b = interval < count ? turning[interval] : limit;
-        if(b <= a) continue;
-        double pa = step.phase(plane, a), pb = step.phase(plane, b);
-        const int sign = pb > pa ? 1 : (pb < pa ? -1 : 0);
-        if(sign){
-            double turns = (pa - plane[0]) / period;
-            double shift = sign > 0 ? floor(turns) + 1 : ceil(turns) - 1;
-            double target = plane[0] + period * shift;
-            if(sign > 0 ? target <= pa : target >= pa){
-                shift += sign;
-                target = plane[0] + period * shift;
-            }
-            if(sign > 0 ? pb >= target : pb <= target){
-                double left = a, right = b;
-                for(int j = 0; j < 80; ++j){
-                    double mid = left + (right - left) * 0.5;
-                    if(mid == left || mid == right) break;
-                    double pm = step.phase(plane, mid);
-                    if(pm == target){ left = right = mid; break; }
-                    if(sign > 0 ? pm < target : pm > target) left = mid;
-                    else right = mid;
-                }
-                // Choose the crossed side of the final bracket so the next
-                // search cannot rediscover this plane through roundoff.
-                double root = right;
-                if(root > after){
-                    // A stationary touch is excluded; stationary inflections cross.
-                    if(fabs(value(rate, root)) > roundoff(rate, root) ||
-                       crossing_direction(rate, root) == 0) return root;
-                }
-            }
-        }
-        a = b;
+FIRM3D_EVENT_HD inline double phase_crossing(const Step& step, const double* plane,
+                                            double limit) {
+    double pa = step.phase(plane, 0), pb = step.phase(plane, limit);
+    double turns = (pa - plane[0]) / period;
+    double winding = pb > pa ? floor(turns) + 1 : ceil(turns) - 1;
+    double target = winding * period + plane[0];
+    if(!((pa < target && target <= pb) || (pb <= target && target < pa)))
+        return limit + 1;
+    if(pb == target) return limit;
+    double left = 0, right = limit, fa = pa - target, fb = pb - target;
+    for(int j = 0; j < 80; ++j){
+        double mid = left + (right - left) * 0.5;
+        if(mid == left || mid == right) break;
+        double fm = step.phase(plane, mid) - target;
+        if(fm == 0) return mid;
+        if((fa > 0) == (fm > 0)){ left = mid; fa = fm; }
+        else { right = mid; fb = fm; }
     }
-    return limit + 1;
+    return fabs(fa) < fabs(fb) ? left : right;
 }
 
 } // namespace firm3d_events

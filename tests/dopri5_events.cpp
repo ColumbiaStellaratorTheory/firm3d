@@ -29,21 +29,24 @@ int main() {
     Step step{}; step.t=0; step.h=1; step.theta_offset=step.zeta_offset=0;
     step.state[0].c[0]=1;
     step.state[2].degree=1; step.state[2].c[1]=20*period;
-    double plane[]={0,1,0,0}; double after=0;
-    for(int j=1; j<=20; ++j){
-        after=next_phase(step,plane,after,1);
-        close(after,j/20.0);
-    }
-    check(next_phase(step,plane,after,1)>1,"Endpoint crossing duplicated");
-    step.state[2].c[1]=-20*period; after=0;
-    for(int j=1; j<=20; ++j){after=next_phase(step,plane,after,1);close(after,j/20.0);}
-    check(next_phase(step,plane,after,1)>1,"Negative endpoint crossing duplicated");
-    // Two opposite crossings can occur within one accepted step.
+    double plane[]={0,1,0,0};
+    // The CPU selects only the next periodic plane from the step endpoints.
+    close(phase_crossing(step,plane,1),.05);
+    step.state[2].c[1]=-20*period;
+    close(phase_crossing(step,plane,1),.05);
+    // Opposite crossings without an endpoint bracket are omitted, as on CPU.
     step.state[2].degree=2; step.state[2].c[0]=-.25;
     step.state[2].c[1]=2;step.state[2].c[2]=-2;
-    double first=next_phase(step,plane,0,1), second=next_phase(step,plane,first,1);
-    close(first,(1-std::sqrt(.5))/2); close(second,(1+std::sqrt(.5))/2);
-    check(next_phase(step,plane,second,1)>1,"Nonmonotone crossing duplicated");
+    check(phase_crossing(step,plane,1)>1,"Unbracketed phase crossing emitted");
+    close(phase_crossing(step,plane,.4),(1-std::sqrt(.5))/2);
+    Polynomial velocity; velocity.degree=2;
+    velocity.c[0]=.1875; velocity.c[1]=-1; velocity.c[2]=1;
+    check(velocity_crossing(velocity,0,1)>1,"Unbracketed velocity crossing emitted");
+    close(velocity_crossing(velocity,0,.5),.25);
+    velocity.c[0]=0;
+    check(velocity_crossing(velocity,0,1)>1,"Launch velocity crossing emitted");
+    velocity.c[0]=1; velocity.c[1]=-2; // (q-1)^2 touches the right endpoint.
+    close(velocity_crossing(velocity,0,1),1);
     // A helical plane crosses the atan2 branch without an artificial jump.
     step.state[0].c[0]=-1;step.state[1].degree=1;
     step.state[1].c[0]=.1;step.state[1].c[1]=-.2;
@@ -51,11 +54,10 @@ int main() {
     double helical[]={period/2,0,1,0};
     close(step.theta(.5),period/2);
     check(step.theta(.75)>period/2,"Angle winding lost");
-    close(next_phase(step,helical,0,1),.5);
-    check(next_phase(step,helical,.5,1)>1,"Helical crossing duplicated");
+    close(phase_crossing(step,helical,1),.5);
     // Time-dependent phase and clipped terminal time.
     double timed[]={0,0,0,-period};
-    close(next_phase(step,timed,0,1),1);
-    check(next_phase(step,timed,0,.9)>.9,"Crossing beyond tmax emitted");
+    close(phase_crossing(step,timed,1),1);
+    check(phase_crossing(step,timed,.9)>.9,"Crossing beyond tmax emitted");
     std::cout << "Dense event polynomial, roots, winding, and phase checks passed.\n";
 }

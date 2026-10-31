@@ -10,7 +10,7 @@
 struct DeviceEvents {
     double *planes = nullptr, *vpars = nullptr, *criteria = nullptr;
     double *hits = nullptr, *end_times = nullptr, *theta_offsets = nullptr;
-    double *cursors = nullptr, *transit_start = nullptr, *last_phase_time = nullptr;
+    double *candidates = nullptr, *transit_start = nullptr, *last_phase_time = nullptr;
     int *counts = nullptr, *phase_counts = nullptr, *iterations = nullptr;
     int* overflow = nullptr;
     int nplanes = 0, nvpars = 0, ncriteria = 0, capacity = 0, max_phase_hits = 0;
@@ -167,15 +167,17 @@ __device__ void record_step_events(DeviceEvents events, int particle, int p,
         }
         if(stop){ stop_index = -1-j; endpoint_stop = true; break; }
     }
-    // A cursor per event label preserves simultaneous hits: advancing a global
-    // cursor would discard a second plane or velocity level at the same time.
-    double* cursors = events.cursors;
-    if(events.nplanes+events.nvpars) cursors += size_t(particle)*(events.nplanes+events.nvpars);
-    for(int j = 0; j < events.nplanes+events.nvpars; ++j) cursors[j] = 0;
+    // Select candidates over the full step before applying stops or deadlines,
+    // matching the CPU. Each requested label contributes at most one hit.
+    double* candidates = events.candidates;
+    if(events.nplanes+events.nvpars) candidates += size_t(particle)*(events.nplanes+events.nvpars);
+    for(int j = 0; j < events.nplanes; ++j)
+        candidates[j] = phase_crossing(step, events.planes + 4*j, step_limit);
+    for(int j = 0; j < events.nvpars; ++j)
+        candidates[events.nplanes+j] = velocity_crossing(step.state[3], events.vpars[j], step_limit);
     while(true){
-        // A section resets its deadline within the same accepted step. Search
-        // through the deadline before timing out, so an exact-deadline return
-        // is retained, as on the CPU.
+        // A section resets its deadline within the same accepted step. Retain
+        // a selected return exactly at the deadline, as on the CPU.
         limit = step_limit;
         if(events.max_phase_interval > 0){
             double deadline = events.last_phase_time[particle] + events.max_phase_interval;
@@ -184,21 +186,13 @@ __device__ void record_step_events(DeviceEvents events, int particle, int p,
         double next = limit + 1;
         int index = -1;
         for(int j = 0; j < events.nplanes; ++j){
-            double root = next_phase(step, events.planes + 4*j, cursors[j], limit);
-            if(root < next){ next = root; index = j; }
+            double root = candidates[j];
+            if(root <= limit && root < next){ next = root; index = j; }
         }
         for(int j = 0; j < events.nvpars; ++j){
-            Polynomial velocity = step.state[3];
-            velocity.c[0] -= events.vpars[j];
-            double zeros[max_degree+1];
-            double after = cursors[events.nplanes+j];
-            int count = roots(velocity, after, limit, zeros);
-            for(int k = 0; k < count; ++k){
-                if(zeros[k] > after &&
-                   (zeros[k] < next || (zeros[k] == next && index < events.nplanes)) &&
-                   crossing_direction(velocity, zeros[k])){
-                    next = zeros[k]; index = events.nplanes + j; break;
-                }
+            double root = candidates[events.nplanes+j];
+            if(root <= limit && (root < next || (root == next && index < events.nplanes))){
+                next = root; index = events.nplanes + j;
             }
         }
         if(index < 0 || next > limit){
@@ -223,7 +217,7 @@ __device__ void record_step_events(DeviceEvents events, int particle, int p,
             stop = events.phases_stop || (events.max_phase_hits && count >= events.max_phase_hits);
         } else stop = events.vpars_stop;
         if(stop || !stored){ limit = next; endpoint_stop = false; root_stop = true; break; }
-        cursors[index] = next;
+        candidates[index] = step_limit + 1;
     }
     if(endpoint_stop){
         double hit[4];
