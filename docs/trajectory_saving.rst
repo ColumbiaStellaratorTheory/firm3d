@@ -52,7 +52,7 @@ The "hits" are defined through the input lists ``phases``, ``n_zetas``, ``m_thet
 
 - **phases**, **n_zetas**, **m_thetas** and **omegas**: If ``phases`` is specified, the trajectory will be recorded when :math:`n_\zeta \zeta + m_\theta \theta - \omega t` hits the values given in the ``phases`` array, with :math:`n_\zeta`, :math:`m_\theta`, and :math:`\omega` given elementwise by the ``n_zetas``, ``m_thetas``, and ``omegas`` arrays. All four lists must have the same length.
 
-Phase and velocity crossings use the accepted step's dense output and are
+Phase and velocity crossings use Boost TOMS748 on the accepted step's dense output and are
 independent of ``dt_save``. They are recorded even with
 ``forget_exact_path=True``. The launch is excluded; a crossing at a step's
 right endpoint is included once. CPU and GPU tracers select at most one

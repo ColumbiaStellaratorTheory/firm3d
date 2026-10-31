@@ -44,7 +44,7 @@ If you prefer to install manually or need to customize the installation:
    - NumPy
    - SciPy
    - Matplotlib
-   - Boost libraries
+   - Boost libraries (1.76+ for CPU-only builds, 1.87+ for CUDA builds)
    - Eigen
    - xtensor
 

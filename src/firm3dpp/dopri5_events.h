@@ -3,6 +3,8 @@
 
 #include <cmath>
 #include <cfloat>
+#include <cstdint>
+#include <boost/math/tools/toms748_solve.hpp>
 #include "dopri5_dense_output.h"
 
 #ifdef __CUDACC__
@@ -156,14 +158,28 @@ struct Step {
     }
 };
 
+template<class F>
+FIRM3D_EVENT_HD double crossing_root(F f, double a, double b, double fa, double fb) {
+    // Retain the GPU root-accuracy target: an exact zero or adjacent endpoints.
+    auto tolerance = [](double left, double right) {
+        double mid = left + (right - left) * 0.5;
+        return mid == left || mid == right;
+    };
+    std::uintmax_t max_iter = 200;
+    auto root = boost::math::tools::toms748_solve(f, a, b, fa, fb, tolerance, max_iter);
+    return fabs(f(root.first)) < fabs(f(root.second)) ? root.first : root.second;
+}
+
 // Select one endpoint-bracketed crossing per requested level, as on the CPU.
 // Exclude the left endpoint and include the right endpoint.
 FIRM3D_EVENT_HD inline double velocity_crossing(Polynomial velocity, double target,
                                                double limit) {
     velocity.c[0] -= target;
     double left = value(velocity, 0), right = value(velocity, limit);
-    if(left != 0 && (right == 0 || (left > 0) != (right > 0)))
-        return bisect(velocity, 0, limit);
+    if(left != 0 && (right == 0 || (left > 0) != (right > 0))){
+        auto rootfun = [&velocity](double q) { return value(velocity, q); };
+        return crossing_root(rootfun, 0, limit, left, right);
+    }
     return limit + 1;
 }
 
@@ -176,16 +192,8 @@ FIRM3D_EVENT_HD inline double phase_crossing(const Step& step, const double* pla
     if(!((pa < target && target <= pb) || (pb <= target && target < pa)))
         return limit + 1;
     if(pb == target) return limit;
-    double left = 0, right = limit, fa = pa - target, fb = pb - target;
-    for(int j = 0; j < 80; ++j){
-        double mid = left + (right - left) * 0.5;
-        if(mid == left || mid == right) break;
-        double fm = step.phase(plane, mid) - target;
-        if(fm == 0) return mid;
-        if((fa > 0) == (fm > 0)){ left = mid; fa = fm; }
-        else { right = mid; fb = fm; }
-    }
-    return fabs(fa) < fabs(fb) ? left : right;
+    auto rootfun = [&step, plane, target](double q) { return step.phase(plane, q) - target; };
+    return crossing_root(rootfun, 0, limit, pa - target, pb - target);
 }
 
 } // namespace firm3d_events

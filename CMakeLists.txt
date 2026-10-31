@@ -53,6 +53,8 @@ else()
     add_definitions(-DUSE_CUDA)
     include_directories(${CUDAToolkit_INCLUDE_DIRS})
     set(CUDA_TARGETS src/firm3dpp/cuda_kernel.cu src/firm3dpp/cuda_wrapper.cpp)
+    set_source_files_properties(src/firm3dpp/cuda_kernel.cu PROPERTIES
+        COMPILE_DEFINITIONS BOOST_MATH_ENABLE_CUDA)
     message(STATUS "GPU bindings will be compiled with ${CMAKE_CUDA_COMPILER} (CUDA ${CUDAToolkit_VERSION})")
 endif()
 
@@ -171,6 +173,12 @@ else()
 endif()
 
 set(BOOST_MINIMUM_VERSION 1.76.0)
+set(_boost_download_version 1.84.0)
+if(CUDA_TARGETS)
+    # TOMS748 and its helpers must be callable on the device.
+    set(BOOST_MINIMUM_VERSION 1.87.0)
+    set(_boost_download_version 1.87.0)
+endif()
 set(_boost_user_include_dir "${Boost_INCLUDE_DIR}")
 
 # Preferred route: an install that ships BoostConfig.cmake.
@@ -266,7 +274,7 @@ else()
         ${boost_target}
         PREFIX ${boost_DIR}
         GIT_REPOSITORY https://github.com/boostorg/boost.git
-        GIT_TAG boost-1.84.0
+        GIT_TAG boost-${_boost_download_version}
         GIT_SHALLOW TRUE
         GIT_PROGRESS TRUE
         GIT_SUBMODULES tools/build tools/boost_install libs/config libs/numeric
