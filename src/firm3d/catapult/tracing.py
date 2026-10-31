@@ -214,7 +214,7 @@ def _collision_columns(result):
 
 
 def _save_trajectories(
-    trace_chunk, inits, parallel_speeds, tmax, dt_save, dt=None, mu=None
+    trace_chunk, inits, parallel_speeds, tmax, dt_save, dt=None, mu=None, has_left=None
 ):
     """
     Trace particles in chunks of dt_save, recording the state at the end of
@@ -265,6 +265,8 @@ def _save_trajectories(
 
         # a particle whose chunk ended early was lost
         keep = current_time >= 0.999 * chunk_end
+        if has_left is not None:
+            keep &= ~has_left(step_data)
         inits = np.ascontiguousarray(step_data[keep, 1:4], dtype=dtype)
         parallel_speeds = np.ascontiguousarray(step_data[keep, 4], dtype=dtype)
         dt = np.ascontiguousarray(step_data[keep, 5], dtype=dtype)
@@ -341,7 +343,14 @@ def save_trajectories_boozer_gpu(
         )
 
     trajectories = _save_trajectories(
-        trace_chunk, inits, parallel_speeds, tmax, dt_save, dt, mu
+        trace_chunk,
+        inits,
+        parallel_speeds,
+        tmax,
+        dt_save,
+        dt,
+        mu,
+        has_left=lambda rows: np.hypot(rows[:, 1], rows[:, 2]) >= 1.0,
     )
     return [_to_boozer(traj) for traj in trajectories]
 
