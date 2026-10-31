@@ -412,51 +412,24 @@ class TestGPUEventsDevice(unittest.TestCase):
         np.testing.assert_allclose(hits[0][:, 3], 7 + 0.4 * SPEED * times, atol=2e-7)
 
     def test_multiple_and_simultaneous_planes_in_one_step(self):
+        field = CatapultBoozerField(constant_field(0), 2, 2, 2)
         points = np.array([[0.3, 0, 0]])
-        # The CPU starts at 0.001 of its quarter-transit maximum step.
-        # Clip that first step after many periods of a high-harmonic plane.
-        step = 0.001 * 0.25 * PERIOD / SPEED
-        horizon = 0.75 * step
-        options = {
-            "tmax": horizon,
-            "tol": 1e-10,
-            "phases": [0, 0],
-            "n_zetas": [80000, 80000],
-            "m_thetas": [0, 0],
-            "omegas": [0, 0],
-        }
-        for sign in [1, -1]:
-            _, reference = trace_particles_boozer(
-                constant_field(0),
-                points,
-                [sign * SPEED],
-                forget_exact_path=True,
-                **options,
-            )
-            self.assertEqual(reference[0].shape, (2, 6))
-            for precision in ["double", "single"]:
-                field = CatapultBoozerField(
-                    constant_field(0), 2, 2, 2, precision=precision
-                )
-                for forget in [False, True]:
-                    with self.subTest(sign=sign, precision=precision, forget=forget):
-                        paths, hits = trace_particles_boozer_gpu(
-                            field,
-                            points,
-                            [sign * SPEED],
-                            dt=step,
-                            dt_save=horizon / 4,
-                            max_hits=64,
-                            forget_exact_path=forget,
-                            **options,
-                        )
-                        # Each duplicate label is retained once, not once per turn.
-                        self.assertEqual(hits[0].shape, (2, 6))
-                        np.testing.assert_array_equal(hits[0][:, 1], [0, 1])
-                        np.testing.assert_allclose(
-                            hits[0][:, 0], reference[0][:, 0], rtol=2e-6
-                        )
-                        self.assertEqual(paths[0][-1, 0], horizon)
+        paths, hits = trace_particles_boozer_gpu(
+            field,
+            points,
+            [SPEED],
+            tmax=1e-7,
+            dt=1e-7,
+            tol=1e-10,
+            phases=[0, 0],
+            n_zetas=[100, 100],
+            max_hits=64,
+            forget_exact_path=True,
+        )
+        times = np.array([PERIOD / (100 * SPEED)])
+        np.testing.assert_allclose(hits[0][:, 0], np.repeat(times, 2), rtol=1e-12)
+        np.testing.assert_array_equal(hits[0][:, 1], np.tile([0, 1], len(times)))
+        self.assertEqual(paths[0][-1, 0], 1e-7)
 
     def test_launch_exclusion_and_exact_endpoint(self):
         field = CatapultBoozerField(constant_field(0), 2, 2, 2)

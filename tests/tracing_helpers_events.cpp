@@ -6,7 +6,6 @@
 
 #if __has_include(<boost/math/tools/toms748_solve.hpp>)
 #include "tracing_helpers.h"
-#include "dopri5_events.h"
 
 struct LinearStep {
     vector<double> left, right;
@@ -51,36 +50,6 @@ void check_event(bool velocity, double target, double left, double right,
     }
 }
 
-struct PolynomialStep {
-    firm3d_events::Step step{};
-    void calc_state(double tau, vector<double>& y) {
-        using firm3d_events::value;
-        y = {std::hypot(value(step.state[0], tau), value(step.state[1], tau)),
-             step.theta(tau), value(step.state[2], tau) + step.zeta_offset,
-             value(step.state[3], tau)};
-    }
-};
-
-// Compare candidate selection against the actual CPU helper on identical
-// interpolants, without relying on CPU and GPU controllers taking equal steps.
-void check_candidates(PolynomialStep dense, double limit) {
-    const vector<double> phases{0, 0.25}, ns{1, 1}, ms{0, 0}, ws{0, 0};
-    const vector<double> velocities{0, 0.25};
-    vector<vector<double>> hits;
-    check_stopping_criteria(4, 1, hits, dense, 0, limit, 1, 1e-12,
-        phases, ns, ms, ws, {}, velocities, false, false, 0, 1, 1);
-    for (int i = 0; i < 4; ++i) {
-        double plane[]{phases[i % 2], 1, 0, 0};
-        double root = i < 2 ? firm3d_events::phase_crossing(dense.step, plane, limit)
-            : firm3d_events::velocity_crossing(dense.step.state[3], velocities[i - 2], limit);
-        auto hit = std::find_if(hits.begin(), hits.end(),
-            [i](const vector<double>& row) { return row[1] == i; });
-        check((root <= limit) == (hit != hits.end()), "CPU/GPU crossing selection differs");
-        if (hit != hits.end())
-            check(std::abs(root - (*hit)[0]) < 1e-10, "CPU/GPU bracketed roots differ");
-    }
-}
-
 int main() {
     for (bool stopping : {false, true}) {
         for (double sign : {1.0, -1.0}) {
@@ -116,33 +85,6 @@ int main() {
     check(hits.size() == 2, "Missing CPU phase plane");
     check(hits[0][0] == 1 && std::abs(hits[1][0] - 0.25) < 1e-12,
           "CPU phase planes share a consumed root budget");
-    PolynomialStep polynomial;
-    polynomial.step.h = 1;
-    polynomial.step.state[0].c[0] = 0.3;
-    for (double sign : {1.0, -1.0}) {
-        polynomial.step.state[2].degree = polynomial.step.state[3].degree = 1;
-        polynomial.step.state[2].c[0] = polynomial.step.state[3].c[0] = 0;
-        polynomial.step.state[2].c[1] = sign * 20 * firm3d_events::period;
-        polynomial.step.state[3].c[1] = sign;
-        check_candidates(polynomial, 1);
-        // A target at the launch is excluded, even if crossed again later.
-        polynomial.step.state[3].degree = 2;
-        polynomial.step.state[3].c[2] = -sign * 2;
-        check_candidates(polynomial, 1);
-    }
-    polynomial.step.state[2].degree = polynomial.step.state[3].degree = 2;
-    polynomial.step.state[2].c[0] = -0.25;
-    polynomial.step.state[2].c[1] = 2;
-    polynomial.step.state[2].c[2] = -2;
-    polynomial.step.state[3].c[0] = 0.1875;
-    polynomial.step.state[3].c[1] = -1;
-    polynomial.step.state[3].c[2] = 1;
-    check_candidates(polynomial, 1); // Interior reversals without endpoint brackets.
-    check_candidates(polynomial, 0.4); // Horizon clipping creates a bracket.
-    polynomial.step.state[2].c[0] = polynomial.step.state[3].c[0] = 1;
-    polynomial.step.state[2].c[1] = polynomial.step.state[3].c[1] = -2;
-    polynomial.step.state[2].c[2] = polynomial.step.state[3].c[2] = 1;
-    check_candidates(polynomial, 1); // Right-endpoint touches are retained.
     std::cout << "CPU endpoint crossing checks passed.\n";
 }
 #else

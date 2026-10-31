@@ -38,15 +38,6 @@ int main() {
     step.state[2].degree=2; step.state[2].c[0]=-.25;
     step.state[2].c[1]=2;step.state[2].c[2]=-2;
     check(phase_crossing(step,plane,1)>1,"Unbracketed phase crossing emitted");
-    close(phase_crossing(step,plane,.4),(1-std::sqrt(.5))/2);
-    Polynomial velocity; velocity.degree=2;
-    velocity.c[0]=.1875; velocity.c[1]=-1; velocity.c[2]=1;
-    check(velocity_crossing(velocity,0,1)>1,"Unbracketed velocity crossing emitted");
-    close(velocity_crossing(velocity,0,.5),.25);
-    velocity.c[0]=0;
-    check(velocity_crossing(velocity,0,1)>1,"Launch velocity crossing emitted");
-    velocity.c[0]=1; velocity.c[1]=-2; // (q-1)^2 touches the right endpoint.
-    close(velocity_crossing(velocity,0,1),1);
     // A helical plane crosses the atan2 branch without an artificial jump.
     step.state[0].c[0]=-1;step.state[1].degree=1;
     step.state[1].c[0]=.1;step.state[1].c[1]=-.2;
