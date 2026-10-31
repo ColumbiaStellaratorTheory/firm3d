@@ -124,6 +124,7 @@ FIRM3D_EVENT_HD Polynomial dense_polynomial(T y0, T h, const T* k) {
 struct Step {
     Polynomial state[4];
     double t, h, theta_offset, zeta_offset;
+    int root_bits = 52;
     double branch_roots[max_degree+1]{};
     int nbranches = 0;
 
@@ -159,11 +160,12 @@ struct Step {
 };
 
 template<class F>
-FIRM3D_EVENT_HD double crossing_root(F f, double a, double b, double fa, double fb) {
-    // Retain the GPU root-accuracy target: an exact zero or adjacent endpoints.
-    auto tolerance = [](double left, double right) {
-        double mid = left + (right - left) * 0.5;
-        return mid == left || mid == right;
+FIRM3D_EVENT_HD double crossing_root(F f, double a, double b, double fa, double fb,
+                                    const Step& step) {
+    boost::math::tools::eps_tolerance<double> roottol(step.root_bits);
+    // CPU tolerances use global time. Its constant time normalization cancels.
+    auto tolerance = [roottol, &step](double left, double right) mutable {
+        return roottol(step.t + left*step.h, step.t + right*step.h);
     };
     std::uintmax_t max_iter = 200;
     auto root = boost::math::tools::toms748_solve(f, a, b, fa, fb, tolerance, max_iter);
@@ -172,13 +174,14 @@ FIRM3D_EVENT_HD double crossing_root(F f, double a, double b, double fa, double 
 
 // Select one endpoint-bracketed crossing per requested level, as on the CPU.
 // Exclude the left endpoint and include the right endpoint.
-FIRM3D_EVENT_HD inline double velocity_crossing(Polynomial velocity, double target,
+FIRM3D_EVENT_HD inline double velocity_crossing(const Step& step, double target,
                                                double limit) {
+    Polynomial velocity = step.state[3];
     velocity.c[0] -= target;
     double left = value(velocity, 0), right = value(velocity, limit);
     if(left != 0 && (right == 0 || (left > 0) != (right > 0))){
         auto rootfun = [&velocity](double q) { return value(velocity, q); };
-        return crossing_root(rootfun, 0, limit, left, right);
+        return crossing_root(rootfun, 0, limit, left, right, step);
     }
     return limit + 1;
 }
@@ -193,7 +196,7 @@ FIRM3D_EVENT_HD inline double phase_crossing(const Step& step, const double* pla
         return limit + 1;
     if(pb == target) return limit;
     auto rootfun = [&step, plane, target](double q) { return step.phase(plane, q) - target; };
-    return crossing_root(rootfun, 0, limit, pa - target, pb - target);
+    return crossing_root(rootfun, 0, limit, pa - target, pb - target, step);
 }
 
 } // namespace firm3d_events

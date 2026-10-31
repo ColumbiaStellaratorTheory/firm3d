@@ -1396,6 +1396,7 @@ py::array_t<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range
 
     DeviceEvents events{};
     if(request.enabled()){
+        events.root_bits = -int(std::log2(tol));
         events.nplanes = request.planes.size()/4;
         events.nvpars = request.vpars.size(); events.ncriteria = request.criteria.size()/2;
         events.capacity = request.capacity; events.max_phase_hits = request.max_phase_hits;

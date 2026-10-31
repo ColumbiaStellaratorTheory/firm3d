@@ -14,6 +14,7 @@ struct DeviceEvents {
     int *counts = nullptr, *phase_counts = nullptr, *iterations = nullptr;
     int* overflow = nullptr;
     int nplanes = 0, nvpars = 0, ncriteria = 0, capacity = 0, max_phase_hits = 0;
+    int root_bits = 52;
     bool phases_stop = false, vpars_stop = false;
     double max_phase_interval = 0;
 };
@@ -121,6 +122,7 @@ __device__ void record_step_events(DeviceEvents events, int particle, int p,
     using namespace firm3d_events;
     Step step;
     step.t = time; step.h = double(h);
+    step.root_bits = events.root_bits;
     step.theta_offset = events.theta_offsets[particle];
     step.zeta_offset = zeta_offset;
     constexpr int nd = map_rhs_to_n_deriv_outputs<id>();
@@ -174,7 +176,7 @@ __device__ void record_step_events(DeviceEvents events, int particle, int p,
     for(int j = 0; j < events.nplanes; ++j)
         candidates[j] = phase_crossing(step, events.planes + 4*j, step_limit);
     for(int j = 0; j < events.nvpars; ++j)
-        candidates[events.nplanes+j] = velocity_crossing(step.state[3], events.vpars[j], step_limit);
+        candidates[events.nplanes+j] = velocity_crossing(step, events.vpars[j], step_limit);
     while(true){
         // A section resets its deadline within the same accepted step. Retain
         // a selected return exactly at the deadline, as on the CPU.
