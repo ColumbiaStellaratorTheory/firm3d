@@ -1333,6 +1333,14 @@ class TestGPUTracingGC_Cartesian(unittest.TestCase):
         is_small = self.field.test_derivatives(self.stz, vpar_init, VELOCITY, tol=1e-8)
         self.assertTrue(is_small)
 
+    def test_timestep(self):
+        VELOCITY = np.sqrt(2 * ENERGY / MASS)
+        vpar_init = np.random.uniform(-VELOCITY, VELOCITY, (n_test_pts,))
+        is_small = self.field.test_timestep(
+            self.stz, vpar_init, VELOCITY, time=None, psi0=self.field.psi0, tol=1e-8
+        )
+        self.assertTrue(is_small)
+
     def test_precision(self):
         VELOCITY = np.sqrt(2 * ENERGY / MASS)
         vpar_init = np.random.uniform(-VELOCITY, VELOCITY, (n_test_pts,))
