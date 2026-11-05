@@ -163,7 +163,7 @@ def cartesian_rhs(position, vpar, field, mass, charge, velocity):
 
 class CATAPULTField:
     def __init__(
-        self, field, ns, ntheta, nzeta, nfp, saw_filename=None, sc_classifier=None
+        self, field, ns, ntheta, nzeta, nfp, saw_filename=None, sc_classifier=None, tracing_model="gc"
     ):
 
         ### Set up interpolant grid
@@ -202,9 +202,12 @@ class CATAPULTField:
             )
         elif isinstance(field, InterpolatedField):  # cartesian field
             range0, range1, range2, quad_info = cartesian_interpolant(
-                field, sc_classifier
+                field, sc_classifier, tracing_model=tracing_model
             )
             self.field_type = "cartesian_vacuum"
+            if tracing_model == "fo":
+                self.field_type = "fo_cartesian_vacuum"
+
         else:  # the field is an InterpolatedBoozerField (unperturbed)
             if field.field_type == "vac":
                 range0, range1, range2, quad_info, maxJ = boozer_interpolant(
@@ -221,7 +224,7 @@ class CATAPULTField:
 
         # set psi0 if in Boozer coordinates
         self.psi0 = None
-        if self.field_type != "cartesian_vacuum":
+        if "cartesian_vacuum" not in self.field_type:
             self.psi0 = field.psi0
 
         self.field = field
@@ -241,6 +244,7 @@ class CATAPULTField:
         # data and evaluation points must both carry it (noconvert bindings).
         # test_gpu_interpolation converts (s, theta) to pseudo-Cartesian IN
         # PLACE in the array it is given, so always pass a copy.
+            
         gpu_interpolation = firm3dpp.test_gpu_interpolation(
             self.quad_info.astype(dtype),
             self.range0,
@@ -253,18 +257,22 @@ class CATAPULTField:
         gpu_interpolation = gpu_interpolation.reshape((stz.shape[0], -1))
 
         # remove surface classifier column
-        if self.field_type == "cartesian_vacuum":
-            gpu_interpolation = gpu_interpolation[:, 0:6]
+        if "cartesian_vacuum" in self.field_type:
+            gpu_interpolation = gpu_interpolation[:, 0:-1]
 
         return gpu_interpolation
 
     def compute_cpu_interpolant(self, stz):
         self.field.set_points(stz)
-        if self.field_type == "cartesian_vacuum":
+        if "cartesian_vacuum" in self.field_type:
             self.field.set_points_cyl(stz)
-            cpu_interpolation = np.hstack(
-                (self.field.B_cyl(), self.field.GradAbsB_cyl())
-            )
+            if self.field_type == "cartesian_vacuum":
+                cpu_interpolation = np.hstack(
+                    (self.field.B_cyl(), self.field.GradAbsB_cyl())
+                )
+            elif self.field_type == "fo_cartesian_vacuum":
+                cpu_interpolation = self.field.B_cyl()
+
         elif self.field_type in ["boozer_saw_vacuum", "boozer_saw_nok"]:
             cpu_interpolation = np.hstack(
                 (
@@ -306,7 +314,7 @@ class CATAPULTField:
 
         return cpu_interpolation
 
-    def test_interpolant(self, stz, tol):
+    def test_interpolant(self, stz, tol): # tracing_model is alternatively "fo" for full orbit
         gpu_interpolation = self.compute_gpu_interpolant(stz)
         cpu_interpolation = self.compute_cpu_interpolant(stz)
 
@@ -1204,8 +1212,9 @@ class TestGPUTracingBoozerNoKSAW(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_SIMSOPT and HAS_CUDA, "simsopt or CUDA not available")
-class TestGPUTracingCartesian(unittest.TestCase):
+class TestGPUTracingGC_Cartesian(unittest.TestCase):
     def setUp(self):
+        print("running cartesian gc tests")
         degree = 3  # degree of interpolant
         self.n_metagrid_pts = 16  # resolution of interpolant
         order = 12  # order of coil curves
@@ -1325,6 +1334,133 @@ class TestGPUTracingCartesian(unittest.TestCase):
             return final_states(res_tys, boozer=False)
 
         check_single_precision(self, run, 1e-6, [1, 2, 3, 4])
+
+
+
+@unittest.skipUnless(HAS_SIMSOPT and HAS_CUDA, "simsopt or CUDA not available")
+class TestGPUTracingFO_Cartesian(unittest.TestCase):
+    def setUp(self):
+        print("running cartesian FO tests")
+        degree = 3  # degree of interpolant
+        self.n_metagrid_pts = 16  # resolution of interpolant
+        order = 12  # order of coil curves
+
+        filename = "examples/inputs/coils.curves_22_7_21"
+        wout_filename = "examples/inputs/wout_aten_rescaled.nc"
+
+        surf = SurfaceRZFourier.from_wout(wout_filename)
+        coils = load_coils_from_makegrid_file(filename, order, ppp=20, group_names=None)
+
+        curves = []
+        currents = []
+        for _i, coil in enumerate(coils):
+            curves.append(coil.curve)
+            currents.append(coil.current)
+
+        # coils.curves_22_7_21 holds the stellarator-symmetric half of a full-torus
+        # 40-coil set, so only stellsym is applied here.
+        coils_full = coils_via_symmetries(curves, currents, 1, True)
+        bs = BiotSavart(coils_full)
+
+        sc_particle = SurfaceClassifier(surf, h=0.1, p=2)
+        rs = np.linalg.norm(surf.gamma()[:, :, 0:2], axis=2)
+        zs = surf.gamma()[:, :, 2]
+
+        self.range0 = (np.min(rs), np.max(rs), self.n_metagrid_pts)
+        self.range1 = (0, 2 * np.pi / surf.nfp, self.n_metagrid_pts * 2)
+        # exploit stellarator symmetry and only consider positive z values:
+        self.range2 = (0, np.max(zs), self.n_metagrid_pts // 2)
+        bsh = InterpolatedField(
+            bs,
+            degree,
+            self.range0,
+            self.range1,
+            self.range2,
+            True,
+            nfp=surf.nfp,
+            stellsym=True,
+        )
+
+        ### rejection sample points inside the loss surface
+        rphiz = np.empty((n_test_pts, 3))
+        for i in range(n_test_pts):
+            pt = np.random.uniform(low=0, high=1, size=(1, 3))
+            pt[0, 0] = pt[0, 0] * (self.range0[1] - self.range0[0]) + self.range0[0]
+            pt[0, 1] *= 2 * np.pi
+            pt[0, 2] = (pt[0, 2] - 0.5) * 2 * self.range2[1]
+
+            # particle is outside the surface or too close to the surface
+            max_iters = 1000
+            for _ in range(max_iters):
+                if sc_particle.evaluate_rphiz(pt) > 0.2:
+                    break
+                pt = np.random.uniform(low=0, high=1, size=(1, 3))
+                pt[0, 0] = pt[0, 0] * (self.range0[1] - self.range0[0]) + self.range0[0]
+                pt[0, 1] *= 2 * np.pi
+                pt[0, 2] = (pt[0, 2] - 0.5) * 2 * self.range2[1]
+            else:
+                raise RuntimeError("Could not sample a valid point inside the surface")
+            rphiz[i, :] = pt
+
+        self.stz = rphiz
+        self.bsh = bsh
+        self.sc_particle = sc_particle
+
+        self.field = CATAPULTField(
+            bsh,
+            ns=self.n_metagrid_pts,
+            ntheta=self.n_metagrid_pts * 2,
+            nzeta=self.n_metagrid_pts // 2,
+            nfp=surf.nfp,
+            sc_classifier=sc_particle,
+            tracing_model = "fo"
+        )
+
+    def test_interpolant(self):
+        is_small = self.field.test_interpolant(self.stz, tol=1e-8)
+        self.assertTrue(is_small)
+
+    # def test_derivatives(self):
+    #     VELOCITY = np.sqrt(2 * ENERGY / MASS)
+    #     vpar_init = np.random.uniform(-VELOCITY, VELOCITY, (n_test_pts,))
+    #     is_small = self.field.test_derivatives(self.stz, vpar_init, VELOCITY, tol=1e-8)
+    #     self.assertTrue(is_small)
+
+    # def test_precision(self):
+    #     VELOCITY = np.sqrt(2 * ENERGY / MASS)
+    #     vpar_init = np.random.uniform(-VELOCITY, VELOCITY, (n_test_pts,))
+    #     self.assertTrue(self.field.test_precision(self.stz, vpar_init, VELOCITY))
+
+    # def test_single_precision_tracing(self):
+    #     VELOCITY = np.sqrt(2 * ENERGY / MASS)
+    #     rphiz = self.stz[:200]
+    #     xyz = np.column_stack(
+    #         (
+    #             rphiz[:, 0] * np.cos(rphiz[:, 1]),
+    #             rphiz[:, 0] * np.sin(rphiz[:, 1]),
+    #             rphiz[:, 2],
+    #         )
+    #     )
+    #     vpar = np.random.uniform(-VELOCITY, VELOCITY, (len(xyz),))
+
+    #     def run(precision, tol):
+    #         cfield = CatapultCartesianField(
+    #             self.bsh, self.sc_particle, precision=precision
+    #         )
+    #         res_tys, _ = trace_particles_cartesian_gpu(
+    #             cfield,
+    #             xyz,
+    #             vpar,
+    #             tmax=1e-6,
+    #             mass=MASS,
+    #             charge=CHARGE,
+    #             Ekin=ENERGY,
+    #             tol=tol,
+    #             forget_exact_path=True,
+    #         )
+    #         return final_states(res_tys, boozer=False)
+
+    #     check_single_precision(self, run, 1e-6, [1, 2, 3, 4])
 
 
 if __name__ == "__main__":
