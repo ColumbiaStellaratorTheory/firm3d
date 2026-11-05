@@ -1069,7 +1069,7 @@ __global__ void setup_kernel(T* init_pos, const T* __restrict__ quadpts_arr, T* 
 template<typename T, RHS id, bool coll>
 __device__ void check_has_left_cartesian(bool* has_left, const T* __restrict__ state, const T* __restrict__ derivs){
     constexpr int n_deriv_outputs = map_rhs_to_n_deriv_outputs<id, coll>();
-    has_left[threadIdx.x] = derivs[(6*n_deriv_outputs + 4)*PARTICLES_PER_BLOCK + threadIdx.x] < 0; // boundary dist fn at new location
+    has_left[threadIdx.x] = derivs[(6*n_deriv_outputs + n_deriv_outputs-1)*PARTICLES_PER_BLOCK + threadIdx.x] < 0; // boundary dist fn at new location
 }
 
 template<typename T>
@@ -1166,6 +1166,8 @@ template<typename T, RHS id, bool coll>
 __device__ void adjust_time(T* __restrict__ t, T* __restrict__ dt, double* __restrict__ tmax, T* __restrict__ state, T* __restrict__ derivs, const T* __restrict__ x_temp,
                             bool* __restrict__ has_left, const T* __restrict__ dtmax, const bool* __restrict__ is_valid,
                             T* mu = nullptr, curandStatePhilox4_32_10_t* rng = nullptr, T* v_out = nullptr){
+    constexpr int n_state_elts = map_rhs_to_n_state_elts<id>();
+
     // identify a particle and state index
     const int p = threadIdx.x % PARTICLES_PER_BLOCK;   // particle
     const int state_id = threadIdx.x / PARTICLES_PER_BLOCK; // state variable
@@ -1178,16 +1180,19 @@ __device__ void adjust_time(T* __restrict__ t, T* __restrict__ dt, double* __res
     // resolve typo in boost docs: https://numerical.recipes/book.html
     T error_elt = 0.0;
     if(active){
-        const T state_i = state[state_id*PARTICLES_PER_BLOCK + p];
-        constexpr int n_deriv_entries = map_rhs_to_n_deriv_outputs<id, coll>();
-        const T deriv_i = derivs[(n_deriv_entries*0 + state_id)*PARTICLES_PER_BLOCK + p];
-        error_elt = T(bhat_wgts[0])*deriv_i;
-        for(int j=2; j<7; ++j){
-            error_elt += T(bhat_wgts[j])*derivs[(n_deriv_entries*j + state_id)*PARTICLES_PER_BLOCK + p];
+        for(int j=state_id; j<n_state_elts; j+=4){
+            const T state_i = state[j*PARTICLES_PER_BLOCK + p];
+            constexpr int n_deriv_entries = map_rhs_to_n_deriv_outputs<id, coll>();
+            const T deriv_i = derivs[(n_deriv_entries*0 + j)*PARTICLES_PER_BLOCK + p];
+            T err_j = T(bhat_wgts[0])*deriv_i;
+            for(int k=2; k<7; ++k){
+                err_j += T(bhat_wgts[k])*derivs[(n_deriv_entries*k + j)*PARTICLES_PER_BLOCK + p];
+            }
+            err_j *= dt_p;
+            const T atol_i = (rescale_abstol_var_d) && (j >= 3) ?  atol_d * T(v_total_d) : atol_d;
+            err_j = fabs(err_j) / (atol_i + rtol_d*(fabs(state_i) + dt_p*fabs(deriv_i)));
+            error_elt = max(error_elt, err_j);
         }
-        error_elt *= dt_p;
-        const T atol_i = (rescale_abstol_var_d) && (state_id == 3) ?  atol_d * T(v_total_d) : atol_d;
-        error_elt = fabs(error_elt) / (atol_i + rtol_d*(fabs(state_i) + dt_p*fabs(deriv_i)));
     }
 
     // reduction to find the maximum error across all state variables for this particle
@@ -1198,7 +1203,12 @@ __device__ void adjust_time(T* __restrict__ t, T* __restrict__ dt, double* __res
     const T max_err = __shfl_sync(FULL_MASK, error_elt, p); // each thread reads from thread p
     const bool accept = active && (max_err <= 1.0);
     if(accept){
-        state[state_id*PARTICLES_PER_BLOCK + p] = x_temp[(state_id+1)*PARTICLES_PER_BLOCK + p];
+        for(int j=state_id; j<n_state_elts; j+=4){
+            state[j*PARTICLES_PER_BLOCK + p] = x_temp[(j+1)*PARTICLES_PER_BLOCK + p];
+            constexpr int n_deriv_outputs = map_rhs_to_n_deriv_outputs<id, coll>();
+            // copy derivatives to the first slot for the next step
+            derivs[(n_deriv_outputs*0 + j)*PARTICLES_PER_BLOCK + p] = derivs[(n_deriv_outputs*6 + j)*PARTICLES_PER_BLOCK + p];
+        }
 
         // if accepting a state in Boozer coordinates, wrap zeta to [0, 2pi] to avoid numerical issues with large values of zeta
         if constexpr (map_rhs_to_coord<id>() == CoordSys::Boozer){
@@ -1208,11 +1218,8 @@ __device__ void adjust_time(T* __restrict__ t, T* __restrict__ dt, double* __res
                 state[state_id*PARTICLES_PER_BLOCK + p] += T(2*M_PI)*(state[state_id*PARTICLES_PER_BLOCK + p] < 0);
             }
         }
-
-        constexpr int n_deriv_outputs = map_rhs_to_n_deriv_outputs<id, coll>();
-        // copy derivatives to the first slot for the next step
-        derivs[(n_deriv_outputs*0 + state_id)*PARTICLES_PER_BLOCK + p] = derivs[(n_deriv_outputs*6 + state_id)*PARTICLES_PER_BLOCK + p];
     }
+
     if(active && state_id == 0){ // now one thread per particle
         T dt_new = dt_p*0.9;
         T exponent = 0.0;
@@ -2488,10 +2495,12 @@ template py::array_t<float> test_derivatives_saw_nok<float>(py::array_t<float> q
 template<RHS id, typename... Args>
 __global__ void test_gpu_timestep_kernel(double* out, double* init_pos, double* quadpts_arr, double* derivs, double* mu,
                                             double* tmax, double* t, double* dt, double* dtmax, int nparticles, Args... args){
+    
+    constexpr int n_state_elts = map_rhs_to_n_state_elts<id>();
     int idx = threadIdx.x + blockIdx.x*PARTICLES_PER_BLOCK;
-    double* loc_arr = init_pos + 4*idx;
+    double* loc_arr = init_pos + n_state_elts*idx;
 
-    __shared__ double x_temp[5 * PARTICLES_PER_BLOCK];
+    __shared__ double x_temp[(n_state_elts+1) * PARTICLES_PER_BLOCK];
     __shared__ double block_dt[PARTICLES_PER_BLOCK];
     __shared__ bool symmetry_exploited[PARTICLES_PER_BLOCK];
     double* block_derivs = derivs + 7*map_rhs_to_n_deriv_outputs<id, false>()*blockIdx.x*PARTICLES_PER_BLOCK;
@@ -2502,7 +2511,6 @@ __global__ void test_gpu_timestep_kernel(double* out, double* init_pos, double* 
     __shared__ double block_t[PARTICLES_PER_BLOCK];
     __shared__ double block_dtmax[PARTICLES_PER_BLOCK];
 
-    constexpr int n_state_elts = map_rhs_to_n_state_elts<id>();
     __shared__ double state[n_state_elts * PARTICLES_PER_BLOCK];
     __shared__ bool has_left[PARTICLES_PER_BLOCK];
 
@@ -2548,9 +2556,9 @@ __global__ void test_gpu_timestep_kernel(double* out, double* init_pos, double* 
         // if the particle moved, write output and load the next particle that is needed
         if(threadIdx.x < PARTICLES_PER_BLOCK && is_valid_arr[threadIdx.x] && block_t[threadIdx.x] != 0.0){
             // write output for current particle
-            out[5*idx] = block_t[threadIdx.x];
+            out[(n_state_elts+1)*idx] = block_t[threadIdx.x];
             for(int i=0; i<n_state_elts; ++i){
-                out[5*idx + i + 1] = state[i*PARTICLES_PER_BLOCK + threadIdx.x];
+                out[(n_state_elts+1)*idx + i + 1] = state[i*PARTICLES_PER_BLOCK + threadIdx.x];
             }
 
             // load the next particle
@@ -2581,18 +2589,27 @@ vector<double> test_gpu_timestep(py::array_t<double> quad_pts, py::array_t<doubl
         py::array_t<double> x2_range, py::array_t<double> x3_range, py::array_t<double> loc_init, double m, double q, double vtotal, py::array_t<double> vtang,
         double tol, int nparticles, Args... args){
 
+    constexpr int n_state_elts = map_rhs_to_n_state_elts<id>();
+
     //  read data in from python
     double* loc_init_arr = create_array(loc_init);
     double* vtang_arr = create_array(vtang);
-    double init_pos[4*nparticles];
+    double init_pos[n_state_elts*nparticles];
     // load initial conditions
     for(int i=0; i<nparticles; ++i){
         double s     = loc_init_arr[3*i];
         double theta = loc_init_arr[3*i + 1];
-        init_pos[4*i + 0] = s * cos(theta);
-        init_pos[4*i + 1] = s * sin(theta);
-        init_pos[4*i + 2] = loc_init_arr[3*i + 2];
-        init_pos[4*i + 3] = vtang_arr[i];
+        init_pos[n_state_elts*i + 0] = s * cos(theta);
+        init_pos[n_state_elts*i + 1] = s * sin(theta);
+        init_pos[n_state_elts*i + 2] = loc_init_arr[3*i + 2];
+
+        if constexpr(id == RHS::FO_CartesianVacuum){
+            init_pos[n_state_elts*i + 3] = vtang_arr[3*i + 0];
+            init_pos[n_state_elts*i + 4] = vtang_arr[3*i + 1];
+            init_pos[n_state_elts*i + 5] = vtang_arr[3*i + 2];
+        } else {
+            init_pos[n_state_elts*i + 3] = vtang_arr[i];
+        }
     }
 
     double* quadpts_arr = create_array(quad_pts);
@@ -2640,8 +2657,8 @@ vector<double> test_gpu_timestep(py::array_t<double> quad_pts, py::array_t<doubl
     gpuErrchk(cudaMemcpyToSymbol(n_x23_d, &n_x23, sizeof(int)) );
 
     double* init_pos_d;
-    gpuErrchk(cudaMalloc((void**)&init_pos_d, 4 * nparticles * sizeof(double)) );
-    gpuErrchk(cudaMemcpy(init_pos_d, init_pos, 4 * nparticles * sizeof(double), cudaMemcpyHostToDevice) );
+    gpuErrchk(cudaMalloc((void**)&init_pos_d, n_state_elts * nparticles * sizeof(double)) );
+    gpuErrchk(cudaMemcpy(init_pos_d, init_pos, n_state_elts * nparticles * sizeof(double), cudaMemcpyHostToDevice) );
 
     double* quadpts_d;
     gpuErrchk( cudaMalloc((void**)&quadpts_d, quad_pts.size() * sizeof(double)) );
@@ -2671,7 +2688,7 @@ vector<double> test_gpu_timestep(py::array_t<double> quad_pts, py::array_t<doubl
     cudaMalloc((void**)&dtmax_d, nparticles*sizeof(double));
 
     double* out_d;
-    gpuErrchk( cudaMalloc((void**)&out_d, 5 * nparticles * sizeof(double)) );
+    gpuErrchk( cudaMalloc((void**)&out_d, (n_state_elts+1) * nparticles * sizeof(double)) );
 
     // launch params
     int nthreads = THREADS_PER_BLOCK;
@@ -2701,11 +2718,11 @@ vector<double> test_gpu_timestep(py::array_t<double> quad_pts, py::array_t<doubl
     gpuErrchk( cudaPeekAtLastError() );
     gpuErrchk( cudaDeviceSynchronize() );
 
-    double out[5*nparticles];
-    gpuErrchk( cudaMemcpy(out, out_d, 5 * nparticles * sizeof(double), cudaMemcpyDeviceToHost) );
+    double out[(n_state_elts+1)*nparticles];
+    gpuErrchk( cudaMemcpy(out, out_d, (n_state_elts+1) * nparticles * sizeof(double), cudaMemcpyDeviceToHost) );
 
-    vector<double> particle_output(5*nparticles);
-    for(int i=0; i<5*nparticles; ++i){
+    vector<double> particle_output((n_state_elts+1)*nparticles);
+    for(int i=0; i<(n_state_elts+1)*nparticles; ++i){
         particle_output[i] = out[i];
     }
 
@@ -2721,12 +2738,20 @@ vector<double> test_gpu_timestep(py::array_t<double> quad_pts, py::array_t<doubl
     return particle_output;
 }
 
-vector<double> test_timestep_cartesian(py::array_t<double> quad_pts, py::array_t<double> x1_range,
+vector<double> test_timestep_gc_cartesian(py::array_t<double> quad_pts, py::array_t<double> x1_range,
         py::array_t<double> x2_range, py::array_t<double> x3_range, py::array_t<double> loc_init, double m, double q, double vtotal, py::array_t<double> vtang,
         double tol, int nparticles){
     bool rescale_abstol_var = false;
     gpuErrchk(cudaMemcpyToSymbol(rescale_abstol_var_d, &rescale_abstol_var, sizeof(bool)) );
     return test_gpu_timestep<RHS::GC_CartesianVacuum>(quad_pts, x1_range, x2_range, x3_range, loc_init, m, q, vtotal, vtang, tol, nparticles);
+}
+
+vector<double> test_timestep_fo_cartesian(py::array_t<double> quad_pts, py::array_t<double> x1_range,
+        py::array_t<double> x2_range, py::array_t<double> x3_range, py::array_t<double> loc_init, double m, double q, double vtotal, py::array_t<double> vtang,
+        double tol, int nparticles){
+    bool rescale_abstol_var = false;
+    gpuErrchk(cudaMemcpyToSymbol(rescale_abstol_var_d, &rescale_abstol_var, sizeof(bool)) );
+    return test_gpu_timestep<RHS::FO_CartesianVacuum>(quad_pts, x1_range, x2_range, x3_range, loc_init, m, q, vtotal, vtang, tol, nparticles);
 }
 
 vector<double> test_timestep_boozer(py::array_t<double> quad_pts, py::array_t<double> x1_range,

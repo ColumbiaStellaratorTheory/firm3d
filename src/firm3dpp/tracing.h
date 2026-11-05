@@ -220,7 +220,11 @@ py::array_t<T> test_derivatives_saw_nok(py::array_t<T> quad_pts, py::array_t<dou
         double saw_omega, py::array_t<double> saw_srange, py::array_t<int> saw_m, py::array_t<int> saw_n, py::array_t<T> saw_phihats, int saw_nharmonics,
         py::array_t<T> loc, py::array_t<T> vpar, py::array_t<T> time, double v_total, double m, double q,  double psi0, int n_points);
 
-vector<double> test_timestep_cartesian(py::array_t<double> quad_pts, py::array_t<double> rrange,
+vector<double> test_timestep_gc_cartesian(py::array_t<double> quad_pts, py::array_t<double> rrange,
+        py::array_t<double> phirange, py::array_t<double> zrange, py::array_t<double> loc_init, double m, double q, double vtotal, py::array_t<double> vtang,
+        double tol, int nparticles);
+
+vector<double> test_timestep_fo_cartesian(py::array_t<double> quad_pts, py::array_t<double> rrange,
         py::array_t<double> phirange, py::array_t<double> zrange, py::array_t<double> loc_init, double m, double q, double vtotal, py::array_t<double> vtang,
         double tol, int nparticles);
 

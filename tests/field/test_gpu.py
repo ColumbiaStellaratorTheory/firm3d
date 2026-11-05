@@ -17,6 +17,7 @@ try:
         load_coils_from_makegrid_file,
         trace_particles,
     )
+    import simsoptpp as sopp
 
     HAS_SIMSOPT = True
 except Exception:
@@ -624,7 +625,21 @@ class CATAPULTField:
                 nparticles=stz.shape[0],
             )
         elif self.field_type == "cartesian_vacuum":
-            last_time = firm3dpp.test_timestep_cartesian(
+            last_time = firm3dpp.test_timestep_gc_cartesian(
+                quad_pts=self.quad_info,
+                rrange=self.range0,
+                phirange=self.range1,
+                zrange=self.range2,
+                loc_init=stz,
+                m=MASS,
+                q=CHARGE,
+                vtotal=vtotal,
+                vtang=vpar,
+                tol=1e-9,
+                nparticles=stz.shape[0],
+            )
+        elif self.field_type == "fo_cartesian_vacuum":
+            last_time = firm3dpp.test_timestep_fo_cartesian(
                 quad_pts=self.quad_info,
                 rrange=self.range0,
                 phirange=self.range1,
@@ -643,8 +658,8 @@ class CATAPULTField:
                 field type: {self.field_type}"
             )
 
-        last_time = np.reshape(last_time, (stz.shape[0], 5))
-        if self.field_type != "cartesian_vacuum":
+        last_time = np.reshape(last_time, (stz.shape[0], -1))
+        if "cartesian_vacuum" not in self.field_type:
             # transform to pseudocylindrical coordinates for comparison with CPU results
             last_time = np.array(
                 [
@@ -657,7 +672,7 @@ class CATAPULTField:
     def compute_cpu_timesteps(self, stz, vpar, vtotal, time, psi0):
         if self.field_type == "boozer_vacuum" or self.field_type == "boozer":
             cpu_positions = np.empty((stz.shape[0], 5))
-            gc_tys, gc_zeta_hits = trace_particles_boozer(
+            tys, gc_zeta_hits = trace_particles_boozer(
                 self.field,
                 stz,
                 vpar,
@@ -672,7 +687,7 @@ class CATAPULTField:
             cpu_positions = np.empty((stz.shape[0], 5))
             self.field.set_points(stz)
             mu_init = (vtotal**2 - vpar**2) / (2 * self.field.modB()[:, 0])
-            gc_tys, gc_zeta_hits = trace_particles_boozer_perturbed(
+            tys, gc_zeta_hits = trace_particles_boozer_perturbed(
                 self.saw_field,
                 stz,
                 vpar,
@@ -693,7 +708,7 @@ class CATAPULTField:
             x = r * np.cos(phi)
             y = r * np.sin(phi)
             xyz = np.hstack((x, y, z))
-            gc_tys, gc_zeta_hits = trace_particles(
+            tys, gc_zeta_hits = trace_particles(
                 self.field,
                 xyz,
                 vpar,
@@ -703,16 +718,35 @@ class CATAPULTField:
                 tol=1e-9,
                 stopping_criteria=[SimsoptIterationStoppingCriterion(1)],
                 forget_exact_path=True,
+                tmax=1e-2
             )
+        elif self.field_type == "fo_cartesian_vacuum":
+            # convert r, phi, z to x, y, z for CPU tracing
+            rphiz = stz
+            r = rphiz[:, 0].reshape(-1, 1)
+            phi = rphiz[:, 1].reshape(-1, 1)
+            z = rphiz[:, 2].reshape(-1, 1)
+            x = r * np.cos(phi)
+            y = r * np.sin(phi)
+            xyz = np.hstack((x, y, z))
+
+            tys = []
+            res_phi_hits = []
+            for i in range(stz.shape[0]):
+                res_ty, res_phi_hit = sopp.particle_fullorbit_tracing(
+                                        self.field, xyz[i, :], vpar[i, :],
+                                        MASS, CHARGE, tmax=1e-2, tol=1e-9, stopping_criteria=[SimsoptIterationStoppingCriterion(1)])
+                tys.append(res_ty)
+
         else:
             raise ValueError(
                 f"CPU timestep computation not implemented for this \
                 field type: {self.field_type}"
             )
 
-        cpu_positions = np.array([x[-1] for x in gc_tys])
+        cpu_positions = np.array([x[-1] for x in tys])
 
-        if self.field_type != "cartesian_vacuum":
+        if "cartesian_vacuum" not in self.field_type:
             # transform to pseudocylindrical coordinates for comparison with GPU results
             cpu_positions = np.array(
                 [
@@ -728,16 +762,20 @@ class CATAPULTField:
             )
         return cpu_positions
 
-    def test_timestep(self, stz, vpar, vtotal, time, psi0, tol):
+    def test_timestep(self, stz, vpar, vtotal, time=None, psi0=None, tol=1e-8):
         gpu_final_positions = self.compute_gpu_timestep(stz, vpar, vtotal, time, psi0)
-
         cpu_positions = self.compute_cpu_timesteps(stz, vpar, vtotal, time, psi0)
 
+        gpu_final_positions_scaled = gpu_final_positions
+        gpu_final_positions_scaled[:, 4:] /= vtotal
+        cpu_positions_scaled = cpu_positions
+        cpu_positions_scaled[:, 4:] /= vtotal
+
         gpu_error_is_small = np.allclose(
-            gpu_final_positions, cpu_positions, rtol=tol, atol=tol
+            gpu_final_positions_scaled, cpu_positions_scaled, rtol=tol, atol=tol
         )
-        error = np.abs(cpu_positions - gpu_final_positions) / (
-            np.abs(cpu_positions) + 1
+        error = np.abs(cpu_positions_scaled - gpu_final_positions_scaled) / (
+            np.abs(cpu_positions_scaled) + 1
         )
         if not gpu_error_is_small:
             row_idx = np.unravel_index(np.argmax(error), error.shape)[0]
@@ -1468,6 +1506,16 @@ class TestGPUTracingFO_Cartesian(unittest.TestCase):
         vpar_init /= np.linalg.norm(vpar_init, axis=1)[:, np.newaxis]
         vpar_init *= VELOCITY
         is_small = self.field.test_derivatives(self.stz, vpar_init, VELOCITY, tol=1e-8)
+        self.assertTrue(is_small)
+
+    def test_timestep(self):
+        VELOCITY = np.sqrt(2 * ENERGY / MASS)
+        vpar_init = np.random.normal(size=(n_test_pts, 3))
+        vpar_init /= np.linalg.norm(vpar_init, axis=1)[:, np.newaxis]
+        vpar_init *= VELOCITY
+        is_small = self.field.test_timestep(
+            self.stz, vpar_init, VELOCITY, tol=1e-8
+        )
         self.assertTrue(is_small)
 
     # def test_precision(self):

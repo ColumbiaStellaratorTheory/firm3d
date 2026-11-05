@@ -599,7 +599,21 @@ void init_tracing(py::module_ &m){
         );
 
 
-    m.def("test_timestep_cartesian", &test_timestep_cartesian,
+    m.def("test_timestep_gc_cartesian", &test_timestep_gc_cartesian,
+        py::arg("quad_pts"),
+        py::arg("rrange"),
+        py::arg("phirange"),
+        py::arg("zrange"),
+        py::arg("loc_init"),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("vtotal"),
+        py::arg("vtang"),
+        py::arg("tol"),
+        py::arg("nparticles")
+        );
+
+    m.def("test_timestep_fo_cartesian", &test_timestep_fo_cartesian,
         py::arg("quad_pts"),
         py::arg("rrange"),
         py::arg("phirange"),
