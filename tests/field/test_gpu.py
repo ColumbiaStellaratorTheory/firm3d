@@ -138,7 +138,7 @@ def get_field(boozmn_filename, n_metagrid_pts, vacuum):
     return bri, field, nfp
 
 
-def cartesian_rhs(position, vpar, field, mass, charge, velocity):
+def cartesian_gc_rhs(position, vpar, field, mass, charge, velocity):
     field.set_points_cyl(position.reshape(-1, 3))
     B = field.B()
     GradAbsB = field.GradAbsB()
@@ -160,6 +160,21 @@ def cartesian_rhs(position, vpar, field, mass, charge, velocity):
     out[3] = -mu * np.sum([B[0, i] * GradAbsB[0, i] for i in range(3)]) / AbsB
     return out
 
+def cartesian_fo_rhs(position, v, field, mass, charge, velocity):
+    field.set_points_cyl(position.reshape(-1, 3))
+    B = field.B()
+
+    out = [0] * 6
+    for i in range(3):
+        out[i] = v[i]
+    q_over_m = charge / mass
+
+    v_cross_B = np.cross(v, B[0])
+
+    for i in range(3):
+        out[3 + i] = q_over_m * v_cross_B[i]
+
+    return out
 
 class CATAPULTField:
     def __init__(
@@ -406,7 +421,20 @@ class CATAPULTField:
                 stz.shape[0],
             )
         elif self.field_type == "cartesian_vacuum":
-            gpu_derivs_dbl = firm3dpp.test_derivatives_cartesian(
+            gpu_derivs_dbl = firm3dpp.test_derivatives_gc_cartesian(
+                quad_info,
+                self.range0,
+                self.range1,
+                self.range2,
+                stz.copy(),
+                vpar,
+                vtotal,
+                MASS,
+                CHARGE,
+                stz.shape[0],
+            )
+        elif self.field_type == "fo_cartesian_vacuum":
+            gpu_derivs_dbl = firm3dpp.test_derivatives_fo_cartesian(
                 quad_info,
                 self.range0,
                 self.range1,
@@ -424,7 +452,7 @@ class CATAPULTField:
                 type: {self.field_type}"
             )
 
-        return gpu_derivs_dbl.reshape((stz.shape[0], 4))
+        return gpu_derivs_dbl.reshape((stz.shape[0], -1))
 
     def compute_cpu_derivatives(self, stz, vpar, vtotal, time=None):
         if self.field_type == "boozer_vacuum" or self.field_type == "boozer":
@@ -460,7 +488,13 @@ class CATAPULTField:
         elif self.field_type == "cartesian_vacuum":
             cpu_derivs = np.empty((stz.shape[0], 4))
             for i in range(stz.shape[0]):
-                cpu_derivs[i, :] = cartesian_rhs(
+                cpu_derivs[i, :] = cartesian_gc_rhs(
+                    stz[i, :], vpar[i], self.field, MASS, CHARGE, vtotal
+                )
+        elif self.field_type == "fo_cartesian_vacuum":
+            cpu_derivs = np.empty((stz.shape[0], 6))
+            for i in range(stz.shape[0]):
+                cpu_derivs[i, :] = cartesian_fo_rhs(
                     stz[i, :], vpar[i], self.field, MASS, CHARGE, vtotal
                 )
         else:
@@ -1420,11 +1454,13 @@ class TestGPUTracingFO_Cartesian(unittest.TestCase):
         is_small = self.field.test_interpolant(self.stz, tol=1e-8)
         self.assertTrue(is_small)
 
-    # def test_derivatives(self):
-    #     VELOCITY = np.sqrt(2 * ENERGY / MASS)
-    #     vpar_init = np.random.uniform(-VELOCITY, VELOCITY, (n_test_pts,))
-    #     is_small = self.field.test_derivatives(self.stz, vpar_init, VELOCITY, tol=1e-8)
-    #     self.assertTrue(is_small)
+    def test_derivatives(self):
+        VELOCITY = np.sqrt(2 * ENERGY / MASS)
+        vpar_init = np.random.normal(size=(n_test_pts, 3))
+        vpar_init /= np.linalg.norm(vpar_init, axis=1)[:, np.newaxis]
+        vpar_init *= VELOCITY
+        is_small = self.field.test_derivatives(self.stz, vpar_init, VELOCITY, tol=1e-8)
+        self.assertTrue(is_small)
 
     # def test_precision(self):
     #     VELOCITY = np.sqrt(2 * ENERGY / MASS)

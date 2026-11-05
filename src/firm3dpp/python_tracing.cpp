@@ -410,7 +410,7 @@ void init_tracing(py::module_ &m){
         );
 
 
-    m.def("test_derivatives_cartesian", &test_derivatives_cartesian<double>,
+    m.def("test_derivatives_gc_cartesian", &test_derivatives_gc_cartesian<double>,
         py::arg("quad_pts").noconvert(),
         py::arg("srange"),
         py::arg("trange"),
@@ -423,7 +423,33 @@ void init_tracing(py::module_ &m){
         py::arg("n_points")
         );
 
-    m.def("test_derivatives_cartesian", &test_derivatives_cartesian<float>,
+    m.def("test_derivatives_gc_cartesian", &test_derivatives_gc_cartesian<float>,
+        py::arg("quad_pts").noconvert(),
+        py::arg("srange"),
+        py::arg("trange"),
+        py::arg("zrange"),
+        py::arg("loc").noconvert(),
+        py::arg("vpar").noconvert(),
+        py::arg("v_total"),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("n_points")
+        );
+
+    m.def("test_derivatives_fo_cartesian", &test_derivatives_fo_cartesian<double>,
+        py::arg("quad_pts").noconvert(),
+        py::arg("srange"),
+        py::arg("trange"),
+        py::arg("zrange"),
+        py::arg("loc").noconvert(),
+        py::arg("vpar").noconvert(),
+        py::arg("v_total"),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("n_points")
+        );
+
+    m.def("test_derivatives_fo_cartesian", &test_derivatives_fo_cartesian<float>,
         py::arg("quad_pts").noconvert(),
         py::arg("srange"),
         py::arg("trange"),

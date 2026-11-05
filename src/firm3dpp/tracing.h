@@ -202,7 +202,10 @@ template<typename T>
 py::array_t<T> test_gpu_interpolation(py::array_t<T> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, py::array_t<T> loc, std::string coordinates, int n_points);
 
 template<typename T>
-py::array_t<T> test_derivatives_cartesian(py::array_t<T> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, py::array_t<T> loc, py::array_t<T> vpar, double v_total, double m, double q, int n_points);
+py::array_t<T> test_derivatives_gc_cartesian(py::array_t<T> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, py::array_t<T> loc, py::array_t<T> vpar, double v_total, double m, double q, int n_points);
+
+template<typename T>
+py::array_t<T> test_derivatives_fo_cartesian(py::array_t<T> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, py::array_t<T> loc, py::array_t<T> vpar, double v_total, double m, double q, int n_points);
 
 template<typename T>
 py::array_t<T> test_derivatives_boozer(py::array_t<T> quad_pts, py::array_t<double> srange, py::array_t<double> trange, py::array_t<double> zrange, py::array_t<T> loc, py::array_t<T> vpar, double v_total, double m, double q,  double psi0, int n_points, bool vacuum = false);

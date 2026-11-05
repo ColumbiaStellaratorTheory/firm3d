@@ -77,7 +77,7 @@ __host__ __device__ constexpr int map_rhs_to_n_deriv_outputs(){
     } else if constexpr(id == RHS::GC_CartesianVacuum){
         return 5 + (coll ? 2 : 0);
     } else if constexpr(id == RHS::FO_CartesianVacuum){
-        return 6;
+        return 7;
     }
 }
 
@@ -689,6 +689,42 @@ __device__ void rhs_GC_BoozerNoKSAW(T* __restrict__ derivs, const T* __restrict_
     }
 };
 
+template <typename T, RHS id, bool coll, int deriv_id>
+__device__ void rhs_FO_CartesianVacuum(T* __restrict__ derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu){
+    constexpr int nout = map_rhs_to_n_deriv_outputs<RHS::FO_CartesianVacuum, false>();
+
+    T x1 = x_temp[1*PARTICLES_PER_BLOCK];
+    T x2 = x_temp[2*PARTICLES_PER_BLOCK];
+    T x3 = x_temp[3*PARTICLES_PER_BLOCK];
+
+    T v1 = x_temp[4*PARTICLES_PER_BLOCK];
+    T v2 = x_temp[5*PARTICLES_PER_BLOCK];
+    T v3 = x_temp[6*PARTICLES_PER_BLOCK];
+
+    // copy velocity to position derivs
+    derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = v1;
+    derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK] = v2;
+    derivs[(nout*deriv_id + 2)*PARTICLES_PER_BLOCK] = v3;
+
+    // compute velocity derivs
+    T B_r = block_interpolants[0*PARTICLES_PER_BLOCK];
+    T B_phi = block_interpolants[1*PARTICLES_PER_BLOCK];
+    T B_z = block_interpolants[2*PARTICLES_PER_BLOCK];
+
+    T sign = symmetry_exploited[0] ? (T)-1.0 : (T)1.0;
+    B_r *= sign;
+    T inv_r = rhypot(x1, x2);
+    T cos_phi = x1*inv_r;
+    T sin_phi = x2*inv_r;
+    T B_x = cos_phi * B_r - sin_phi * B_phi;
+    T B_y = sin_phi * B_r + cos_phi * B_phi;
+    
+    T charge_over_mass = T(charge_d)/T(mass_d);
+    derivs[(nout*deriv_id + 3)*PARTICLES_PER_BLOCK] = charge_over_mass * (v2*B_z - v3*B_y);
+    derivs[(nout*deriv_id + 4)*PARTICLES_PER_BLOCK] = charge_over_mass * (v3*B_x - v1*B_z);
+    derivs[(nout*deriv_id + 5)*PARTICLES_PER_BLOCK] = charge_over_mass * (v1*B_y - v2*B_x);
+};
+
 // calc_derivs computes the derivatives at points for which the corresponding
 // i,j,k indices and shape functions have been precomputed
 // the results are stored in the appropriate region of derivs
@@ -714,6 +750,8 @@ __device__ void calc_derivs(T* __restrict__ derivs, const T* __restrict__ quadpt
             rhs_GC_BoozerVacuum<T, id, coll, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
         } else if constexpr(id == RHS::GC_Boozer){
             rhs_GC_Boozer<T, id, coll, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
+        } else if constexpr(id == RHS::FO_CartesianVacuum){
+            rhs_FO_CartesianVacuum<T, id, coll, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
         }
     }
 
@@ -995,14 +1033,14 @@ template<typename T, RHS id, bool coll, typename... Args>
 __global__ void setup_kernel(T* init_pos, const T* __restrict__ quadpts_arr, T* mu, T* dt, T* dtmax,
                                 T* t, T* derivs, int nparticles, Args... args){
 
+    constexpr int n_state_elts = map_rhs_to_n_state_elts<id>();
     int idx = threadIdx.x + blockIdx.x*PARTICLES_PER_BLOCK;
-    __shared__ T x_temp[5*PARTICLES_PER_BLOCK];
+    __shared__ T x_temp[(n_state_elts+1)*PARTICLES_PER_BLOCK];
     T* block_derivs = derivs + 7*map_rhs_to_n_deriv_outputs<id, coll>()*blockIdx.x*PARTICLES_PER_BLOCK;
     __shared__ bool symmetry_exploited[PARTICLES_PER_BLOCK];
     __shared__ int cell_index_start[3*PARTICLES_PER_BLOCK];
     __shared__ T shape_fun_vals[12*PARTICLES_PER_BLOCK];
 
-    constexpr int n_state_elts = map_rhs_to_n_state_elts<id>();
     __shared__ T state[n_state_elts*PARTICLES_PER_BLOCK];
 
     T* block_dt = dt + blockIdx.x*PARTICLES_PER_BLOCK;
@@ -2129,10 +2167,12 @@ template py::array_t<float> test_gpu_interpolation<float>(py::array_t<float> qua
 template<typename T, RHS id, typename... Args>
 __global__ void test_gpu_derivs_kernel(T* quad_pts, T* init_pos, T* time, T* out, T* derivs, T* mu, T* dt, T* dtmax, int n_points, Args... args){
     int idx = threadIdx.x + blockIdx.x*PARTICLES_PER_BLOCK;
-    T* loc_arr = init_pos + 4*idx;
-    T* out_arr  =  out + 4*idx;
+    constexpr int n_state_elts = map_rhs_to_n_state_elts<id>();
 
-    __shared__ T x_temp[5 * PARTICLES_PER_BLOCK];
+    T* loc_arr = init_pos + n_state_elts*idx;
+    T* out_arr  =  out + n_state_elts*idx;
+
+    __shared__ T x_temp[(n_state_elts + 1) * PARTICLES_PER_BLOCK];
     T* block_derivs = derivs + 7*map_rhs_to_n_deriv_outputs<id, false>()*blockIdx.x*PARTICLES_PER_BLOCK;
     __shared__ bool symmetry_exploited[PARTICLES_PER_BLOCK];
     __shared__ int cell_index_start[3*PARTICLES_PER_BLOCK];
@@ -2142,7 +2182,6 @@ __global__ void test_gpu_derivs_kernel(T* quad_pts, T* init_pos, T* time, T* out
     T* block_t = time + blockIdx.x*PARTICLES_PER_BLOCK;
     T* block_dtmax = dtmax + blockIdx.x*PARTICLES_PER_BLOCK;
 
-    constexpr int n_state_elts = map_rhs_to_n_state_elts<id>();
     __shared__ T state[n_state_elts * PARTICLES_PER_BLOCK];
 
     bool is_valid = idx < n_points && threadIdx.x < PARTICLES_PER_BLOCK;
@@ -2194,7 +2233,15 @@ py::array_t<T> test_gpu_derivatives(py::array_t<T> quad_pts, py::array_t<double>
         init_pos[n_state_elts*i + 0] = x1;
         init_pos[n_state_elts*i + 1] = x2;
         init_pos[n_state_elts*i + 2] = loc_arr[3*i + 2];
-        init_pos[n_state_elts*i + 3] = vpar_arr[i];
+
+
+        if constexpr(id == RHS::FO_CartesianVacuum){
+            init_pos[n_state_elts*i + 3] = vpar_arr[3*i + 0];
+            init_pos[n_state_elts*i + 4] = vpar_arr[3*i + 1];
+            init_pos[n_state_elts*i + 5] = vpar_arr[3*i + 2];
+        } else {
+            init_pos[n_state_elts*i + 3] = vpar_arr[i];
+        }
     }
 
     T* quadpts_d;
@@ -2295,14 +2342,25 @@ py::array_t<T> test_gpu_derivatives(py::array_t<T> quad_pts, py::array_t<double>
 
 
 template<typename T>
-py::array_t<T> test_derivatives_cartesian(py::array_t<T> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, py::array_t<T> loc, py::array_t<T> vpar, double v_total, double m, double q, int n_points){
+py::array_t<T> test_derivatives_gc_cartesian(py::array_t<T> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, py::array_t<T> loc, py::array_t<T> vpar, double v_total, double m, double q, int n_points){
     py::array_t<T> time = py::array_t<T>(n_points); // dummy time
     std::fill(time.mutable_data(), time.mutable_data() + n_points, 0.0);
     return test_gpu_derivatives<T, RHS::GC_CartesianVacuum>(quad_pts, x1_range, x2_range, x3_range, loc, vpar, time, v_total, m, q, n_points);
 }
 
-template py::array_t<double> test_derivatives_cartesian(py::array_t<double> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, py::array_t<double> loc, py::array_t<double> vpar, double v_total, double m, double q, int n_points);
-template py::array_t<float> test_derivatives_cartesian(py::array_t<float> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, py::array_t<float> loc, py::array_t<float> vpar, double v_total, double m, double q, int n_points);
+template py::array_t<double> test_derivatives_gc_cartesian(py::array_t<double> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, py::array_t<double> loc, py::array_t<double> vpar, double v_total, double m, double q, int n_points);
+template py::array_t<float> test_derivatives_gc_cartesian(py::array_t<float> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, py::array_t<float> loc, py::array_t<float> vpar, double v_total, double m, double q, int n_points);
+
+template<typename T>
+py::array_t<T> test_derivatives_fo_cartesian(py::array_t<T> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, py::array_t<T> loc, py::array_t<T> vpar, double v_total, double m, double q, int n_points){
+    py::array_t<T> time = py::array_t<T>(n_points); // dummy time
+    std::fill(time.mutable_data(), time.mutable_data() + n_points, 0.0);
+    return test_gpu_derivatives<T, RHS::FO_CartesianVacuum>(quad_pts, x1_range, x2_range, x3_range, loc, vpar, time, v_total, m, q, n_points);
+}
+
+template py::array_t<double> test_derivatives_fo_cartesian(py::array_t<double> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, py::array_t<double> loc, py::array_t<double> vpar, double v_total, double m, double q, int n_points);
+template py::array_t<float> test_derivatives_fo_cartesian(py::array_t<float> quad_pts, py::array_t<double> x1_range, py::array_t<double> x2_range, py::array_t<double> x3_range, py::array_t<float> loc, py::array_t<float> vpar, double v_total, double m, double q, int n_points);
+
 
 
 template<typename T>
