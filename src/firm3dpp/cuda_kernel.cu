@@ -723,6 +723,8 @@ __device__ void rhs_FO_CartesianVacuum(T* __restrict__ derivs, const T* __restri
     derivs[(nout*deriv_id + 3)*PARTICLES_PER_BLOCK] = charge_over_mass * (v2*B_z - v3*B_y);
     derivs[(nout*deriv_id + 4)*PARTICLES_PER_BLOCK] = charge_over_mass * (v3*B_x - v1*B_z);
     derivs[(nout*deriv_id + 5)*PARTICLES_PER_BLOCK] = charge_over_mass * (v1*B_y - v2*B_x);
+    derivs[(nout*deriv_id + 6)*PARTICLES_PER_BLOCK] = block_interpolants[3*PARTICLES_PER_BLOCK]; // boundary dist fn
+
 };
 
 // calc_derivs computes the derivatives at points for which the corresponding
@@ -1069,7 +1071,8 @@ __global__ void setup_kernel(T* init_pos, const T* __restrict__ quadpts_arr, T* 
 template<typename T, RHS id, bool coll>
 __device__ void check_has_left_cartesian(bool* has_left, const T* __restrict__ state, const T* __restrict__ derivs){
     constexpr int n_deriv_outputs = map_rhs_to_n_deriv_outputs<id, coll>();
-    has_left[threadIdx.x] = derivs[(6*n_deriv_outputs + n_deriv_outputs-1)*PARTICLES_PER_BLOCK + threadIdx.x] < 0; // boundary dist fn at new location
+    constexpr int sdf_slot = 6*n_deriv_outputs + n_deriv_outputs-1 - (coll ? 2 : 0);
+    has_left[threadIdx.x] = derivs[sdf_slot*PARTICLES_PER_BLOCK + threadIdx.x] < 0; // boundary dist fn at new location
 }
 
 template<typename T>
@@ -1296,9 +1299,10 @@ __device__ void dp5_one_step(T* x_temp, T* derivs, const T* __restrict__ quadpts
 template<typename T, RHS id, bool coll, typename... Args>
 __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict__ quadpts_arr, T* derivs, T* mu,
                                             double* tmax,T* t, T* dt, T* dtmax, Args... args){
+    constexpr int n_state_elts = map_rhs_to_n_state_elts<id>();
     int idx = threadIdx.x + blockIdx.x*PARTICLES_PER_BLOCK;
 
-    __shared__ T x_temp[5 * PARTICLES_PER_BLOCK];
+    __shared__ T x_temp[(n_state_elts+1) * PARTICLES_PER_BLOCK];
     T* block_derivs = derivs + blockIdx.x*PARTICLES_PER_BLOCK*7*map_rhs_to_n_deriv_outputs<id, coll>();
     __shared__ double block_tmax[PARTICLES_PER_BLOCK];
     __shared__ T block_dt[PARTICLES_PER_BLOCK];
@@ -1309,7 +1313,6 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
     __shared__ T block_t[PARTICLES_PER_BLOCK];
     __shared__ T block_dtmax[PARTICLES_PER_BLOCK];
 
-    constexpr int n_state_elts = map_rhs_to_n_state_elts<id>();
     __shared__ T state[n_state_elts * PARTICLES_PER_BLOCK];
     __shared__ bool has_left[PARTICLES_PER_BLOCK];
     // collisional launches carry a per-particle RNG stream and the total
@@ -1319,7 +1322,7 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
     constexpr int coll_slots = coll ? PARTICLES_PER_BLOCK : 1;
     __shared__ curandStatePhilox4_32_10_t rng_state[coll_slots];
     __shared__ T v_tot[coll_slots];
-    constexpr int ncols = coll ? 8 : 7;
+    constexpr int ncols = 3 + n_state_elts + (coll ? 1 : 0); 
 
 
     bool is_valid = idx < nparticles_d && threadIdx.x < PARTICLES_PER_BLOCK;
@@ -1525,6 +1528,7 @@ vector<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range, py:
     py::array_t<T> loc_init, double m, double q, double vtotal, py::array_t<T> vtang, py::array_t<double> tmax, double tol, py::array_t<T> dt_in, py::array_t<T> mu_in,
     int nparticles, Args... args){
 
+    constexpr int n_state_elts = map_rhs_to_n_state_elts<id>();
     //  read data in from python
     T* loc_init_arr = create_array(loc_init);
     T* vtang_arr = create_array(vtang);
@@ -1577,7 +1581,7 @@ vector<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range, py:
     gpuErrchk(cudaMemcpyToSymbol(n_x23_d, &n_x23, sizeof(int)) );
     gpuErrchk(cudaMemcpyToSymbol(nparticles_d, &nparticles, sizeof(int)));
 
-    T init_pos[4*nparticles];
+    T init_pos[n_state_elts * nparticles];
     // load initial conditions
     for(int i=0; i<nparticles; ++i){
         int start = 3*i;
@@ -1586,14 +1590,22 @@ vector<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range, py:
         T theta = loc_init_arr[start+1];
 
         for(int j=0; j<3; j++){
-            init_pos[4*i + j] = loc_init_arr[start + j];
+            init_pos[n_state_elts*i + j] = loc_init_arr[start + j];
         }
-        init_pos[4*i + 3] = vtang_arr[i];
+        if constexpr(id == RHS::FO_CartesianVacuum){
+            init_pos[n_state_elts*i + 3] = vtang_arr[3*i + 0];
+            init_pos[n_state_elts*i + 4] = vtang_arr[3*i + 1];
+            init_pos[n_state_elts*i + 5] = vtang_arr[3*i + 2];
+        } else {
+            init_pos[n_state_elts*i + 3] = vtang_arr[i];
+        }
     }
 
+
+
     T* init_pos_d;
-    gpuErrchk(cudaMalloc((void**)&init_pos_d, 4 * nparticles * sizeof(T)) );
-    gpuErrchk(cudaMemcpy(init_pos_d, init_pos, 4 * nparticles * sizeof(T), cudaMemcpyHostToDevice) );
+    gpuErrchk(cudaMalloc((void**)&init_pos_d, n_state_elts * nparticles * sizeof(T)) );
+    gpuErrchk(cudaMemcpy(init_pos_d, init_pos, n_state_elts * nparticles * sizeof(T), cudaMemcpyHostToDevice) );
 
     T* quadpts_d;
     gpuErrchk(cudaMalloc((void**)&quadpts_d, quad_pts.size() * sizeof(T)) );
@@ -1620,7 +1632,7 @@ vector<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range, py:
     gpuErrchk(cudaMalloc((void**)&dtmax_d, nparticles * sizeof(T)) );
 
     // a collisional launch appends the total speed, which the kick changes
-    constexpr int ncols = coll ? 8 : 7;
+    constexpr int ncols = 3 + n_state_elts + (coll ? 1 : 0);
     T* out_d;
     gpuErrchk(cudaMalloc((void**)&out_d, ncols * nparticles * sizeof(T)) );
 
@@ -1671,17 +1683,32 @@ vector<T> gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> x1_range, py:
 }
 
 template<typename T>
-vector<T> cartesian_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> rrange,
+vector<T> gc_cartesian_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> rrange,
         py::array_t<double> phirange, py::array_t<double> zrange, py::array_t<T> xyz_init, double m, double q, double vtotal, py::array_t<T> vtang,
         py::array_t<double> tmax, double tol, py::array_t<T> dt_in, py::array_t<T> mu_in, int nparticles){
             return gpu_tracing<T, RHS::GC_CartesianVacuum, false>(quad_pts, rrange, phirange, zrange, xyz_init, m, q, vtotal, vtang, tmax, tol, dt_in, mu_in, nparticles);
         }
 
-template vector<double> cartesian_gpu_tracing<double>(py::array_t<double> quad_pts, py::array_t<double> rrange,
+template vector<double> gc_cartesian_gpu_tracing<double>(py::array_t<double> quad_pts, py::array_t<double> rrange,
         py::array_t<double> phirange, py::array_t<double> zrange, py::array_t<double> xyz_init, double m, double q, double vtotal, py::array_t<double> vtang,
         py::array_t<double> tmax, double tol, py::array_t<double> dt_in, py::array_t<double> mu_in, int nparticles);
 
-template vector<float> cartesian_gpu_tracing<float>(py::array_t<float> quad_pts, py::array_t<double> rrange,
+template vector<float> gc_cartesian_gpu_tracing<float>(py::array_t<float> quad_pts, py::array_t<double> rrange,
+        py::array_t<double> phirange, py::array_t<double> zrange, py::array_t<float> xyz_init, double m, double q, double vtotal, py::array_t<float> vtang,
+        py::array_t<double> tmax, double tol, py::array_t<float> dt_in, py::array_t<float> mu_in, int nparticles);
+
+template<typename T>
+vector<T> fo_cartesian_gpu_tracing(py::array_t<T> quad_pts, py::array_t<double> rrange,
+        py::array_t<double> phirange, py::array_t<double> zrange, py::array_t<T> xyz_init, double m, double q, double vtotal, py::array_t<T> vtang,
+        py::array_t<double> tmax, double tol, py::array_t<T> dt_in, py::array_t<T> mu_in, int nparticles){
+            return gpu_tracing<T, RHS::FO_CartesianVacuum, false>(quad_pts, rrange, phirange, zrange, xyz_init, m, q, vtotal, vtang, tmax, tol, dt_in, mu_in, nparticles);
+        }
+
+template vector<double> fo_cartesian_gpu_tracing<double>(py::array_t<double> quad_pts, py::array_t<double> rrange,
+        py::array_t<double> phirange, py::array_t<double> zrange, py::array_t<double> xyz_init, double m, double q, double vtotal, py::array_t<double> vtang,
+        py::array_t<double> tmax, double tol, py::array_t<double> dt_in, py::array_t<double> mu_in, int nparticles);
+
+template vector<float> fo_cartesian_gpu_tracing<float>(py::array_t<float> quad_pts, py::array_t<double> rrange,
         py::array_t<double> phirange, py::array_t<double> zrange, py::array_t<float> xyz_init, double m, double q, double vtotal, py::array_t<float> vtang,
         py::array_t<double> tmax, double tol, py::array_t<float> dt_in, py::array_t<float> mu_in, int nparticles);
 

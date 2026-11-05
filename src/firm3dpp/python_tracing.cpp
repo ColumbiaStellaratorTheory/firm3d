@@ -182,7 +182,7 @@ void init_tracing(py::module_ &m){
     );
 
 #ifdef USE_CUDA
-    m.def("cartesian_gpu_tracing", &cartesian_gpu_tracing<double>,
+    m.def("gc_cartesian_gpu_tracing", &gc_cartesian_gpu_tracing<double>,
         py::arg("quad_pts").noconvert(),
         py::arg("rrange"),
         py::arg("phirange"),
@@ -199,7 +199,41 @@ void init_tracing(py::module_ &m){
         py::arg("nparticles")
         );
 
-    m.def("cartesian_gpu_tracing", &cartesian_gpu_tracing<float>,
+    m.def("gc_cartesian_gpu_tracing", &gc_cartesian_gpu_tracing<float>,
+        py::arg("quad_pts").noconvert(),
+        py::arg("rrange"),
+        py::arg("phirange"),
+        py::arg("zrange"),
+        py::arg("xyz_init").noconvert(),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("vtotal"),
+        py::arg("vtang").noconvert(),
+        py::arg("tmax"),
+        py::arg("tol"),
+        py::arg("dt_in").noconvert(),
+        py::arg("mu_in").noconvert(),
+        py::arg("nparticles")
+        );
+
+    m.def("fo_cartesian_gpu_tracing", &fo_cartesian_gpu_tracing<double>,
+        py::arg("quad_pts").noconvert(),
+        py::arg("rrange"),
+        py::arg("phirange"),
+        py::arg("zrange"),
+        py::arg("xyz_init").noconvert(),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("vtotal"),
+        py::arg("vtang").noconvert(),
+        py::arg("tmax"),
+        py::arg("tol"),
+        py::arg("dt_in").noconvert(),
+        py::arg("mu_in").noconvert(),
+        py::arg("nparticles")
+        );
+
+    m.def("fo_cartesian_gpu_tracing", &fo_cartesian_gpu_tracing<float>,
         py::arg("quad_pts").noconvert(),
         py::arg("rrange"),
         py::arg("phirange"),

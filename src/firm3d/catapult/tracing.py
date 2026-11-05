@@ -152,7 +152,7 @@ def _launch_cartesian(
     # parallel speed, where |vpar| > vtotal would make it negative
     if np.any(mu < 0):
         _validate_parallel_speeds(parallel_speeds, vtotal)
-    out = firm3dpp.cartesian_gpu_tracing(
+    out = firm3dpp.gc_cartesian_gpu_tracing(
         quad_pts=cfield.quad_info,
         rrange=cfield.rrange,
         phirange=cfield.phirange,
