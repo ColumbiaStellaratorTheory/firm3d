@@ -38,7 +38,7 @@ conda activate firm3d-ci
 # ── Build firm3d with CUDA ────────────────────────────────────────────────────
 cd "$FIRM3D_DIR"
 echo "--- Installing firm3d ---"
-env CC=cc CXX=CC pip install -v --no-build-isolation -e ".[dev]" 2>&1 | tee "$WORK_DIR/build.log"
+env CC=cc CXX=CC CUDAARCHS=native pip install -v --no-build-isolation -e ".[dev]" 2>&1 | tee "$WORK_DIR/build.log"
 
 if ! grep -q "GPU bindings will be compiled with" "$WORK_DIR/build.log"; then
     echo "ERROR: GPU bindings were not compiled." >&2
