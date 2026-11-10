@@ -12,6 +12,7 @@ namespace py = pybind11;
 #include "collisions.h"
 #include <curand_kernel.h>
 #include <algorithm>
+#include <type_traits>
 
 #define THREADS_PER_BLOCK 32
 #define PARTICLES_PER_BLOCK 8
@@ -178,6 +179,15 @@ __device__ int next_particle_d;
 template <typename T, int n> __device__ void interpolate(T*  out, const T* __restrict__ data, const int* __restrict__ cell_index_start,
     const T* __restrict__ shape_fun_vals, const bool* __restrict__ is_valid){
 
+    // map T to the vector type to reduce load instructions
+    using T2 = typename std::conditional<std::is_same<T, double>::value, double2, float2>::type;
+
+    const int g  = threadIdx.x % 8; // [0,1,...,7, 0,1,...,7] 8 threads per particle
+    const int jj = g / 2;          //  [0,0,1,1,2,2,3,3] 
+
+    // each thread gets k0 = 0 or 2 and is responsible for k0 and k0+1 so its data is 2 contiguous values
+    const int k0 = 2 * (g % 2);    //  [0,2,0,2,0,2,0,2]  
+
     // 8 threads per particles, iterate over particles in the block
     for(int p=threadIdx.x / 8; p<PARTICLES_PER_BLOCK; p+= THREADS_PER_BLOCK/8){
         // cell_ids from build_state
@@ -185,33 +195,31 @@ template <typename T, int n> __device__ void interpolate(T*  out, const T* __res
         const int j = cell_index_start[3*p + 1];
         const int k = cell_index_start[3*p + 2];
 
-        // constant third dimension index for the thread
-        const int kk = threadIdx.x % 4;
+        const int base_offset = 64*n*(i*n_x2_d*n_x3_d + j*n_x3_d + k) + 4*jj + k0;
 
-        // second dimension index for the thread, 0 -> 2 and 1 -> 3
-        const int jj = (threadIdx.x / 4) % 2;
+        // read the j,k shape values for this particle and thread
+        const T shape_j = shape_fun_vals[(4 + jj)*PARTICLES_PER_BLOCK + p];
+        const T shape_jk1 = shape_fun_vals[(8 + k0)*PARTICLES_PER_BLOCK + p] * shape_j;
+        const T shape_jk2 = shape_fun_vals[(8 + k0 + 1)*PARTICLES_PER_BLOCK + p] * shape_j;
 
-        // compute the base offset for the interpolant data for this thread
-        const int base_offset = 64*n*(i*n_x2_d * n_x3_d + j*n_x3_d + k) + 4*jj + kk;
-
-        // each thread handles two j,k pairs, compute shape contributions
-        const T shape_jk1 = shape_fun_vals[(8 + kk)*PARTICLES_PER_BLOCK + p] * shape_fun_vals[(4 + jj)*PARTICLES_PER_BLOCK + p];
-        const T shape_jk2 = shape_fun_vals[(8 + kk)*PARTICLES_PER_BLOCK + p] * shape_fun_vals[(4 + jj + 2)*PARTICLES_PER_BLOCK + p];
-
-        // only issue loads if the particle is still alive
+        // if the particle is invalid, do nothing
         const bool p_valid = is_valid[p];
-
-        // iterate over interpolant elements
-        // in gc boozer vacuum, this is modB, dmodBds, dmodBdtheta, dmodBdzeta, G, iota
+        
+        // iterate over the number of interpolants
         for(int zz=0; zz<n; ++zz){
-            T local_val = 0.0;
-            if(p_valid){ // check particle is still alive
-                for(int ii=0; ii<4; ++ii){
-                    int base = base_offset + 16*ii ;
-                    const T shape_i = shape_fun_vals[ii*PARTICLES_PER_BLOCK + p]; //shape_fun_vals[(8 + kk)*PARTICLES_PER_BLOCK + p];
-
-                    local_val += shape_i * (shape_jk1 * data[base + 64*zz] +
-                                            shape_jk2 * data[base + 8 + 64*zz]);
+            T local_val = 0.0; //local accumulator
+            if(p_valid){ // only perform useful interpolation
+                // this thread is responsible for 8 elements of the 64 element inner product
+                // for fixed jj above, kk = k0 and k0+1, and ii 0 through 3
+                for(int ii=0; ii<4; ++ii) {
+                    const T shape_i = shape_fun_vals[ii*PARTICLES_PER_BLOCK + p];
+                    // now read the values for k0 and k0+1 simulataneously
+                    // they live at 
+                    //  64*n*(i*n_x2_d * n_x3_d + j*n_x3_d + k) + 16*ii + 4*jj + k0  + 64*zz
+                    //  64*n*(i*n_x2_d * n_x3_d + j*n_x3_d + k) + 16*ii + 4*jj + k0 + 1  + 64*zz
+                    // so they are contiguous
+                    const T2 c = *reinterpret_cast<const T2*>(data + base_offset + 16*ii + 64*zz);
+                    local_val += shape_i * (shape_jk1 * c.x + shape_jk2 * c.y);
                 }
             }
 
