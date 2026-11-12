@@ -881,7 +881,7 @@ __device__ void build_state(T* x_temp, bool* symmetry_exploited, int* cell_index
 
     // store current location in x_temp
     constexpr int n_state_elts = map_rhs_to_n_state_elts<id>();
-    for (int idx=threadIdx.x; idx<n_state_elts*PARTICLES_PER_BLOCK; idx+=PARTICLES_PER_BLOCK) {
+    for (int idx=threadIdx.x; idx<n_state_elts*PARTICLES_PER_BLOCK; idx+=THREADS_PER_BLOCK) {
         int particle_id = idx % PARTICLES_PER_BLOCK;
         int state_var = idx / PARTICLES_PER_BLOCK;
 
