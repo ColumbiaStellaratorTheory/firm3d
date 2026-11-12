@@ -101,6 +101,13 @@ __host__ T* create_array(py::array_t<T> x){
     return arr;
 }
 
+// helper for static shared arrays
+template<typename T, int N, int tag>
+__device__ __forceinline__ T* block_scratch(){
+    __shared__ T buf[N];
+    return buf;
+}
+
 /* below are declarations of data that are stored in the constant memory cache on the GPU
  * they are referenced like global variables and need to be set here, or copied to before the kernel is launched
  * accesses to constant memory are serialized and broadcasted across a warp
@@ -749,7 +756,7 @@ __device__ void calc_derivs(T* __restrict__ derivs, const T* __restrict__ quadpt
 
 
     constexpr int n = map_rhs_to_n_interpolants<id, coll>();
-    __shared__ T block_interpolants[n*PARTICLES_PER_BLOCK];
+    T* block_interpolants = block_scratch<T, n*PARTICLES_PER_BLOCK, 1>();
     interpolate<T, n>(block_interpolants, quadpts_arr, cell_index_start, shape_fun_vals, is_valid);
     __syncthreads();
 
@@ -897,7 +904,7 @@ __device__ void build_state(T* x_temp, bool* symmetry_exploited, int* cell_index
 
 
     // one thread per particle maps the position to the interpolant grid.
-    __shared__ T interp_pt[3*PARTICLES_PER_BLOCK];
+    T* interp_pt = block_scratch<T, 3*PARTICLES_PER_BLOCK, 0>();
 
     if(threadIdx.x < PARTICLES_PER_BLOCK && is_valid[threadIdx.x]){
         constexpr CoordSys coord = map_rhs_to_coord<id>();
@@ -994,6 +1001,7 @@ __device__ void setup_particle(T* mu, T* t, T* dt, T* dtmax, T* x_temp, bool* sy
         // t[threadIdx.x] = 0.0;
         symmetry_exploited[threadIdx.x] = false;
     }
+    __shared__ T interp_pt[3*PARTICLES_PER_BLOCK];
     build_state<T, id, coll, 0>(x_temp, symmetry_exploited, cell_index_start,
                         shape_fun_vals, state, derivs, t, dt, is_valid);
     __syncthreads();
@@ -1311,7 +1319,8 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
     int idx = threadIdx.x + blockIdx.x*PARTICLES_PER_BLOCK;
 
     __shared__ T x_temp[(n_state_elts+1) * PARTICLES_PER_BLOCK];
-    T* block_derivs = derivs + blockIdx.x*PARTICLES_PER_BLOCK*7*map_rhs_to_n_deriv_outputs<id, coll>();
+    constexpr int n_deriv = map_rhs_to_n_deriv_outputs<id, coll>();
+    __shared__ T block_derivs[7 * n_deriv * PARTICLES_PER_BLOCK];
     __shared__ double block_tmax[PARTICLES_PER_BLOCK];
     __shared__ T block_dt[PARTICLES_PER_BLOCK];
     __shared__ bool symmetry_exploited[PARTICLES_PER_BLOCK];
