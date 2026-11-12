@@ -100,6 +100,12 @@ BOOZER_COLLISONS_EXIT=$?
 cp examples/gpu_boozer_collisional_tracing/gpu_boozer_collisional_tracing_results.json "$WORK_DIR/gpu_boozer_collisional_tracing_results.json"
 set -e
 
+(cd examples/gpu_fullorbit_tracing && python gpu_fullorbit_tracing.py)
+FULLORBIT_EXIT=$?
+cp examples/gpu_fullorbit_tracing/gpu_fullorbit_tracing_results.json "$WORK_DIR/gpu_fullorbit_tracing_results.json"
+set -e
+
+
 echo "boozer_vacuum_tracing exit    : $BOOZER_VACUUM_EXIT"
 echo "boozer_finitebeta_tracing exit: $BOOZER_FINITEBETA_EXIT"
 echo "saw_vacuum_tracing exit       : $SAW_VACUUM_EXIT"
@@ -107,8 +113,9 @@ echo "saw_nok_tracing exit          : $SAW_NOK_EXIT"
 echo "cartesian_tracing exit : $CARTESIAN_EXIT"
 echo "cartesian_collisions_tracing exit : $CARTESIAN_COLLISIONS_EXIT"
 echo "boozer_collisions_tracing exit : $BOOZER_COLLISONS_EXIT"
+echo "fullorbit_tracing exit : $FULLORBIT_EXIT"
 
-if [ "$BOOZER_VACUUM_EXIT" -ne 0 ] || [ "$BOOZER_FINITEBETA_EXIT" -ne 0 ] || [ "$SAW_VACUUM_EXIT" -ne 0 ] || [ "$CARTESIAN_EXIT" -ne 0 ] || [ "$CARTESIAN_COLLISIONS_EXIT" -ne 0 ] || [ "$BOOZER_COLLISONS_EXIT" -ne 0 ] || [ "$SAW_NOK_EXIT" -ne 0 ] ; then
+if [ "$FULLORBIT_EXIT" -ne 0 ] || [ "$BOOZER_VACUUM_EXIT" -ne 0 ] || [ "$BOOZER_FINITEBETA_EXIT" -ne 0 ] || [ "$SAW_VACUUM_EXIT" -ne 0 ] || [ "$CARTESIAN_EXIT" -ne 0 ] || [ "$CARTESIAN_COLLISIONS_EXIT" -ne 0 ] || [ "$BOOZER_COLLISONS_EXIT" -ne 0 ] || [ "$SAW_NOK_EXIT" -ne 0 ] ; then
   EXAMPLES_EXIT=1
 else
   EXAMPLES_EXIT=0

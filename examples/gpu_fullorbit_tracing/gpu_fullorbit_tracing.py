@@ -64,11 +64,11 @@ from firm3d.trajectory_helpers import compute_loss_fraction
 import firm3dpp
 
 HAS_CUDA = hasattr(firm3dpp, "test_gpu_interpolation")
-n_test_pts = 1000
 
 degree = 3  # degree of interpolant
 n_metagrid_pts = 32  # resolution of interpolant
 order = 12  # order of coil curves
+n_test_pts = 64000
 
 filename = "/global/homes/m/mczek/firm3d_dev/firm3d/examples/inputs/coils.curves_22_7_21"
 wout_filename = "/global/homes/m/mczek/firm3d_dev/firm3d/examples/inputs/wout_aten_rescaled.nc"
@@ -142,23 +142,23 @@ vpar_init = np.random.normal(size=(n_test_pts, 3))
 vpar_init /= np.linalg.norm(vpar_init, axis=1)[:, np.newaxis]
 vpar_init *= VELOCITY
 
-tmax=2e-4
+tmax=1e-5
 tol=1e-6
-### cpu tracing
-tys = []
-res_phi_hits = []
-tracing_start = time.perf_counter()
-for i in range(xyz.shape[0]):
-    print(f"Tracing particle {i+1}/{xyz.shape[0]} on CPU...")
-    res_ty, res_phi_hit = sopp.particle_fullorbit_tracing(
-                            bsh, xyz[i, :], vpar_init[i, :],
-                            MASS, CHARGE, tmax=tmax, tol=tol, stopping_criteria=[SimsoptLevelsetStoppingCriterion(sc_particle.dist)])
-    tys.append(res_ty)
-tracing_end = time.perf_counter()
-print(f"CPU tracing took {tracing_end - tracing_start:.6f} seconds")
-cpu_loss_times = np.array([ty[-1][0] for ty in tys])
+    ### cpu tracing
+    # tys = []
+    # res_phi_hits = []
+    # tracing_start = time.perf_counter()
+    # for i in range(xyz.shape[0]):
+    #     print(f"Tracing particle {i+1}/{xyz.shape[0]} on CPU...")
+    #     res_ty, res_phi_hit = sopp.particle_fullorbit_tracing(
+    #                             bsh, xyz[i, :], vpar_init[i, :],
+    #                             MASS, CHARGE, tmax=tmax, tol=tol, stopping_criteria=[SimsoptLevelsetStoppingCriterion(sc_particle.dist)])
+    #     tys.append(res_ty)
+    # tracing_end = time.perf_counter()
+    # print(f"CPU tracing took {tracing_end - tracing_start:.6f} seconds")
+    # cpu_loss_times = np.array([ty[-1][0] for ty in tys])
 
-### gpu_tracing
+    ### gpu_tracing
 tracing_start = time.perf_counter()
 gpu_output = firm3dpp.fo_cartesian_gpu_tracing(
     quad_pts=quad_info,
@@ -177,13 +177,28 @@ gpu_output = firm3dpp.fo_cartesian_gpu_tracing(
     nparticles=n_test_pts,
 )
 tracing_end = time.perf_counter()
+dbl_time = tracing_end - tracing_start
 print(f"GPU tracing took {tracing_end - tracing_start:.6f} seconds")
 print(f"Number of test points: {n_test_pts}, tmax: {tmax}, tol: {tol}")
 gpu_output = np.reshape(gpu_output, (n_test_pts, -1))
 gpu_loss_times = gpu_output[:, 0]
-# print(gpu_loss_times)
+loss_fraction_dbl = np.mean(gpu_loss_times)
+    # print(gpu_loss_times)
 
-cpu_loss_frac = np.mean(cpu_loss_times < tmax)
-gpu_loss_frac = np.mean(gpu_loss_times < tmax)
-print("CPU loss fraction:", cpu_loss_frac)
-print("GPU loss fraction:", gpu_loss_frac)
+# cpu_loss_frac = np.mean(cpu_loss_times < tmax)
+# gpu_loss_frac = np.mean(gpu_loss_times < tmax)
+# print("CPU loss fraction:", cpu_loss_frac)
+# print("GPU loss fraction:", gpu_loss_frac)
+
+timing_result = {
+    "nparticles": n_test_pts,
+    "tolerance": tol,
+    "resolution": n_metagrid_pts,
+    "loss_fraction_dbl": loss_fraction_dbl,
+    "tmax": tmax,
+    "times": {
+        "tracing_dbl": dbl_time,
+    },
+}
+with open("gpu_fullorbit_tracing_results.json", "w") as f:
+    json.dump(timing_result, f, indent=2)
