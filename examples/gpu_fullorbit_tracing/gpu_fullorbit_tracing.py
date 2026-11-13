@@ -3,6 +3,7 @@ import unittest
 import numpy as np
 import firm3dpp
 import time
+import json
 try:
     from simsopt.field.tracing import (
         IterationStoppingCriterion as SimsoptIterationStoppingCriterion,
