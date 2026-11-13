@@ -1,11 +1,6 @@
 #include <cuda_runtime.h>
-#include <iostream>
 #include "tracing.h"
 #include <math.h>
-#include "xtensor-python/pyarray.hpp"     // Numpy bindings
-typedef xt::pyarray<double> PyArray;
-#include "xtensor-python/pytensor.hpp"     // Numpy bindings
-typedef xt::pytensor<double, 2, xt::layout_type::row_major> PyTensor;
 using std::shared_ptr;
 using std::vector;
 namespace py = pybind11;
@@ -183,7 +178,7 @@ __device__ int next_particle_d;
 // r_shape, phi_shape, z_shape store shape function elements
 // nphi and nz indicate how many grid pts there are in phi and z directions
 //
-template <typename T, int n> __device__ void interpolate(T*  out, const T* __restrict__ data, const int* __restrict__ cell_index_start,
+template <typename T, int n, int n_actual=n> __device__ void interpolate(T*  out, const T* __restrict__ data, const int* __restrict__ cell_index_start,
     const T* __restrict__ shape_fun_vals, const bool* __restrict__ is_valid){
 
     // map T to the vector type to reduce load instructions
@@ -213,7 +208,7 @@ template <typename T, int n> __device__ void interpolate(T*  out, const T* __res
         const bool p_valid = is_valid[p];
         
         // iterate over the number of interpolants
-        for(int zz=0; zz<n; ++zz){
+        for(int zz=0; zz<n_actual; ++zz){
             T local_val = 0.0; //local accumulator
             if(p_valid){ // only perform useful interpolation
                 // this thread is responsible for 8 elements of the 64 element inner product
@@ -224,7 +219,7 @@ template <typename T, int n> __device__ void interpolate(T*  out, const T* __res
                     // they live at 
                     //  64*n*(i*n_x2_d * n_x3_d + j*n_x3_d + k) + 16*ii + 4*jj + k0  + 64*zz
                     //  64*n*(i*n_x2_d * n_x3_d + j*n_x3_d + k) + 16*ii + 4*jj + k0 + 1  + 64*zz
-                    // so they are contiguous
+                    //  they are contiguous
                     const T2 c = *reinterpret_cast<const T2*>(data + base_offset + 16*ii + 64*zz);
                     local_val += shape_i * (shape_jk1 * c.x + shape_jk2 * c.y);
                 }
@@ -760,7 +755,12 @@ __device__ void calc_derivs(int deriv_id, T* __restrict__ derivs, const T* __res
     T* output = derivs + n_deriv_elts*deriv_id*PARTICLES_PER_BLOCK;
 
     T* block_interpolants = block_scratch<T, n*PARTICLES_PER_BLOCK, 1>();
-    interpolate<T, n>(block_interpolants, quadpts_arr, cell_index_start, shape_fun_vals, is_valid);
+    constexpr int n_drop = (map_rhs_to_coord<id>() == CoordSys::Cartesian) ? 1 + coll : 0;
+    if (n_drop > 0 && deriv_id < 6) {
+        interpolate<T, n, n - n_drop>(block_interpolants, quadpts_arr, cell_index_start, shape_fun_vals, is_valid);
+    } else {
+        interpolate<T, n>(block_interpolants, quadpts_arr, cell_index_start, shape_fun_vals, is_valid);
+    }
     __syncthreads();
 
     if(threadIdx.x < PARTICLES_PER_BLOCK && is_valid[threadIdx.x]){
