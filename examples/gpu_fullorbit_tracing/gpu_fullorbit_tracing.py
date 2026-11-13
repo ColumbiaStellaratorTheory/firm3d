@@ -71,8 +71,8 @@ n_metagrid_pts = 32  # resolution of interpolant
 order = 12  # order of coil curves
 n_test_pts = 64000
 
-filename = "/global/homes/m/mczek/firm3d_dev/firm3d/examples/inputs/coils.curves_22_7_21"
-wout_filename = "/global/homes/m/mczek/firm3d_dev/firm3d/examples/inputs/wout_aten_rescaled.nc"
+filename = "../inputs/coils.curves_22_7_21"
+wout_filename = "../inputs/wout_aten_rescaled.nc"
 
 surf = SurfaceRZFourier.from_wout(wout_filename)
 coils = load_coils_from_makegrid_file(filename, order, ppp=20, group_names=None)
@@ -106,7 +106,6 @@ bsh = InterpolatedField(
     nfp=surf.nfp,
     stellsym=True,
 )
-
 ### rejection sample points inside the loss surface
 rphiz = np.empty((n_test_pts, 3))
 for i in range(n_test_pts):
