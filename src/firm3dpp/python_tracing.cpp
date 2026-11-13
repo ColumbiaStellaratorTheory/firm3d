@@ -182,7 +182,7 @@ void init_tracing(py::module_ &m){
     );
 
 #ifdef USE_CUDA
-    m.def("cartesian_gpu_tracing", &cartesian_gpu_tracing<double>,
+    m.def("gc_cartesian_gpu_tracing", &gc_cartesian_gpu_tracing<double>,
         py::arg("quad_pts").noconvert(),
         py::arg("rrange"),
         py::arg("phirange"),
@@ -199,7 +199,41 @@ void init_tracing(py::module_ &m){
         py::arg("nparticles")
         );
 
-    m.def("cartesian_gpu_tracing", &cartesian_gpu_tracing<float>,
+    m.def("gc_cartesian_gpu_tracing", &gc_cartesian_gpu_tracing<float>,
+        py::arg("quad_pts").noconvert(),
+        py::arg("rrange"),
+        py::arg("phirange"),
+        py::arg("zrange"),
+        py::arg("xyz_init").noconvert(),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("vtotal"),
+        py::arg("vtang").noconvert(),
+        py::arg("tmax"),
+        py::arg("tol"),
+        py::arg("dt_in").noconvert(),
+        py::arg("mu_in").noconvert(),
+        py::arg("nparticles")
+        );
+
+    m.def("fo_cartesian_gpu_tracing", &fo_cartesian_gpu_tracing<double>,
+        py::arg("quad_pts").noconvert(),
+        py::arg("rrange"),
+        py::arg("phirange"),
+        py::arg("zrange"),
+        py::arg("xyz_init").noconvert(),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("vtotal"),
+        py::arg("vtang").noconvert(),
+        py::arg("tmax"),
+        py::arg("tol"),
+        py::arg("dt_in").noconvert(),
+        py::arg("mu_in").noconvert(),
+        py::arg("nparticles")
+        );
+
+    m.def("fo_cartesian_gpu_tracing", &fo_cartesian_gpu_tracing<float>,
         py::arg("quad_pts").noconvert(),
         py::arg("rrange"),
         py::arg("phirange"),
@@ -410,7 +444,7 @@ void init_tracing(py::module_ &m){
         );
 
 
-    m.def("test_derivatives_cartesian", &test_derivatives_cartesian<double>,
+    m.def("test_derivatives_gc_cartesian", &test_derivatives_gc_cartesian<double>,
         py::arg("quad_pts").noconvert(),
         py::arg("srange"),
         py::arg("trange"),
@@ -423,7 +457,33 @@ void init_tracing(py::module_ &m){
         py::arg("n_points")
         );
 
-    m.def("test_derivatives_cartesian", &test_derivatives_cartesian<float>,
+    m.def("test_derivatives_gc_cartesian", &test_derivatives_gc_cartesian<float>,
+        py::arg("quad_pts").noconvert(),
+        py::arg("srange"),
+        py::arg("trange"),
+        py::arg("zrange"),
+        py::arg("loc").noconvert(),
+        py::arg("vpar").noconvert(),
+        py::arg("v_total"),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("n_points")
+        );
+
+    m.def("test_derivatives_fo_cartesian", &test_derivatives_fo_cartesian<double>,
+        py::arg("quad_pts").noconvert(),
+        py::arg("srange"),
+        py::arg("trange"),
+        py::arg("zrange"),
+        py::arg("loc").noconvert(),
+        py::arg("vpar").noconvert(),
+        py::arg("v_total"),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("n_points")
+        );
+
+    m.def("test_derivatives_fo_cartesian", &test_derivatives_fo_cartesian<float>,
         py::arg("quad_pts").noconvert(),
         py::arg("srange"),
         py::arg("trange"),
@@ -573,7 +633,21 @@ void init_tracing(py::module_ &m){
         );
 
 
-    m.def("test_timestep_cartesian", &test_timestep_cartesian,
+    m.def("test_timestep_gc_cartesian", &test_timestep_gc_cartesian,
+        py::arg("quad_pts"),
+        py::arg("rrange"),
+        py::arg("phirange"),
+        py::arg("zrange"),
+        py::arg("loc_init"),
+        py::arg("m"),
+        py::arg("q"),
+        py::arg("vtotal"),
+        py::arg("vtang"),
+        py::arg("tol"),
+        py::arg("nparticles")
+        );
+
+    m.def("test_timestep_fo_cartesian", &test_timestep_fo_cartesian,
         py::arg("quad_pts"),
         py::arg("rrange"),
         py::arg("phirange"),

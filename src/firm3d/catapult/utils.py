@@ -192,7 +192,7 @@ def boozer_saw_interpolant(field, nfp, ns, ntheta, nzeta, dtype=np.float64):
     return srange, trange, zrange, cell_quad_pts.astype(dtype), np.max(J)
 
 
-def cartesian_interpolant(field, surface_classifier, flux_label=None, dtype=np.float64):
+def cartesian_interpolant(field, surface_classifier, flux_label=None, dtype=np.float64, tracing_model="gc"):
     r"""
     Set up a Cartesian (cylindrical) interpolant for GPU tracing.
 
@@ -243,13 +243,21 @@ def cartesian_interpolant(field, surface_classifier, flux_label=None, dtype=np.f
 
     # Quantities to interpolate
     B = field.B_cyl()
-    GradAbsB = field.GradAbsB_cyl()
+
+    GradAbsB = None
+    if tracing_model == "gc":
+        GradAbsB = field.GradAbsB_cyl()
 
     signed_dist_vals = surface_classifier.evaluate_rphiz(quad_pts)
 
     if flux_label is None:
-        quad_info = np.hstack((B, GradAbsB, signed_dist_vals))
+        if tracing_model == "gc":
+            quad_info = np.hstack((B, GradAbsB, signed_dist_vals))
+        elif tracing_model == "fo":
+            quad_info = np.hstack((B, signed_dist_vals))
     else:
+        print(flux_label is None)
+        print(flux_label)
         s_vals = np.asarray(flux_label(quad_pts), dtype=float).reshape(-1)
         if s_vals.shape[0] != quad_pts.shape[0]:
             raise ValueError(
