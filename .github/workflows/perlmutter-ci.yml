@@ -177,6 +177,9 @@ jobs:
             "${{ runner.temp }}/firm3d-base-${{ github.sha }}/gpu_cartesian_collisional_tracing_results.json" \
             "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_cartesian_collisional_tracing_results.json" \
             "GC Cartesian Collisions" \
+            "${{ runner.temp }}/firm3d-base-${{ github.sha }}/gpu_fullorbit_tracing_results.json" \
+            "${{ runner.temp }}/firm3d-${{ github.sha }}/gpu_fullorbit_tracing_results.json" \
+            "F0 Cartesian" \
             --pr-status "${{ steps.slurm.outcome }}" \
             --base-status "${{ steps.slurm_base.outcome }}" \
             -o "${{ runner.temp }}/firm3d-${{ github.sha }}/pr_comment.md"
