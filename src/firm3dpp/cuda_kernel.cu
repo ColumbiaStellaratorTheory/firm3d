@@ -246,7 +246,7 @@ template <typename T, int n> __device__ void interpolate(T*  out, const T* __res
 // calc_derivs implementation for guiding center cartesian vacuum tracing
 // id selects the collisionless or the collisional instantiation, which differ
 // only in the deriv stride and in the two extra columns the kick reads.
-template <typename T, RHS id, bool coll, int deriv_id>
+template <typename T, RHS id, bool coll>
 __device__ void rhs_GC_CartesianVacuum(T* __restrict__ derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu){
     constexpr int nout = map_rhs_to_n_deriv_outputs<id, coll>();
 
@@ -281,25 +281,25 @@ __device__ void rhs_GC_CartesianVacuum(T* __restrict__ derivs, const T* __restri
     T fak2 = (T(mass_d)/(T(charge_d)*pow(AbsB, 3)))*(half_v_perp2 + v_par*v_par);
 
     T BcrossGradAbsB_elt = B_y*GradAbsB_z - B_z*GradAbsB_y;
-    derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = fak1*B_x + fak2*BcrossGradAbsB_elt;
+    derivs[0*PARTICLES_PER_BLOCK] = fak1*B_x + fak2*BcrossGradAbsB_elt;
     BcrossGradAbsB_elt = B_z*GradAbsB_x - B_x*GradAbsB_z;
-    derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK] = fak1*B_y + fak2*BcrossGradAbsB_elt;
+    derivs[1*PARTICLES_PER_BLOCK] = fak1*B_y + fak2*BcrossGradAbsB_elt;
     BcrossGradAbsB_elt = B_x*GradAbsB_y - B_y*GradAbsB_x;
-    derivs[(nout*deriv_id + 2)*PARTICLES_PER_BLOCK] = fak1*B_z + fak2*BcrossGradAbsB_elt;
-    derivs[(nout*deriv_id + 3)*PARTICLES_PER_BLOCK] = -mu[0]*(B_x*GradAbsB_x + B_y*GradAbsB_y + B_z*GradAbsB_z)/AbsB;
-    derivs[(nout*deriv_id + 4)*PARTICLES_PER_BLOCK] = block_interpolants[6*PARTICLES_PER_BLOCK]; // boundary dist fn
+    derivs[2*PARTICLES_PER_BLOCK] = fak1*B_z + fak2*BcrossGradAbsB_elt;
+    derivs[3*PARTICLES_PER_BLOCK] = -mu[0]*(B_x*GradAbsB_x + B_y*GradAbsB_y + B_z*GradAbsB_z)/AbsB;
+    derivs[4*PARTICLES_PER_BLOCK] = block_interpolants[6*PARTICLES_PER_BLOCK]; // boundary dist fn
 
     // if collisions are turned on, write out AbsB and the flux label interpolant
     if constexpr (coll){
-        derivs[(nout*deriv_id + 5)*PARTICLES_PER_BLOCK] = AbsB;
-        derivs[(nout*deriv_id + 6)*PARTICLES_PER_BLOCK] = block_interpolants[7*PARTICLES_PER_BLOCK]; // flux label
+        derivs[5*PARTICLES_PER_BLOCK] = AbsB;
+        derivs[6*PARTICLES_PER_BLOCK] = block_interpolants[7*PARTICLES_PER_BLOCK]; // flux label
     }
 
 }
 
 
 // calc_derivs implementation for guiding center boozer vacuum tracing
-template <typename T, RHS id, bool coll, int deriv_id>
+template <typename T, RHS id, bool coll>
 __device__ void rhs_GC_BoozerVacuum(T* __restrict__ derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu){
     constexpr int nout = map_rhs_to_n_deriv_outputs<id, coll>();
 
@@ -329,14 +329,14 @@ __device__ void rhs_GC_BoozerVacuum(T* __restrict__ derivs, const T* __restrict_
     T zetadot = v_par*modB_inv_G;
     T tdot = dmodBds*fak1 + iota*zetadot;
 
-    derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = sdot*x1*inv_s - x2*tdot;
-    derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK] = sdot*x2*inv_s + x1*tdot;
-    derivs[(nout*deriv_id + 2)*PARTICLES_PER_BLOCK] = zetadot;
-    derivs[(nout*deriv_id + 3)*PARTICLES_PER_BLOCK] = -(iota*dmodBdtheta + dmodBdzeta)*mu_val*modB_inv_G;
+    derivs[0*PARTICLES_PER_BLOCK] = sdot*x1*inv_s - x2*tdot;
+    derivs[1*PARTICLES_PER_BLOCK] = sdot*x2*inv_s + x1*tdot;
+    derivs[2*PARTICLES_PER_BLOCK] = zetadot;
+    derivs[3*PARTICLES_PER_BLOCK] = -(iota*dmodBdtheta + dmodBdzeta)*mu_val*modB_inv_G;
 
     // if collisions are turned on, write out the magnetic field magnitude
     if constexpr (coll){
-        derivs[(nout*deriv_id + 4)*PARTICLES_PER_BLOCK] = modB;
+        derivs[4*PARTICLES_PER_BLOCK] = modB;
     }
 
 }
@@ -345,7 +345,7 @@ __device__ void rhs_GC_BoozerVacuum(T* __restrict__ derivs, const T* __restrict_
 // calc_derivs implementation for general guiding center Boozer tracing (with K != 0)
 // The equations in this function match those for the CPU tracing at
 // tracing.cpp::GuidingCenterBoozerRHS
-template<typename T, RHS id, bool coll, int deriv_id>
+template<typename T, RHS id, bool coll>
 __device__ void rhs_GC_Boozer(T* __restrict__ derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu){
     constexpr int nout = map_rhs_to_n_deriv_outputs<id, coll>();
 
@@ -401,20 +401,20 @@ __device__ void rhs_GC_Boozer(T* __restrict__ derivs, const T* __restrict__ x_te
     // v||dot = (C |B|,theta - F |B|,zeta) mu |B| / (iota D)
     T vpardot = (C * dmodBdtheta - F * dmodBdzeta) * mu_val * modB * inv_D_iota;
 
-    derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = sdot*x1*inv_s - x2*tdot;
-    derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK] = sdot*x2*inv_s + x1*tdot;
-    derivs[(nout*deriv_id + 2)*PARTICLES_PER_BLOCK] = zetadot;
-    derivs[(nout*deriv_id + 3)*PARTICLES_PER_BLOCK] = vpardot;
+    derivs[0*PARTICLES_PER_BLOCK] = sdot*x1*inv_s - x2*tdot;
+    derivs[1*PARTICLES_PER_BLOCK] = sdot*x2*inv_s + x1*tdot;
+    derivs[2*PARTICLES_PER_BLOCK] = zetadot;
+    derivs[3*PARTICLES_PER_BLOCK] = vpardot;
 
     // if collisions are turned on, write out the magnitude of the magnetic field
     if constexpr (coll){
-        derivs[(nout*deriv_id + 4)*PARTICLES_PER_BLOCK] = modB;
+        derivs[4*PARTICLES_PER_BLOCK] = modB;
     }
 };
 
 
 // calc_derivs implementation for guiding center boozer vacuum tracing with Shear Alfven Waves
-template <typename T, RHS id, bool coll, int deriv_id>
+template <typename T, RHS id, bool coll>
 __device__ void rhs_GC_BoozerVacuumSAW(T* __restrict__ derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu,
                                          T saw_omega, int* saw_m, int* saw_n, T* saw_phihats, int saw_nharmonics, const bool* __restrict__ is_valid){
     constexpr int nout = map_rhs_to_n_deriv_outputs<id, coll>();
@@ -528,17 +528,17 @@ __device__ void rhs_GC_BoozerVacuumSAW(T* __restrict__ derivs, const T* __restri
             T sdot = (-dmodBdtheta*fak1_over_q + dalphadtheta_G*vpar_modB_over_G - dphidtheta) * T(inv_psi0_d);
             T tdot = (dmodBdpsi*fak1_over_q) + iota_minus_dalphadpsi_G*vpar_modB_over_G + dphidpsi;
 
-            derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK + p] = sdot*cos_theta - (x2 * tdot);
-            derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK + p] = sdot*sin_theta + (x1 * tdot);
-            derivs[(nout*deriv_id + 2)*PARTICLES_PER_BLOCK + p] = vpar_modB_over_G;
-            derivs[(nout*deriv_id + 3)*PARTICLES_PER_BLOCK + p] = -modB/(G*T(mass_d)) * (T(mass_d)*mu_val*(dmodBdzeta + dalphadtheta_G*dmodBdpsi \
+            derivs[0*PARTICLES_PER_BLOCK + p] = sdot*cos_theta - (x2 * tdot);
+            derivs[1*PARTICLES_PER_BLOCK + p] = sdot*sin_theta + (x1 * tdot);
+            derivs[2*PARTICLES_PER_BLOCK + p] = vpar_modB_over_G;
+            derivs[3*PARTICLES_PER_BLOCK + p] = -modB/(G*T(mass_d)) * (T(mass_d)*mu_val*(dmodBdzeta + dalphadtheta_G*dmodBdpsi \
                         + dmodBdtheta*iota_minus_dalphadpsi_G) + T(charge_d)*(alphadot_G \
                         + dalphadtheta_G*dphidpsi + iota_minus_dalphadpsi_G*dphidtheta + dphidzeta)) \
                         + vpar_over_modB * (dmodBdtheta*dphidpsi - dmodBdpsi*dphidtheta);
 
             // if collisions are turned on, write out the magnitude of the magnetic field
             if constexpr (coll){
-                derivs[(nout*deriv_id + 4)*PARTICLES_PER_BLOCK + p] = modB;
+                derivs[4*PARTICLES_PER_BLOCK + p] = modB;
             }
         }
 
@@ -547,7 +547,7 @@ __device__ void rhs_GC_BoozerVacuumSAW(T* __restrict__ derivs, const T* __restri
 
 
 // calc_derivs implementation for guiding center boozer NoK tracing with Shear Alfven Waves
-template <typename T, RHS id, bool coll, int deriv_id>
+template <typename T, RHS id, bool coll>
 __device__ void rhs_GC_BoozerNoKSAW(T* __restrict__ derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu,
                                      T saw_omega, int* saw_m, int* saw_n, T* saw_phihats, int saw_nharmonics, const bool* __restrict__ is_valid){
     constexpr int nout = map_rhs_to_n_deriv_outputs<id, coll>();
@@ -679,13 +679,13 @@ __device__ void rhs_GC_BoozerNoKSAW(T* __restrict__ derivs, const T* __restrict_
             T tdot = (G*T(charge_d)*dphidpsi + modB*T(charge_d)*v_par*(-dalphadpsi*G + iota_minus_alpha_dGdpsi) - dGdpsi*T(mass_d)*v_par*v_par \
                             + dmodBdpsi*G*fak1)*denom;
 
-            derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK+p] = sdot*cos_theta - x2*tdot;
-            derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK+p] = sdot*sin_theta + x1*tdot;
+            derivs[0*PARTICLES_PER_BLOCK+p] = sdot*cos_theta - x2*tdot;
+            derivs[1*PARTICLES_PER_BLOCK+p] = sdot*sin_theta + x1*tdot;
 
             T one_dalphadpsiI_alphadIdpsi = 1 + dalphadpsi*I + alpha_dIdpsi;
-            derivs[(nout*deriv_id + 2)*PARTICLES_PER_BLOCK+p] = (-I*(dmodBdpsi*T(mass_d)*mu_val + dphidpsi*T(charge_d)) + modB*T(charge_d)*v_par*one_dalphadpsiI_alphadIdpsi \
+            derivs[2*PARTICLES_PER_BLOCK+p] = (-I*(dmodBdpsi*T(mass_d)*mu_val + dphidpsi*T(charge_d)) + modB*T(charge_d)*v_par*one_dalphadpsiI_alphadIdpsi \
                             + T(mass_d)*v_par*vpar_over_modB * (modB*dIdpsi - dmodBdpsi*I))*denom;
-            derivs[(nout*deriv_id + 3)*PARTICLES_PER_BLOCK+p] = (modB*T(charge_d)/T(mass_d) * ( -T(mass_d)*mu_val * (dmodBdzeta*one_dalphadpsiI_alphadIdpsi \
+            derivs[3*PARTICLES_PER_BLOCK+p] = (modB*T(charge_d)/T(mass_d) * ( -T(mass_d)*mu_val * (dmodBdzeta*one_dalphadpsiI_alphadIdpsi \
                             + dmodBdpsi*(dalphadtheta*G - dalphadzeta*I) + dmodBdtheta*(iota_minus_alpha_dGdpsi - dalphadpsi*G)) \
                             - T(charge_d)*(alphadot*(G + I*iota_minus_alpha_dGdpsi + G*alpha_dIdpsi) \
                             + (dalphadtheta*G - dalphadzeta*I)*dphidpsi \
@@ -698,13 +698,13 @@ __device__ void rhs_GC_BoozerNoKSAW(T* __restrict__ derivs, const T* __restrict_
 
             // if collisions are turned on, write out the magnitude of the magnetic field
             if constexpr (coll){
-                derivs[(nout*deriv_id + 4)*PARTICLES_PER_BLOCK+p] = modB;
+                derivs[4*PARTICLES_PER_BLOCK+p] = modB;
             }
         }
     }
 };
 
-template <typename T, RHS id, bool coll, int deriv_id>
+template <typename T, RHS id, bool coll>
 __device__ void rhs_FO_CartesianVacuum(T* __restrict__ derivs, const T* __restrict__ x_temp, const T* __restrict__ block_interpolants, const bool* __restrict__ symmetry_exploited, const T* __restrict__ mu){
     constexpr int nout = map_rhs_to_n_deriv_outputs<RHS::FO_CartesianVacuum, false>();
 
@@ -717,9 +717,9 @@ __device__ void rhs_FO_CartesianVacuum(T* __restrict__ derivs, const T* __restri
     T v3 = x_temp[6*PARTICLES_PER_BLOCK];
 
     // copy velocity to position derivs
-    derivs[(nout*deriv_id + 0)*PARTICLES_PER_BLOCK] = v1;
-    derivs[(nout*deriv_id + 1)*PARTICLES_PER_BLOCK] = v2;
-    derivs[(nout*deriv_id + 2)*PARTICLES_PER_BLOCK] = v3;
+    derivs[0*PARTICLES_PER_BLOCK] = v1;
+    derivs[1*PARTICLES_PER_BLOCK] = v2;
+    derivs[2*PARTICLES_PER_BLOCK] = v3;
 
     // compute velocity derivs
     T B_r = block_interpolants[0*PARTICLES_PER_BLOCK];
@@ -735,10 +735,10 @@ __device__ void rhs_FO_CartesianVacuum(T* __restrict__ derivs, const T* __restri
     T B_y = sin_phi * B_r + cos_phi * B_phi;
     
     T charge_over_mass = T(charge_d)/T(mass_d);
-    derivs[(nout*deriv_id + 3)*PARTICLES_PER_BLOCK] = charge_over_mass * (v2*B_z - v3*B_y);
-    derivs[(nout*deriv_id + 4)*PARTICLES_PER_BLOCK] = charge_over_mass * (v3*B_x - v1*B_z);
-    derivs[(nout*deriv_id + 5)*PARTICLES_PER_BLOCK] = charge_over_mass * (v1*B_y - v2*B_x);
-    derivs[(nout*deriv_id + 6)*PARTICLES_PER_BLOCK] = block_interpolants[3*PARTICLES_PER_BLOCK]; // boundary dist fn
+    derivs[3*PARTICLES_PER_BLOCK] = charge_over_mass * (v2*B_z - v3*B_y);
+    derivs[4*PARTICLES_PER_BLOCK] = charge_over_mass * (v3*B_x - v1*B_z);
+    derivs[5*PARTICLES_PER_BLOCK] = charge_over_mass * (v1*B_y - v2*B_x);
+    derivs[6*PARTICLES_PER_BLOCK] = block_interpolants[3*PARTICLES_PER_BLOCK]; // boundary dist fn
 
 };
 
@@ -747,8 +747,8 @@ __device__ void rhs_FO_CartesianVacuum(T* __restrict__ derivs, const T* __restri
 // the results are stored in the appropriate region of derivs
 //
 // this function is templated across rhs options
-template<typename T, RHS id, bool coll, int deriv_id, typename... Args>
-__device__ void calc_derivs(T* __restrict__ derivs, const T* __restrict__ quadpts_arr, const T* __restrict__ x_temp, const bool* __restrict__ symmetry_exploited,
+template<typename T, RHS id, bool coll, typename... Args>
+__device__ void calc_derivs(int deriv_id, T* __restrict__ derivs, const T* __restrict__ quadpts_arr, const T* __restrict__ x_temp, const bool* __restrict__ symmetry_exploited,
                                 const int* __restrict__ cell_index_start, const T* __restrict__ shape_fun_vals, const T* __restrict__ mu, const bool* __restrict__ is_valid,
                                 // optional parameters for SAW cases
                                 T saw_omega = 0, int* saw_m = nullptr, int* saw_n = nullptr,
@@ -756,29 +756,32 @@ __device__ void calc_derivs(T* __restrict__ derivs, const T* __restrict__ quadpt
 
 
     constexpr int n = map_rhs_to_n_interpolants<id, coll>();
+    constexpr int n_deriv_elts = map_rhs_to_n_deriv_outputs<id, coll>();
+    T* output = derivs + n_deriv_elts*deriv_id*PARTICLES_PER_BLOCK;
+
     T* block_interpolants = block_scratch<T, n*PARTICLES_PER_BLOCK, 1>();
     interpolate<T, n>(block_interpolants, quadpts_arr, cell_index_start, shape_fun_vals, is_valid);
     __syncthreads();
 
     if(threadIdx.x < PARTICLES_PER_BLOCK && is_valid[threadIdx.x]){
         if constexpr (id == RHS::GC_CartesianVacuum){
-            rhs_GC_CartesianVacuum<T, id, coll, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
+            rhs_GC_CartesianVacuum<T, id, coll>(output, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
         } else if constexpr(id == RHS::GC_BoozerVacuum){
-            rhs_GC_BoozerVacuum<T, id, coll, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
+            rhs_GC_BoozerVacuum<T, id, coll>(output, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
         } else if constexpr(id == RHS::GC_Boozer){
-            rhs_GC_Boozer<T, id, coll, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
+            rhs_GC_Boozer<T, id, coll>(output, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
         } else if constexpr(id == RHS::FO_CartesianVacuum){
-            rhs_FO_CartesianVacuum<T, id, coll, deriv_id>(derivs, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
+            rhs_FO_CartesianVacuum<T, id, coll>(output, x_temp, block_interpolants + threadIdx.x, symmetry_exploited, mu);
         }
     }
 
     // if a SAW is present, there is more to cooperate on
     if constexpr(id == RHS::GC_BoozerVacuumSAW){
-        rhs_GC_BoozerVacuumSAW<T, id, coll, deriv_id>(derivs-threadIdx.x, x_temp-threadIdx.x, block_interpolants, symmetry_exploited-threadIdx.x, mu-threadIdx.x,
+        rhs_GC_BoozerVacuumSAW<T, id, coll>(output-threadIdx.x, x_temp-threadIdx.x, block_interpolants, symmetry_exploited-threadIdx.x, mu-threadIdx.x,
             saw_omega, saw_m, saw_n, saw_phihats, saw_nharmonics, is_valid);
         __syncthreads();
     } else if constexpr(id == RHS::GC_BoozerNoKSAW){
-        rhs_GC_BoozerNoKSAW<T, id, coll, deriv_id>(derivs-threadIdx.x, x_temp-threadIdx.x, block_interpolants, symmetry_exploited-threadIdx.x, mu-threadIdx.x,
+        rhs_GC_BoozerNoKSAW<T, id, coll>(output-threadIdx.x, x_temp-threadIdx.x, block_interpolants, symmetry_exploited-threadIdx.x, mu-threadIdx.x,
             saw_omega, saw_m, saw_n, saw_phihats, saw_nharmonics, is_valid);
         __syncthreads();
     }
@@ -874,35 +877,11 @@ __device__ void map_to_grid(T* interp_pt, T* xyz, bool* symmetry_exploited){
 };
 
 
-
-// build_state is part of the DP5 implementation
-template <typename T, RHS id, bool coll, int deriv_id>
-__device__ void build_state(T* x_temp, bool* symmetry_exploited, int* cell_index_start,
-                            T* shape_fun_vals, const T* __restrict__ state, const T* __restrict__ derivs,
-                            const T* __restrict__ t, const T* __restrict__ dt, const bool* __restrict__ is_valid){
-
-    // store time
-    if(threadIdx.x < PARTICLES_PER_BLOCK && is_valid[threadIdx.x]){
-        x_temp[threadIdx.x] = t[threadIdx.x] + T(dp5_t_wgts[deriv_id])*dt[threadIdx.x];
-    }
-
-    // store current location in x_temp
-    constexpr int n_state_elts = map_rhs_to_n_state_elts<id>();
-    for (int idx=threadIdx.x; idx<n_state_elts*PARTICLES_PER_BLOCK; idx+=THREADS_PER_BLOCK) {
-        int particle_id = idx % PARTICLES_PER_BLOCK;
-        int state_var = idx / PARTICLES_PER_BLOCK;
-
-        T acc = state[state_var*PARTICLES_PER_BLOCK + particle_id];
-        T dt_particle = dt[particle_id];
-        constexpr int n_deriv_entries = map_rhs_to_n_deriv_outputs<id, coll>();
-        for(int j=0; j<deriv_id; ++j){
-            acc += dt_particle * T(dp5_wgts[deriv_id][j]) * derivs[(n_deriv_entries*j+state_var)*PARTICLES_PER_BLOCK + particle_id];
-        }
-        x_temp[(state_var+1)*PARTICLES_PER_BLOCK + particle_id] = acc;
-    }
-    __syncthreads();
-
-
+// from new deriv location, compute shape values for interpolation
+template<typename T, RHS id>
+__device__ void compute_shape_fns(T* x_temp, bool* symmetry_exploited, int* cell_index_start,
+                                    T* shape_fun_vals, const bool* __restrict__ is_valid){
+    
     // one thread per particle maps the position to the interpolant grid.
     T* interp_pt = block_scratch<T, 3*PARTICLES_PER_BLOCK, 0>();
 
@@ -947,6 +926,34 @@ __device__ void build_state(T* x_temp, bool* symmetry_exploited, int* cell_index
         shape_fun_vals[base_idx + 3*PARTICLES_PER_BLOCK] = one_sixth * prodx1 * x_minus_2;
 
         cell_index_start[3*particle_id + coord_id] = index/3;
+    }
+    __syncthreads();
+}
+
+
+// build_state is part of the DP5 implementation
+template <typename T, RHS id, bool coll, int deriv_id>
+__device__ void build_state(T* x_temp, const T* __restrict__ state, const T* __restrict__ derivs,
+                            const T* __restrict__ t, const T* __restrict__ dt, const bool* is_valid){
+
+    // store time
+    if(threadIdx.x < PARTICLES_PER_BLOCK && is_valid[threadIdx.x]){
+        x_temp[threadIdx.x] = t[threadIdx.x] + T(dp5_t_wgts[deriv_id])*dt[threadIdx.x];
+    }
+
+    // store current location in x_temp
+    constexpr int n_state_elts = map_rhs_to_n_state_elts<id>();
+    for (int idx=threadIdx.x; idx<n_state_elts*PARTICLES_PER_BLOCK; idx+=THREADS_PER_BLOCK) {
+        int particle_id = idx % PARTICLES_PER_BLOCK;
+        int state_var = idx / PARTICLES_PER_BLOCK;
+
+        T acc = state[state_var*PARTICLES_PER_BLOCK + particle_id];
+        T dt_particle = dt[particle_id];
+        constexpr int n_deriv_entries = map_rhs_to_n_deriv_outputs<id, coll>();
+        for(int j=0; j<deriv_id; ++j){
+            acc += dt_particle * T(dp5_wgts[deriv_id][j]) * derivs[(n_deriv_entries*j+state_var)*PARTICLES_PER_BLOCK + particle_id];
+        }
+        x_temp[(state_var+1)*PARTICLES_PER_BLOCK + particle_id] = acc;
     }
     __syncthreads();
 
@@ -1001,9 +1008,10 @@ __device__ void setup_particle(T* mu, T* t, T* dt, T* dtmax, T* x_temp, bool* sy
         // t[threadIdx.x] = 0.0;
         symmetry_exploited[threadIdx.x] = false;
     }
-    __shared__ T interp_pt[3*PARTICLES_PER_BLOCK];
-    build_state<T, id, coll, 0>(x_temp, symmetry_exploited, cell_index_start,
-                        shape_fun_vals, state, derivs, t, dt, is_valid);
+    build_state<T, id, coll, 0>(x_temp, state, derivs, t, dt, is_valid);
+    __syncthreads();
+    compute_shape_fns<T, id>(x_temp, symmetry_exploited, cell_index_start, shape_fun_vals, is_valid);
+
     __syncthreads();
     constexpr int n = map_rhs_to_n_interpolants<id, coll>();
     __shared__ T block_interpolants[n*PARTICLES_PER_BLOCK];
@@ -1291,15 +1299,25 @@ __device__ void adjust_time(T* __restrict__ t, T* __restrict__ dt, double* __res
 }
 
 // helper function for a single DP5 evaluation
-template<typename T, RHS id, bool coll, int deriv_id, typename... Args>
-__device__ void dp5_one_step(T* x_temp, T* derivs, const T* __restrict__ quadpts_arr, int* cell_index_start,
+template<typename T, RHS id, bool coll, typename... Args>
+__device__ void dp5_one_step(int deriv_id, T* x_temp, T* derivs, const T* __restrict__ quadpts_arr, int* cell_index_start,
                             T* shape_fun_vals, const T* __restrict__ t, const T* __restrict__ dt,
                             bool* symmetry_exploited, const T* __restrict__ state, const T* __restrict__ mu, const bool* __restrict__ is_valid, Args... args){
     // if the thread is responsible for a particle, compute the point at which the derivative will be computed
-    build_state<T, id, coll, deriv_id>(x_temp, symmetry_exploited, cell_index_start, shape_fun_vals, state, derivs, t, dt, is_valid);
+    switch(deriv_id){
+        case 0: build_state<T, id, coll, 0>(x_temp, state, derivs, t, dt, is_valid); break;
+        case 1: build_state<T, id, coll, 1>(x_temp, state, derivs, t, dt, is_valid); break;
+        case 2: build_state<T, id, coll, 2>(x_temp, state, derivs, t, dt, is_valid); break;
+        case 3: build_state<T, id, coll, 3>(x_temp, state, derivs, t, dt, is_valid); break;
+        case 4: build_state<T, id, coll, 4>(x_temp, state, derivs, t, dt, is_valid); break;
+        case 5: build_state<T, id, coll, 5>(x_temp, state, derivs, t, dt, is_valid); break;
+        case 6: build_state<T, id, coll, 6>(x_temp, state, derivs, t, dt, is_valid); break;
+    }
+    compute_shape_fns<T, id>(x_temp, symmetry_exploited, cell_index_start, shape_fun_vals, is_valid);
+
     // ensure that all threads have updated x_temp before calculating derivatives, where a data race would occur
     __syncthreads();
-    calc_derivs<T, id, coll, deriv_id>(derivs + threadIdx.x, quadpts_arr, x_temp + threadIdx.x, symmetry_exploited + threadIdx.x, cell_index_start,
+    calc_derivs<T, id, coll>(deriv_id, derivs + threadIdx.x, quadpts_arr, x_temp + threadIdx.x, symmetry_exploited + threadIdx.x, cell_index_start,
          shape_fun_vals, mu + threadIdx.x, is_valid, args...);
 
     // ensure all particles have derivative calculations before accepting/rejecting timestep
@@ -1406,22 +1424,13 @@ __global__ void  particle_trace_kernel(T* out, T* init_pos, const T* __restrict_
         }
         __syncthreads();
 
-        if(__syncthreads_count(needs_stage0[threadIdx.x % PARTICLES_PER_BLOCK]) > 0){
-            dp5_one_step<T, id, coll, 0>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals,
-                                    block_t, block_dt, symmetry_exploited, state, block_mu, needs_stage0, args...);
+        const bool any_need_0 = __syncthreads_count(needs_stage0[threadIdx.x % PARTICLES_PER_BLOCK]) > 0;
+        #pragma unroll 1
+        for(int deriv_id = any_need_0 ? 0 : 1; deriv_id<7; ++deriv_id){
+            dp5_one_step<T, id, coll>(deriv_id, x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
+                                symmetry_exploited, state, block_mu, deriv_id == 0 ? needs_stage0 : is_valid_arr, args...);
         }
-        dp5_one_step<T, id, coll, 1>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
-                            symmetry_exploited, state, block_mu, is_valid_arr, args...);
-        dp5_one_step<T, id, coll, 2>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
-                            symmetry_exploited, state, block_mu, is_valid_arr, args...);
-        dp5_one_step<T, id, coll, 3>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
-                            symmetry_exploited, state, block_mu, is_valid_arr, args...);
-        dp5_one_step<T, id, coll, 4>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
-                            symmetry_exploited, state, block_mu, is_valid_arr, args...);
-        dp5_one_step<T, id, coll,  5>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
-                            symmetry_exploited, state, block_mu, is_valid_arr, args...);
-        dp5_one_step<T, id, coll, 6>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
-                            symmetry_exploited, state, block_mu, is_valid_arr, args...);
+        
         if constexpr (coll){
             adjust_time<T, id, coll>(block_t, block_dt, block_tmax, state, block_derivs, x_temp, has_left, block_dtmax, is_valid_arr,
                                block_mu, &rng_state[threadIdx.x % PARTICLES_PER_BLOCK], v_tot);
@@ -2068,8 +2077,9 @@ __global__ void test_gpu_interpolation_kernel(T* quad_pts, T* loc, T* out, T* de
         }
     }
 
-    build_state<T, id, false, 0>(x_temp, symmetry_exploited, cell_index_start, shape_fun_vals, state, block_derivs, block_t, block_dt, is_valid_arr);
-
+    build_state<T, id, false, 0>(x_temp, state, block_derivs, block_t, block_dt, is_valid_arr);
+    __syncthreads();
+    compute_shape_fns<T, id>(x_temp, symmetry_exploited, cell_index_start, shape_fun_vals, is_valid_arr);
     __syncthreads();
     interpolate<T, n>(block_interpolants, quad_pts, cell_index_start, shape_fun_vals, is_valid_arr);
     __syncthreads();
@@ -2247,10 +2257,12 @@ __global__ void test_gpu_derivs_kernel(T* quad_pts, T* init_pos, T* time, T* out
     }
     __syncthreads();
 
-    build_state<T, id, false, 0>(x_temp, symmetry_exploited, cell_index_start,
-            shape_fun_vals, state, block_derivs, block_t, block_dt, is_valid_arr);
+    build_state<T, id, false, 0>(x_temp, state, block_derivs, block_t, block_dt, is_valid_arr);
     __syncthreads();
-    calc_derivs<T, id, false, 0>(block_derivs + threadIdx.x, quad_pts, x_temp + threadIdx.x, symmetry_exploited + threadIdx.x,
+    compute_shape_fns<T, id>(x_temp, symmetry_exploited, cell_index_start, shape_fun_vals, is_valid_arr);
+
+    __syncthreads();
+    calc_derivs<T, id, false>(0, block_derivs + threadIdx.x, quad_pts, x_temp + threadIdx.x, symmetry_exploited + threadIdx.x,
          cell_index_start, shape_fun_vals, block_mu + threadIdx.x, is_valid_arr, args...);
     __syncthreads();
 
@@ -2582,19 +2594,19 @@ __global__ void test_gpu_timestep_kernel(double* out, double* init_pos, double* 
     // if there exists a particle at t=0, which is a real particle, then keep tracing
     while(__syncthreads_count(block_t[threadIdx.x % PARTICLES_PER_BLOCK] == 0.0  && is_valid_arr[threadIdx.x % PARTICLES_PER_BLOCK]) > 0){
         // calculate the 7 Dormand-Prince 5 derivatives
-        dp5_one_step<double, id, false, 0>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
+        dp5_one_step<double, id, false>(0, x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
                             symmetry_exploited, state, block_mu, is_valid_arr, args...);
-        dp5_one_step<double, id, false, 1>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
+        dp5_one_step<double, id, false>(1, x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
                             symmetry_exploited, state, block_mu, is_valid_arr, args...);
-        dp5_one_step<double, id, false, 2>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
+        dp5_one_step<double, id, false>(2, x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
                             symmetry_exploited, state, block_mu, is_valid_arr, args...);
-        dp5_one_step<double, id, false, 3>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
+        dp5_one_step<double, id, false>(3, x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
                             symmetry_exploited, state, block_mu, is_valid_arr, args...);
-        dp5_one_step<double, id, false, 4>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
+        dp5_one_step<double, id, false>(4, x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
                             symmetry_exploited, state, block_mu, is_valid_arr, args...);
-        dp5_one_step<double, id, false, 5>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
+        dp5_one_step<double, id, false>(5, x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
                             symmetry_exploited, state, block_mu, is_valid_arr, args...);
-        dp5_one_step<double, id, false, 6>(x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
+        dp5_one_step<double, id, false>(6, x_temp, block_derivs, quadpts_arr, cell_index_start, shape_fun_vals, block_t, block_dt,
                             symmetry_exploited, state, block_mu, is_valid_arr, args...);
         adjust_time<double, id, false>(block_t, block_dt, block_tmax, state, block_derivs, x_temp, has_left, block_dtmax, is_valid_arr);
         // if the particle moved, write output and load the next particle that is needed
