@@ -31,6 +31,30 @@ All dependencies can be installed inside a conda environment using the provided 
    # Run the installation script
    bash install/perlmutter/install_firm3d_perlmutter.sh
 
+Landau (Columbia)
+-----------------
+
+Use ``install/landau/install_firm3d_landau.sh`` on the Landau workstation.
+The script creates a new Conda environment
+and builds FIRM3D using Landau's system GCC and the CUDA/MPI tools provided by
+the ``nvhpc/26.9`` module.
+
+.. code-block:: bash
+
+   # Clone the repository
+   git clone <repository-url>
+   cd firm3d
+
+   # Run the installation script
+   bash install/landau/install_firm3d_landau.sh
+
+After installation, activate it using:
+
+.. code-block:: bash
+
+   module load nvhpc/26.9
+   conda activate <environment-name-or-path>
+
 Manual Installation
 -------------------
 
