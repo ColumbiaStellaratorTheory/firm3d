@@ -93,5 +93,8 @@ export CMAKE_ARGS="-DUSE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=80 \
 pip install -v -e .
 check_success "Failed to install FIRM3D"
 
+python -c "from firm3dpp import boozer_gpu_tracing, cartesian_gpu_tracing"
+check_success "FIRM3D CUDA bindings are missing or cannot be imported"
+
 echo "Successfully installed FIRM3D into the conda environment '$env_name'"
 echo "To activate, run: module load nvhpc/26.9 && conda activate $env_name"
