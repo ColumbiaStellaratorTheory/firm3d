@@ -1,6 +1,14 @@
 #!/bin/bash
 # Install FIRM3D on Landau with system GCC and the NVIDIA SDK's CUDA/MPI.
 
+# Run from the repository root
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." || exit 1
+
+if [[ ! -f pyproject.toml ]]; then
+    echo "Error: pyproject.toml not found in the expected repository root." >&2
+    exit 1
+fi
+
 # Function to check last command's success
 check_success() {
     local status=$?
